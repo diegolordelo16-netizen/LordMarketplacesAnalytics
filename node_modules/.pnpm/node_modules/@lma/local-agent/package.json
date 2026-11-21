@@ -1,0 +1,28 @@
+{
+  "name": "@lma/local-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "vitest run && node --import tsx --test test/database.node-test.ts test/listings-adapter.node-test.ts"
+  },
+  "dependencies": {
+    "@lma/protocol": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "jsdom": "^31.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.8"
+  },
+  "exports": {
+    ".": "./src/main.ts",
+    "./loopback": "./src/loopback-server.ts"
+  }
+}

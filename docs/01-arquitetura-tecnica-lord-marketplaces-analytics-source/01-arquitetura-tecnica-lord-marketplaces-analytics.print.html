@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="pt-BR" data-accent="indigo" data-look="minimal" data-design="report-schematic" style="--chart-fit: 0.7;"><head><meta charset="utf-8"><title>Lord Marketplaces Analytics — Arquitetura Técnica Mestre (Entrega 1)</title><link rel="stylesheet" href="system.css"><style id="page-numbers">@page { size: A4; margin: 0.7in 0.75in 0.6in; @bottom-right { content: counter(page) "/" counter(pages); font-family: "Inter"; font-size: 9px; color: #8b9099; } }</style></head>
+<body class="doc genre-report relaxed" style="zoom: 0.88;">
+<p class="running">Lord Marketplaces Analytics · Documento de Arquitetura Técnica Mestre · Entrega 1</p>
+
+<div class="cover">
+  <div class="top">
+    <p class="kicker">Entrega 1 · Arquitetura antes de código</p>
+    <h1>Lord Marketplaces Analytics</h1>
+    <p class="lead">Documento de arquitetura técnica mestre — plataforma Windows Local First de inteligência competitiva, análise, gestão, automação e otimização autônoma de marketplaces.</p>
+  </div>
+  <div class="meta-grid">
+    <div><span>Proprietário</span><b>Diego (OWNER_PRINCIPAL)</b></div>
+    <div><span>Data</span><b>21/11/2026</b></div>
+    <div><span>Versão</span><b>1.0 — baseline da Entrega 1</b></div>
+    <div><span>Marketplaces iniciais</span><b>Mercado Livre, Shopee</b></div>
+    <div><span>Expansão prevista</span><b>Amazon, TikTok Shop, Shein, Netshoes</b></div>
+    <div><span>Entrega final</span><b>Instalador único Windows 11</b></div>
+  </div>
+  <p class="small muted">Documento de decisão técnica. Onde um comportamento ainda não foi validado em navegador real, está escrito “não testado”. Não há números de desempenho, prazos ou benchmarks estimados neste documento.</p>
+</div>
+
+<h2>1. Sumário executivo e objetivo da Entrega 1</h2>
+
+<p class="lead">A Entrega 1 não produz software em execução: produz a arquitetura que impede retrabalho, ambiguidade de responsabilidade e promessas falsas de capacidade.</p>
+
+<p>O Lord Marketplaces Analytics é um software Windows que opera sobre a sessão já autenticada do próprio usuário nos marketplaces, por meio de uma extensão de navegador (Chrome e Edge, Manifest V3), sem depender de APIs oficiais dos marketplaces. O cérebro do produto é uma IA interna: um motor determinístico, um AI Director, nove agentes especializados e uma memória operacional. O Google Gemini, em cota gratuita, entra apenas como consultor externo e auditor, nunca como cérebro. A Central de Melhorias concentra toda mudança permanente no software e só aceita aprovação da conta OWNER_PRINCIPAL. A entrega final é um instalador único para Windows, com runtime embutido, sem exigir do usuário final Node, Python, Git, npm ou terminal.</p>
+
+<h3>Objetivo da Entrega 1</h3>
+<ul>
+  <li>Fixar as decisões estruturais que condicionam todas as fases seguintes — em especial a decisão crítica de transporte entre extensão e serviço local (Seção 4).</li>
+  <li>Definir contratos: protocolo de mensagens, contrato de adapters, contrato de agentes, modelo de dados e regra de proveniência.</li>
+  <li>Declarar de forma honesta o que está validado, o que é decisão de projeto e o que ainda é <b>não testado</b>.</li>
+  <li>Delimitar o escopo verificável da Entrega 2 (Prova de Conceito) e os critérios de sucesso e de falha.</li>
+  <li>Registrar as decisões que dependem exclusivamente do proprietário antes do início do código.</li>
+</ul>
+
+<div class="callout"><p>A regra que organiza todo o documento: <b>arquitetura antes de código</b>. Nenhum adapter, agente ou rota de captura deve ser escrito antes que o contrato correspondente esteja definido aqui.</p></div>
+
+<h2>2. Princípios inegociáveis</h2>
+
+<p>Estes princípios não são recomendações de estilo. São condições de aceitação: uma implementação que viole qualquer um deles é considerada defeito, não interpretação.</p>
+
+<table class="data">
+  <thead><tr><th>Princípio</th><th>O que significa na prática</th><th>Como é verificado</th></tr></thead>
+  <tbody>
+    <tr><td><b>Local First</b></td><td>Dados, cálculo, IA interna e memória vivem na máquina do usuário. A nuvem é opcional e nunca requisito de operação.</td><td>Desligar a internet (exceto Gemini): captura, cálculo, missões e relatórios continuam funcionando.</td></tr>
+    <tr><td><b>Independência de APIs oficiais</b></td><td>A captura usa a página autenticada do usuário. Nenhum fluxo pode depender de chave de API, parceria ou homologação de marketplace.</td><td>Teste de operação sem credenciais de API, aplicado a cada adapter do escopo.</td></tr>
+    <tr><td><b>IA interna como cérebro</b></td><td>Decisão, priorização e geração passam pelo motor determinístico, pelo AI Director e pelos 9 agentes. Gemini não decide nada no fluxo principal.</td><td>Desligar o Gemini: o sistema continua classificando, priorizando e recomendando.</td></tr>
+    <tr><td><b>Preservação integral de funcionalidades</b></td><td>Nenhuma refatoração, migração ou otimização remove capacidade existente sem proposta aprovada na Central de Melhorias.</td><td>Suíte de regressão funcional por adapter e por agente; comparação de matriz de capacidades entre versões.</td></tr>
+    <tr><td><b>Integridade operacional</b></td><td>Nunca dado simulado apresentado como real; nunca sucesso declarado sem verificação. Ausência de dado é exibida como ausência, com status explícito.</td><td>Proveniência obrigatória por dado (Seção 8); verificação pós-ação; testes de dados ausentes e de falha de captura.</td></tr>
+    <tr><td><b>Governança única</b></td><td>Somente a conta OWNER_PRINCIPAL aprova ou rejeita mudanças permanentes no software.</td><td>Validação de permissão no serviço local, não apenas ocultação de interface.</td></tr>
+    <tr><td><b>Observação passiva</b></td><td>O script em MAIN world observa o que a página já carregou. Não injeta chamadas privadas, não reproduz requisições da sessão, não dispara ações não solicitadas.</td><td>Revisão de código do observer; ausência de chamadas a endpoints privados no registro de rede.</td></tr>
+  </tbody>
+</table>
+
+<figure class="chart"><svg viewBox="0 0 640 200" role="img" aria-label="Ocupação da matriz de capacidades por marketplace">
+  <g font-family="Inter, sans-serif" font-size="12" fill="#111">
+    <text x="0" y="14" font-size="11" fill="#8b9099">Capacidades do escopo POC · 2 marketplaces · 6 linhas na matriz</text>
+
+    <text x="0" y="52">Mercado Livre</text>
+    <rect x="118" y="38" width="196" height="18" rx="4" fill="#6366f1"/>
+    <rect x="314" y="38" width="196" height="18" rx="4" fill="#c7d2fe"/>
+    <text x="520" y="52" font-size="11" fill="#8b9099">3 a validar · 3 não testadas</text>
+
+    <text x="0" y="92">Shopee</text>
+    <rect x="118" y="78" width="196" height="18" rx="4" fill="#c7d2fe"/>
+    <rect x="314" y="78" width="196" height="18" rx="4" fill="#eef2ff" stroke="#c7d2fe"/>
+    <text x="520" y="92" font-size="11" fill="#8b9099">1 a validar · 5 não testadas</text>
+
+    <line x1="118" y1="120" x2="510" y2="120" stroke="#e5e7eb"/>
+    <rect x="118" y="132" width="14" height="10" rx="2" fill="#6366f1"/><text x="140" y="141" font-size="10.5">A validar na POC</text>
+    <rect x="260" y="132" width="14" height="10" rx="2" fill="#c7d2fe"/><text x="282" y="141" font-size="10.5">Não testado em navegador real</text>
+    <text x="118" y="168" font-size="10.5" fill="#8b9099">Nenhuma capacidade está marcada SUPORTADO antes do teste real — a matriz é a prova visível dessa regra.</text>
+  </g>
+</svg><figcaption>Figura 1 — Estado declarado das capacidades de captura no escopo da POC. Contagem por estado, não desempenho.</figcaption></figure>
+
+<h2>3. Visão de componentes em 6 camadas</h2>
+
+<div class="tiles">
+  <div class="tile"><span class="value" style="white-space: nowrap;">6</span><span class="label">camadas</span><span class="delta">contratos entre camadas</span></div>
+  <div class="tile"><span class="value" style="white-space: nowrap;">9</span><span class="label">agentes especializados</span><span class="delta">+ AI Director</span></div>
+  <div class="tile"><span class="value" style="white-space: nowrap;">16</span><span class="label">domínios de dados</span><span class="delta">especificação agrupada</span></div>
+  <div class="tile"><span class="value" style="white-space: nowrap;">15</span><span class="label">fases até o instalador</span><span class="delta">entregável por fase</span></div>
+</div>
+
+<h3>3.1 Camada de Extensão (navegador)</h3>
+<p>Chrome e Edge, Manifest V3, construída em React + TypeScript + Vite + Tailwind, com Dexie (IndexedDB) como cache local de curta duração. É a única camada que toca a página do marketplace.</p>
+<ul>
+  <li><b>Side Panel</b> — interface principal do usuário ao lado do marketplace: status de conexão com o serviço local, conta detectada, página reconhecida, dados coletados, missões do dia.</li>
+  <li><b>Content scripts</b> — leitura estruturada do DOM da página reconhecida; nunca escrevem no marketplace sem comando explícito e autorizado.</li>
+  <li><b>Service worker</b> — orquestração entre content scripts, MAIN world observer, Dexie e o canal com o serviço local; sem estado de negócio (o estado de negócio vive no SQLite).</li>
+  <li><b>MAIN world observer (passivo)</b> — script injetado no contexto da página para observar o que ela já carregou. Não reproduz requisições, não chama endpoints privados, não injeta sessão.</li>
+</ul>
+
+<h3>3.2 Camada de Serviço Local persistente</h3>
+<p>Processo Node + TypeScript residente na máquina do usuário. É o cérebro operacional: não depende do navegador estar aberto para processar filas, calcular indicadores ou executar missões já agendadas.</p>
+<ul>
+  <li><b>SQLite + Drizzle + Zod</b> — persistência, schema tipado e validação de fronteira.</li>
+  <li><b>Filas e scheduler</b> — capturas, cálculos, ciclos de agente, ciclos Gemini, backups; retentativas idempotentes.</li>
+  <li><b>Motores</b> — KPIs, financeiro em centavos, simulador de margem, Score de Prioridade e Saúde, Missões do Dia (Seção 9).</li>
+  <li><b>IA interna</b> — motor determinístico, AI Director, 9 agentes, memória operacional, AI Tool Registry (Seção 10).</li>
+  <li><b>Integração Gemini</b> — consultor externo, gerenciador de cotas, cache, Workspace de Debate (Seção 11).</li>
+  <li><b>Central de Melhorias</b> — propostas, aprovação exclusiva, auto-upgrade governado (Seção 12).</li>
+</ul>
+
+<h3>3.3 Native Messaging Host</h3>
+<p>Executável local registrado por usuário no Windows, que fala com a extensão pelo protocolo nativo do navegador (stdin/stdout com mensagens prefixadas por tamanho). É o caminho de transporte de produção, disponível somente após a extensão ter ID fixo (Seção 4).</p>
+
+<h3>3.4 Banco local SQLite</h3>
+<p>Arquivo único no perfil do usuário, modo WAL para leitura concorrente durante escrita, migrations versionadas e aplicadas de forma transacional na inicialização, backups automáticos antes de migrations e antes de auto-upgrades.</p>
+
+<h3>3.5 Backend em nuvem opcional</h3>
+<p>Postgres/Supabase, opcional, nunca obrigatório. Serve apenas para sincronização entre máquinas do mesmo proprietário e para backups externos autorizados. Nenhum fluxo da POC ou da operação diária pode depender dele.</p>
+
+<h3>3.6 Camada de distribuição Windows</h3>
+<p>Instalador único, updater com verificação de assinatura, desinstalador com dois níveis, registro do Native Messaging Host por usuário, verificação de integridade e checksums (Seção 13).</p>
+
+<table class="data">
+  <thead><tr><th>Camada</th><th>Responsabilidade</th><th>Nunca faz</th></tr></thead>
+  <tbody>
+    <tr><td>Extensão</td><td>Ver a página, reconhecer contexto, transportar dados observados</td><td>Decidir preço, calcular margem, armazenar segredo</td></tr>
+    <tr><td>Serviço local</td><td>Persistir, calcular, decidir, agendar, auditar</td><td>Ler o DOM por conta própria</td></tr>
+    <tr><td>Native Messaging Host</td><td>Transportar mensagens do envelope</td><td>Conter lógica de negócio</td></tr>
+    <tr><td>SQLite</td><td>Fonte de verdade local</td><td>Ser acessado pela extensão diretamente</td></tr>
+    <tr><td>Nuvem opcional</td><td>Sincronização e backup autorizados</td><td>Ser requisito de funcionamento</td></tr>
+    <tr><td>Distribuição</td><td>Instalar, atualizar, verificar, desinstalar</td><td>Instalar sem checksum e assinatura válidos</td></tr>
+  </tbody>
+</table>
+
+<h3>3.7 Operação offline, reinício e integridade de estado</h3>
+<p>O serviço local é o único dono do estado de negócio. Reiniciar a máquina, fechar o navegador ou atualizar a extensão não pode perder captura, fila ou decisão pendente. As regras abaixo valem para toda camada e são verificadas na Fase 3, não na fase do instalador.</p>
+<ul>
+  <li><b>Arranque idempotente</b> — ao subir, o serviço reconcilia o que ficou em execução: captura interrompida vira <code>NOT_COLLECTED</code> com motivo, nunca “sucesso” presumido; job em <code>RUNNING</code> sem processo vivo volta para a fila com contador de tentativa incrementado.</li>
+  <li><b>Navegador ausente não é erro</b> — operações que dependem da página ficam em <code>WAITING_BROWSER</code> e são retomadas no próximo handshake; cálculos, relatórios, memória e missões continuam rodando sem navegador.</li>
+  <li><b>Um escritor por entidade</b> — a fila serializa escritas na mesma conta/anúncio; duas operações conflitantes na mesma entidade são recusadas com <code>CONFLICT_IN_PROGRESS</code> em vez de corrida silenciosa.</li>
+  <li><b>Backup antes de risco</b> — migrations e auto-upgrades fazem cópia verificada do SQLite antes de tocar no banco; falha na cópia cancela a operação.</li>
+  <li><b>Saúde observável</b> — cada camada expõe estado (versão, última mensagem, último erro, contadores). O painel de saúde mostra a camada que parou, não apenas “sistema fora do ar”.</li>
+</ul>
+
+<h2>4. A decisão crítica da Entrega 1: como a extensão fala com o serviço local</h2>
+
+<p class="lead">Todo o produto depende de um único tubo: a extensão precisa conversar com o serviço local, de forma segura, sem depender de APIs dos marketplaces e sem exigir publicação prévia nas lojas.</p>
+
+<h3>4.1 A restrição real</h3>
+<p>O Chrome Native Messaging exige que a extensão tenha identidade estável: o manifesto do Native Messaging Host lista os IDs de extensão autorizados, e o navegador só entrega a porta nativa a uma extensão instalada cujo ID corresponda. Em extensão carregada sem empacotamento (modo desenvolvedor), o ID depende da chave de empacotamento e o fluxo não é o mesmo de uma extensão instalada pela loja ou por política corporativa. Consequência direta: <b>Native Messaging não pode ser a ponte da prova de conceito</b> — ele só é confiável depois que a extensão estiver publicada (Chrome Web Store / Edge Add-ons) ou distribuída por política corporativa, com ID fixo e definitivo.</p>
+
+<h3>4.2 Caminho primário no desenvolvimento: canal local em loopback</h3>
+<p>Na fase de desenvolvimento e na POC, a extensão fala com o serviço local por <b>WebSocket em loopback</b> (endereço de loopback, porta dedicada), com as seguintes proteções, todas obrigatórias desde o primeiro commit:</p>
+<ul>
+  <li><b>Bind exclusivo no endereço de loopback</b> — nunca na interface pública, nunca em endereço de rede externa.</li>
+  <li><b>Token de pareamento</b> gerado pelo serviço local no primeiro start, exibido apenas localmente ao usuário e exigido no handshake; token rotacionável e revogável.</li>
+  <li><b>Validação de Origin</b> — o serviço aceita apenas conexões cujo Origin seja <code>chrome-extension://&lt;id&gt;</code> conhecido; Origin ausente ou de página web é rejeitado e registrado como evento suspeito.</li>
+  <li><b>Heartbeat</b> — ping/pong periódico; queda do serviço é exibida no Side Panel como estado explícito, nunca como “conectado”.</li>
+  <li><b>Versionamento de protocolo</b> — handshake negocia <code>protocolVersion</code>; versões incompatíveis recusam a sessão com erro padronizado.</li>
+</ul>
+
+<h3>4.3 Caminho de produção: Native Messaging Host</h3>
+<p>Após a publicação da extensão nas lojas oficiais, o transporte passa a ser o Native Messaging Host, registrado por usuário no Windows. O host é um transportador fino: recebe o envelope, valida o tamanho, repassa ao serviço local e devolve a resposta. A lógica de negócio continua no serviço local.</p>
+
+<h3>4.4 Comparação dos transportes</h3>
+<table class="data">
+  <thead><tr><th>Critério</th><th>Loopback WebSocket + token</th><th>Native Messaging</th><th>HTTP puro em porta local</th></tr></thead>
+  <tbody>
+    <tr><td>Disponível em extensão não publicada</td><td>Sim</td><td>Não (exige ID fixo)</td><td>Sim</td></tr>
+    <tr><td>Autenticação</td><td>Token de pareamento + Origin</td><td>Identidade de extensão do navegador</td><td>Nenhuma por padrão</td></tr>
+    <tr><td>Risco de acesso por outra origem local</td><td>Baixo com Origin + token; exige disciplina</td><td>Muito baixo (porta não existe)</td><td>Alto (qualquer processo local pode chamar)</td></tr>
+    <tr><td>Mensagens servidor → cliente (eventos)</td><td>Nativo (push)</td><td>Nativo</td><td>Exige polling</td></tr>
+    <tr><td>Streaming de progresso</td><td>Nativo (chunks)</td><td>Nativo (chunks)</td><td>Exige SSE ou polling</td></tr>
+    <tr><td>Complexidade de instalação</td><td>Baixa</td><td>Média (registro no Windows, manifesto do host)</td><td>Baixa</td></tr>
+    <tr><td>Depende de publicação nas lojas</td><td>Não</td><td>Sim</td><td>Não</td></tr>
+    <tr><td>Uso previsto</td><td>Desenvolvimento e POC (Entrega 2)</td><td>Produção após publicação</td><td>Descartado</td></tr>
+  </tbody>
+</table>
+
+<div class="callout"><p><b>Ponto de arquitetura:</b> as duas opções usam o <b>mesmo protocolo de mensagens</b> — envelope versionado, request/response, eventos e streaming de progresso. Muda apenas o transporte. Nenhum módulo de negócio conhece o transporte: ele recebe e devolve envelopes.</p></div>
+
+<h2>5. Protocolo de mensagens</h2>
+
+<p>O protocolo é definido uma vez, no pacote compartilhado, e consumido por extensão, Native Messaging Host e serviço local. Toda mensagem é validada por Zod na entrada de cada lado; mensagem inválida é rejeitada com <code>ERROR</code> e registrada.</p>
+
+<table class="data">
+  <thead><tr><th>Campo</th><th>Tipo</th><th>Regra</th></tr></thead>
+  <tbody>
+    <tr><td><code>protocolVersion</code></td><td>string semver</td><td>Negociado no handshake; incompatível → sessão recusada</td></tr>
+    <tr><td><code>messageId</code></td><td>UUID v4</td><td>Único por mensagem; usado em log e deduplicação</td></tr>
+    <tr><td><code>correlationId</code></td><td>UUID v4</td><td>Liga resposta, chunks e erro à requisição original</td></tr>
+    <tr><td><code>type</code></td><td>enum</td><td>REQUEST, RESPONSE, EVENT, STREAM_CHUNK, ERROR</td></tr>
+    <tr><td><code>namespace</code></td><td>string</td><td>Módulo de destino: <code>capture</code>, <code>adapter</code>, <code>kpi</code>, <code>finance</code>, <code>agent</code>, <code>gemini</code>, <code>improvement</code>, <code>system</code></td></tr>
+    <tr><td><code>payload</code></td><td>objeto</td><td>Schema Zod por namespace e por tipo; campos desconhecidos rejeitados</td></tr>
+    <tr><td><code>timestamp</code></td><td>data/hora ISO</td><td>Relógio do emissor; divergência grande é sinalizada</td></tr>
+  </tbody>
+</table>
+
+<h3>Regras de transporte</h3>
+<ul>
+  <li><b>Limite de tamanho</b> — payload máximo definido por namespace; capturas grandes são paginadas em lotes e nunca enviadas em uma mensagem única.</li>
+  <li><b>Timeout</b> — cada requisição tem timeout próprio; estourado o prazo, o serviço devolve <code>ERROR</code> com código de timeout e mantém o resultado em fila, se aplicável.</li>
+  <li><b>Retentativas idempotentes</b> — a chave de idempotência é <code>correlationId</code> + namespace; reenvio com mesma chave não duplica efeito.</li>
+  <li><b>Códigos de erro padronizados</b> — <code>PROTOCOL_VERSION_MISMATCH</code>, <code>AUTH_TOKEN_INVALID</code>, <code>ORIGIN_REJECTED</code>, <code>PAYLOAD_TOO_LARGE</code>, <code>SCHEMA_VALIDATION_FAILED</code>, <code>TIMEOUT</code>, <code>NOT_IMPLEMENTED</code>, <code>ADAPTER_UNAVAILABLE</code>, <code>PAGE_NOT_RECOGNIZED</code>, <code>ACCOUNT_UNIDENTIFIED</code>, <code>DATA_NOT_COLLECTED</code>, <code>GEMINI_QUOTA_WAITING</code>, <code>IMPROVEMENT_NOT_APPROVED</code>, <code>INTERNAL_ERROR</code>.</li>
+  <li><b>Log estruturado</b> — toda mensagem gera registro com id, correlação, tipo, namespace, duração e resultado. Eventos suspeitos (Origin inválido, token inválido, schema rejeitado, payload acima do limite) geram registro em auditoria, não apenas em log de aplicação.</li>
+</ul>
+
+<h2>6. Segurança da comunicação</h2>
+
+<table class="data">
+  <thead><tr><th>Ativo</th><th>Regra</th></tr></thead>
+  <tbody>
+    <tr><td>Sessão do usuário</td><td>Nunca sai do navegador. A extensão não exporta cookies, headers de autenticação nem tokens de sessão para o serviço local.</td></tr>
+    <tr><td>Credenciais de marketplace</td><td>Nenhuma senha, cookie ou token de marketplace é capturado, armazenado, logado ou transmitido. O produto não pede login do marketplace.</td></tr>
+    <tr><td>MAIN world</td><td>Tratado como não confiável. Toda mensagem vinda dele passa por validação de schema, limites de tamanho e lista fechada de campos; nenhuma requisição privada é reproduzida; nenhuma instrução do MAIN world é executada pelo serviço local.</td></tr>
+    <tr><td>Chave do Gemini</td><td>Guardada no serviço local com DPAPI / Windows Credential Manager. Nunca no frontend, nunca no IndexedDB, nunca em arquivo de configuração em texto claro, nunca em log.</td></tr>
+    <tr><td>Senha local do usuário</td><td>Hash com Argon2id; verificação feita no serviço local. A senha em si não é armazenada.</td></tr>
+    <tr><td>Auditoria</td><td>Append-only, com encadeamento de hash (cada registro contém o hash do anterior). Alteração de registro quebra a cadeia e é detectável na verificação de integridade.</td></tr>
+    <tr><td>Permissão de aprovação</td><td>A conta OWNER_PRINCIPAL é verificada no serviço local em cada operação de aprovação; ocultar botão na interface não é controle de segurança.</td></tr>
+    <tr><td>Superfície de rede</td><td>Serviço local acessível somente no endereço de loopback; Origin validado; token exigido; heartbeat; nenhuma porta exposta fora do loopback.</td></tr>
+  </tbody>
+</table>
+
+<h2>7. Sistema de adapters</h2>
+
+<p>Cada marketplace é implementado como um adapter isolado, atrás de um contrato único. O restante do sistema nunca conhece detalhes de página, seletores ou URL: conhece apenas o contrato.</p>
+
+<h3>Contrato IMarketplaceAdapter</h3>
+<table class="data">
+  <thead><tr><th>Membro</th><th>Responsabilidade</th></tr></thead>
+  <tbody>
+    <tr><td><code>detectDomain(url)</code></td><td>Informa se a URL pertence ao marketplace e qual ambiente (painel do vendedor ou vitrine pública).</td></tr>
+    <tr><td><code>identifyAccount(context)</code></td><td>Identifica conta/loja a partir do que a página já exibe. Não identifica → <code>ACCOUNT_UNIDENTIFIED</code>.</td></tr>
+    <tr><td><code>recognizePage(context)</code></td><td>Classifica a página (dashboard, lista de anúncios, detalhe/edição, estoque, ads, pedidos, busca pública). Página desconhecida → <code>PAGE_NOT_RECOGNIZED</code>, sem captura parcial silenciosa.</td></tr>
+    <tr><td><code>capture(page, scope)</code></td><td>Extrai dados do que está renderizado, com marcação de origem de cada campo.</td></tr>
+    <tr><td><code>normalize(raw)</code></td><td>Converte para o modelo canônico (Seção 8), preservando valores originais e unidades.</td></tr>
+    <tr><td><code>validate(normalized)</code></td><td>Aplica regras de consistência; dado inconsistente recebe status de qualidade, nunca correção inventada.</td></tr>
+    <tr><td><code>assistedNavigation(intent)</code></td><td>Orienta o usuário até a página necessária; navegação é assistida e visível.</td></tr>
+    <tr><td><code>authorizedOperations(op)</code></td><td>Executa apenas operações na lista fechada de operações autorizadas, com confirmação e verificação pós-ação.</td></tr>
+    <tr><td><code>diagnostics()</code></td><td>Estado do adapter: versão, páginas reconhecidas, última captura, falhas recentes.</td></tr>
+    <tr><td><code>version</code> / <code>tests</code></td><td>Versionamento independente e suíte de testes própria, com fixtures de página.</td></tr>
+  </tbody>
+</table>
+
+<h3>Estados de capacidade</h3>
+<p>A matriz de capacidades usa seis estados e é a fonte única de verdade do que o produto realmente faz: <b>SUPORTADO</b> (validado em navegador real, com dados reais), <b>PARCIAL</b> (funciona com limitações documentadas), <b>EM DESENVOLVIMENTO</b> (implementado, não validado), <b>EM MANUTENÇÃO</b> (suspenso por mudança de página), <b>NÃO TESTADO</b> (previsto, nunca exercitado em navegador real), <b>NÃO DISPONÍVEL</b> (fora do escopo desta fase).</p>
+
+<h3>Matriz de capacidades — Mercado Livre e Shopee</h3>
+<p>Domínios previstos: Mercado Livre em <code>mercadolivre.com.br</code> (painel do vendedor e vitrine pública); Shopee em <code>seller.shopee.com.br</code> (painel do vendedor) e vitrine pública. Nesta entrega, <b>nenhuma capacidade está validada em navegador real</b>: a POC é exatamente a fase de validação.</p>
+<table class="data">
+  <thead><tr><th>Capacidade</th><th>Mercado Livre</th><th>Shopee</th></tr></thead>
+  <tbody>
+    <tr><td>Detecção de domínio e ambiente</td><td>EM DESENVOLVIMENTO</td><td>EM DESENVOLVIMENTO</td></tr>
+    <tr><td>Identificação de conta/loja</td><td>NÃO TESTADO — alvo da POC</td><td>NÃO TESTADO — alvo da POC</td></tr>
+    <tr><td>Reconhecimento de dashboard</td><td>NÃO TESTADO</td><td>NÃO TESTADO</td></tr>
+    <tr><td>Lista de anúncios / produtos</td><td>NÃO TESTADO — captura na POC</td><td>NÃO TESTADO</td></tr>
+    <tr><td>Detalhe / edição de anúncio</td><td>NÃO TESTADO (leitura; escrita em fase posterior)</td><td>NÃO TESTADO (leitura)</td></tr>
+    <tr><td>Estoque</td><td>NÃO TESTADO</td><td>NÃO TESTADO</td></tr>
+    <tr><td>Publicidade (ads)</td><td>NÃO TESTADO</td><td>NÃO TESTADO</td></tr>
+    <tr><td>Pedidos (somente leitura)</td><td>NÃO TESTADO</td><td>NÃO TESTADO</td></tr>
+    <tr><td>Busca/vitrine pública (radar de concorrência)</td><td>NÃO TESTADO</td><td>NÃO TESTADO</td></tr>
+  </tbody>
+</table>
+
+<h3>Isolamento de falhas</h3>
+<ul>
+  <li>Cada adapter roda em contexto próprio, com timeout e limite de recurso; falha de um adapter não derruba o serviço local nem os demais adapters.</li>
+  <li>Erro de adapter muda o estado da capacidade na matriz (por exemplo, para EM MANUTENÇÃO) e gera evento de diagnóstico.</li>
+  <li>Nenhum adapter pode importar código de outro adapter; compartilhamento só por pacotes comuns (protocolo, modelo, utilitários).</li>
+  <li>Adapter desativado pelo usuário continua desativado após atualização.</li>
+</ul>
+
+<h2>8. Modelo de dados</h2>
+
+<p>A especificação descreve o conjunto de tabelas do produto. Para torná-las navegáveis, são agrupadas em <b>16 domínios</b>. Os nomes abaixo são as tabelas principais de cada domínio; a lista completa é fechada no início da Fase 3.</p>
+
+<table class="data">
+  <thead><tr><th>#</th><th>Domínio</th><th>Tabelas principais</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Identidade e segurança</td><td><code>users</code>, <code>accounts</code>, <code>roles</code>, <code>sessions_local</code>, <code>pairing_tokens</code>, <code>secrets_ref</code></td></tr>
+    <tr><td>2</td><td>Marketplaces</td><td><code>marketplaces</code>, <code>adapter_versions</code>, <code>adapter_capabilities</code>, <code>adapter_diagnostics</code></td></tr>
+    <tr><td>3</td><td>Produtos e anúncios</td><td><code>products</code>, <code>listings</code>, <code>listing_snapshots</code>, <code>listing_variations</code>, <code>categories</code></td></tr>
+    <tr><td>4</td><td>Pedidos</td><td><code>orders</code>, <code>order_items</code>, <code>order_events</code></td></tr>
+    <tr><td>5</td><td>Dados e indicadores</td><td><code>captures</code>, <code>data_points</code>, <code>kpi_definitions</code>, <code>kpi_values</code>, <code>data_quality_flags</code></td></tr>
+    <tr><td>6</td><td>Financeiro</td><td><code>fee_tables</code>, <code>fee_table_versions</code>, <code>cost_versions</code>, <code>margin_scenarios</code>, <code>financial_entries</code></td></tr>
+    <tr><td>7</td><td>Estoque</td><td><code>inventory_levels</code>, <code>inventory_movements</code>, <code>inventory_coverage</code></td></tr>
+    <tr><td>8</td><td>Publicidade (ads)</td><td><code>ad_campaigns</code>, <code>ad_metrics</code>, <code>ad_spend_snapshots</code></td></tr>
+    <tr><td>9</td><td>Concorrência</td><td><code>competitors</code>, <code>competitor_listings</code>, <code>competitor_price_history</code>, <code>radar_observations</code></td></tr>
+    <tr><td>10</td><td>Automação</td><td><code>automation_jobs</code>, <code>job_runs</code>, <code>job_retries</code>, <code>schedules</code></td></tr>
+    <tr><td>11</td><td>Experimentação</td><td><code>experiments</code>, <code>experiment_variants</code>, <code>experiment_results</code>, <code>predictions</code>, <code>prediction_outcomes</code></td></tr>
+    <tr><td>12</td><td>IA</td><td><code>agents</code>, <code>agent_runs</code>, <code>agent_inputs</code>, <code>agent_outputs</code>, <code>tool_registry</code>, <code>memory_entries</code></td></tr>
+    <tr><td>13</td><td>Gemini</td><td><code>gemini_cycles</code>, <code>gemini_requests</code>, <code>gemini_cache</code>, <code>gemini_usage</code>, <code>debate_sessions</code></td></tr>
+    <tr><td>14</td><td>Central de Melhorias</td><td><code>improvement_proposals</code>, <code>proposal_reviews</code>, <code>approvals</code>, <code>rollbacks</code></td></tr>
+    <tr><td>15</td><td>Atualizações do sistema</td><td><code>app_versions</code>, <code>update_packages</code>, <code>update_runs</code>, <code>signatures</code></td></tr>
+    <tr><td>16</td><td>Auditoria e instalação</td><td><code>audit_log</code>, <code>audit_chain</code>, <code>install_events</code>, <code>integrity_checks</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Chaves, índices e constraints</h3>
+<ul>
+  <li>Chaves primárias: UUID v4 gerado no serviço local, com coluna <code>created_at</code> em UTC.</li>
+  <li>Chaves naturais por marketplace: <code>(marketplace_id, account_id, external_id)</code> único por entidade — impede duplicação em recaptura.</li>
+  <li>Séries temporais: índice composto <code>(entity_id, reference_date, collected_at)</code>; nunca sobrescrever histórico, sempre inserir nova observação.</li>
+  <li>Dinheiro: armazenado em centavos, inteiro, com coluna de moeda explícita; nunca ponto flutuante.</li>
+  <li>Constraints de domínio: status em enumeração fechada; FK com <code>ON DELETE RESTRICT</code> em dados auditáveis; <code>CHECK</code> para valores não negativos onde aplicável.</li>
+  <li>Migrações Drizzle versionadas e transacionais; migration aplicada é imutável.</li>
+</ul>
+
+<h3>Proveniência obrigatória</h3>
+<p>Nenhum dado entra no banco sem registro de proveniência completo. Dado sem proveniência é rejeitado na escrita, não aceito com campo nulo.</p>
+<table class="data">
+  <thead><tr><th>Campo de proveniência</th><th>Conteúdo</th></tr></thead>
+  <tbody>
+    <tr><td>fonte</td><td>Página, endpoint público renderizado ou entrada manual</td></tr>
+    <tr><td>marketplace</td><td>ML, Shopee, etc.</td></tr>
+    <tr><td>conta</td><td>Conta/loja identificada</td></tr>
+    <tr><td>página</td><td>Tipo de página reconhecida e URL (sem parâmetros sensíveis)</td></tr>
+    <tr><td>data de referência</td><td>Período a que o dado se refere no marketplace</td></tr>
+    <tr><td>data de coleta</td><td>Momento da observação</td></tr>
+    <tr><td>método</td><td>Adapter + versão + estratégia de leitura</td></tr>
+    <tr><td>status de qualidade</td><td>Um dos sete status abaixo</td></tr>
+  </tbody>
+</table>
+<p><b>Status de qualidade:</b> <code>ZERO</code> (valor real igual a zero), <code>UNKNOWN</code> (desconhecido), <code>NOT_COLLECTED</code> (não coletado), <code>UNAVAILABLE</code> (indisponível na página), <code>ESTIMATED</code> (estimado, com método registrado), <code>CALCULATED</code> (derivado de outros dados), <code>VERIFIED</code> (confirmado por segunda leitura ou verificação pós-ação). A interface sempre mostra o status; <code>ESTIMATED</code> nunca aparece como se fosse <code>VERIFIED</code>.</p>
+
+<h2>9. Motores analíticos</h2>
+
+<h3>Motor de KPIs</h3>
+<table class="data">
+  <thead><tr><th>Indicador</th><th>Fórmula</th><th>Observação</th></tr></thead>
+  <tbody>
+    <tr><td>CTR</td><td>cliques ÷ impressões × 100</td><td>Indisponível se impressões ausentes → <code>UNAVAILABLE</code></td></tr>
+    <tr><td>CVR</td><td>conversões ÷ cliques × 100</td><td>Base de cliques deve ser do mesmo período</td></tr>
+    <tr><td>ROAS</td><td>receita atribuída ÷ investimento em ads</td><td>Sem atribuição, resultado marcado <code>ESTIMATED</code></td></tr>
+    <tr><td>ACoS</td><td>investimento em ads ÷ receita atribuída × 100</td><td>Inverso do ROAS</td></tr>
+    <tr><td>TACoS</td><td>investimento em ads ÷ receita total × 100</td><td>Receita total inclui vendas orgânicas</td></tr>
+    <tr><td>Ticket médio</td><td>receita total ÷ número de pedidos</td><td>Zero pedidos → <code>ZERO</code>, não divisão por zero</td></tr>
+    <tr><td>Cobertura de estoque</td><td>unidades em estoque ÷ consumo médio diário</td><td>Resultado em dias; consumo sem histórico suficiente → <code>ESTIMATED</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Motor financeiro, simulador e priorização</h3>
+<ul>
+  <li>Todos os valores em <b>centavos inteiros</b>; arredondamento explícito e único na borda de apresentação.</li>
+  <li><b>Versionamento histórico</b> de custos e de taxas: cada alteração cria nova versão com vigência; o cálculo de um período usa a versão vigente naquele período, nunca a atual.</li>
+  <li><b>Simulador de margem</b>: receita menos taxas do marketplace, custo do produto, frete, impostos informados e ads, por cenário, com a memória de cálculo visível.</li>
+  <li>Toda saída do motor é <code>CALCULATED</code>, com a versão das tabelas de custo e taxa usadas registrada junto.</li>
+  <li><b>Score de Prioridade e Saúde</b>: o motor determinístico combina indicadores, cobertura de estoque, margem e tendência, com pesos versionados e critérios explícitos.</li>
+  <li><b>Missões do Dia</b>: a partir do score, uma lista curta de ações priorizadas, cada uma com motivo, dado de origem e resultado esperado. A lista é reproduzível: os mesmos dados e a mesma versão de pesos produzem a mesma lista.</li>
+</ul>
+
+<h2>10. Camada de inteligência</h2>
+
+<p class="lead">Hierarquia fixa: motor determinístico → AI Director → 9 agentes → memória operacional → Gemini como auditor. Nenhuma seta sobe.</p>
+
+<div class="timeline">
+  <div><div class="when">Base</div><b>Motor determinístico</b> — cálculos, scores, regras e prioridades reproduzíveis.</div>
+  <div><div class="when">Coordenação</div><b>AI Director</b> — distribui trabalho, arbitra conflitos entre agentes, consolida recomendações.</div>
+  <div><div class="when">Execução</div><b>9 agentes</b> — SEO, Ads, Concorrência, Conversão, Financeiro, Estoque, Conteúdo, Precificação, Performance.</div>
+  <div><div class="when">Persistência</div><b>Memória operacional</b> — o que foi tentado, previsão e resultado, para calibrar decisões futuras.</div>
+  <div><div class="when">Externo</div><b>Gemini</b> — consultor e auditor em ciclos limitados; não decide, não executa.</div>
+</div>
+
+<h3>Contrato de agente</h3>
+<table class="data">
+  <thead><tr><th>Campo</th><th>Conteúdo</th></tr></thead>
+  <tbody>
+    <tr><td>Objetivo</td><td>Uma frase mensurável e restrita ao domínio do agente</td></tr>
+    <tr><td>Ferramentas</td><td>Lista fechada de ferramentas do AI Tool Registry que o agente pode chamar</td></tr>
+    <tr><td>Entradas</td><td>Consultas permitidas, com proveniência obrigatória; sem acesso a segredos</td></tr>
+    <tr><td>Saídas</td><td>Recomendações tipadas, com justificativa, dados de origem e nível de confiança</td></tr>
+    <tr><td>Limites</td><td>Teto de itens por execução, tempo máximo, proibições explícitas (ex.: nunca alterar preço sem autorização no nível de autonomia vigente)</td></tr>
+    <tr><td>Registro</td><td>Toda execução grava entradas, saídas e ferramentas usadas em <code>agent_runs</code></td></tr>
+  </tbody>
+</table>
+
+<h3>AI Tool Registry, feedback loop e operação offline</h3>
+<ul>
+  <li><b>AI Tool Registry</b> — nenhum agente executa ferramenta não cadastrada. O registro define nome, versão, entrada, saída, permissões, efeito colateral (leitura, escrita local, ação no marketplace) e se exige aprovação humana. Chamada a ferramenta inexistente é erro de contrato, não exceção silenciosa.</li>
+  <li><b>Feedback loop</b> — cada recomendação relevante gera uma previsão registrada (<code>predictions</code>). Após a janela de observação, o resultado real é capturado e gravado (<code>prediction_outcomes</code>). A memória operacional usa essa comparação para ajustar confiança dos agentes e pesos de priorização — nunca para reescrever o histórico.</li>
+  <li><b>Sem Gemini e sem internet</b> — motor determinístico, AI Director, agentes, memória, missões e relatórios operam integralmente offline. Sem Gemini, o sistema perde apenas a consultoria externa e a auditoria de terceiro; a interface declara isso explicitamente e não simula a resposta ausente.</li>
+</ul>
+
+<h2>11. Integração Gemini e gerenciador de cotas</h2>
+
+<table class="data">
+  <thead><tr><th>Regra</th><th>Comportamento</th></tr></thead>
+  <tbody>
+    <tr><td>Chave opcional</td><td>Sem chave, a integração fica desativada e o produto opera normalmente; a ausência é informada na interface.</td></tr>
+    <tr><td>Armazenamento</td><td>Chave no serviço local via DPAPI / Credential Manager.</td></tr>
+    <tr><td>Cache</td><td>Respostas guardadas por contexto e versão do prompt; consulta idêntica em cache não gera chamada.</td></tr>
+    <tr><td>Prevenção de redundância</td><td>Hash do contexto enviado evita repetir chamada com o mesmo insumo dentro da janela de validade.</td></tr>
+    <tr><td>Ciclos de revisão</td><td>3 ciclos por dia, configuráveis; horário e escopo de cada ciclo definidos pelo proprietário.</td></tr>
+    <tr><td>Consultas extraordinárias</td><td>Disparadas manualmente pelo proprietário; o software não impõe limite artificial, mas respeita a cota real da API.</td></tr>
+    <tr><td>Estado AGUARDANDO_COTA</td><td>Ao esgotar a cota, a solicitação fica em fila nesse estado, com retomada automática quando houver cota; nunca é descartada em silêncio.</td></tr>
+    <tr><td>Consumo por agente</td><td>Registro de chamadas e consumo por agente, ciclo e tipo de consulta.</td></tr>
+    <tr><td>Workspace de Debate</td><td>O usuário seleciona o contexto real que será enviado; o sistema mostra uma prévia exata do conteúdo a transmitir antes do envio, com opção de cancelar.</td></tr>
+  </tbody>
+</table>
+
+<h2>12. Central de Melhorias e governança</h2>
+
+<p>Mudança permanente no software só existe por proposta registrada, revisada e aprovada pela conta OWNER_PRINCIPAL.</p>
+
+<h3>Estados da proposta</h3>
+<p><code>DRAFT</code> → <code>SUBMITTED</code> → <code>UNDER_REVIEW</code> → <code>APPROVED</code> ou <code>REJECTED</code> → <code>IN_IMPLEMENTATION</code> → <code>TESTING</code> → <code>APPLIED</code> → <code>ROLLED_BACK</code>. Toda transição é registrada em auditoria com autor, data e justificativa. Não há transição direta de <code>DRAFT</code> para <code>APPLIED</code>.</p>
+
+<h3>Campos obrigatórios da proposta (20)</h3>
+<div class="cols-2">
+  <ol>
+    <li>Identificador da proposta</li>
+    <li>Título</li>
+    <li>Problema observado</li>
+    <li>Evidência (dados reais e proveniência)</li>
+    <li>Módulo afetado</li>
+    <li>Arquivos/artefatos afetados</li>
+    <li>Descrição da mudança</li>
+    <li>Alternativas consideradas</li>
+    <li>Risco técnico</li>
+    <li>Risco operacional</li>
+  </ol>
+  <ol start="11">
+    <li>Funcionalidades preservadas (checklist)</li>
+    <li>Plano de teste isolado</li>
+    <li>Critério de aceite</li>
+    <li>Plano de rollback</li>
+    <li>Impacto em migrations de dados</li>
+    <li>Origem da proposta (agente, ciclo Gemini, usuário)</li>
+    <li>Nível de autonomia aplicável</li>
+    <li>Aprovação do OWNER_PRINCIPAL (autor, data, decisão)</li>
+    <li>Hash da assinatura do pacote de mudança</li>
+    <li>Resultado pós-aplicação (previsão vs. observado)</li>
+  </ol>
+</div>
+
+<h3>Fluxo de aprovação exclusiva</h3>
+<ul>
+  <li>A verificação de que a conta é OWNER_PRINCIPAL acontece no <b>serviço local</b>, em cada aprovação; a interface apenas reflete o resultado.</li>
+  <li>Proposta sem aprovação registrada não pode entrar em implementação; tentativa gera <code>IMPROVEMENT_NOT_APPROVED</code> e evento de auditoria.</li>
+  <li>Auto-upgrade governado: backup obrigatório, teste isolado, assinatura do pacote, aplicação transacional, verificação de integridade e rollback automático em caso de falha.</li>
+</ul>
+
+<h3>Autonomia operacional vs. autonomia de desenvolvimento</h3>
+<table class="data">
+  <thead><tr><th>Nível</th><th>Operação (anúncios, preço, conteúdo)</th><th>Desenvolvimento (mudança no software)</th></tr></thead>
+  <tbody>
+    <tr><td>Consultivo</td><td>Só recomenda; usuário executa</td><td>Só sugere proposta em DRAFT</td></tr>
+    <tr><td>Assistido</td><td>Prepara a ação; usuário confirma</td><td>Implementa em ambiente isolado; aplica só após aprovação</td></tr>
+    <tr><td>Autônomo</td><td>Executa operações autorizadas e verificadas</td><td>Continua exigindo aprovação do OWNER_PRINCIPAL — autonomia de desenvolvimento nunca é plena</td></tr>
+  </tbody>
+</table>
+
+<h2>13. Estratégia de distribuição Windows</h2>
+
+<table class="data">
+  <thead><tr><th>Item</th><th>Conteúdo / regra</th></tr></thead>
+  <tbody>
+    <tr><td>Instalador</td><td>Arquivo único (<code>MarketplaceIntelligence-Setup.exe</code>, nome sujeito à Seção 17), por usuário, sem exigir terminal.</td></tr>
+    <tr><td>Runtime Node privado</td><td>Runtime embutido no pacote; não usa o Node do sistema; nenhuma dependência de Python, Git ou npm no cliente.</td></tr>
+    <tr><td>Native Messaging</td><td>Registro por usuário no registro do Windows, com manifesto apontando o ID definitivo da extensão publicada.</td></tr>
+    <tr><td>Canais de extensão</td><td>Chrome Web Store e Edge Add-ons; ID fixo obtido pela publicação.</td></tr>
+    <tr><td>Updater</td><td>Baixa, verifica assinatura e checksum, aplica de forma transacional, preserva dados e configurações.</td></tr>
+    <tr><td>Desinstalador</td><td>Normal: remove programa, mantém dados do usuário. Completa: remove programa, dados e backups, com confirmação explícita.</td></tr>
+    <tr><td>Integridade</td><td>Checksums publicados por release; verificação de integridade na instalação e na atualização; falha impede a execução.</td></tr>
+    <tr><td>Pipeline</td><td>Reproduzível em GitHub Actions <code>windows-latest</code>, gerando o instalador como artefato versionado e assinado.</td></tr>
+    <tr><td>Ambientes</td><td>Ambiente de desenvolvimento (ferramentas de build, extensão não publicada, canal loopback) separado do ambiente do usuário final (instalador, extensão publicada, Native Messaging).</td></tr>
+  </tbody>
+</table>
+
+<h2>14. Estratégia de testes</h2>
+
+<table class="data">
+  <thead><tr><th>Tipo</th><th>Ferramenta</th><th>Cobertura mínima</th></tr></thead>
+  <tbody>
+    <tr><td>Unitários</td><td>Vitest</td><td>KPIs, motor financeiro em centavos, versionamento de taxas, validação Zod do envelope</td></tr>
+    <tr><td>Integração</td><td>Vitest + SQLite temporário</td><td>Filas, retentativas idempotentes, migrations, proveniência obrigatória</td></tr>
+    <tr><td>E2E</td><td>Playwright</td><td>Extensão carregada, pareamento por token, captura, persistência, consulta no painel</td></tr>
+    <tr><td>Adapters</td><td>Fixtures de página</td><td>Reconhecimento, captura, normalização, página desconhecida, DOM alterado</td></tr>
+    <tr><td>Financeiro</td><td>Cenários conhecidos</td><td>Casos com resultado calculado à mão, incluindo divisão por zero e arredondamento</td></tr>
+    <tr><td>Segurança</td><td>Testes adversariais</td><td>Origin inválido, token inválido, payload grande, MAIN world malicioso, tentativa de aprovação por conta não autorizada</td></tr>
+    <tr><td>Instalação limpa</td><td>Máquina virtual Windows</td><td>Instalar, atualizar, desinstalar normal e completa, verificar checksum</td></tr>
+    <tr><td>Aceite da POC</td><td>Navegador real + conta real</td><td>Operação sem APIs oficiais com dados reais (Seção 15)</td></tr>
+  </tbody>
+</table>
+
+<h3>14.1 Pirâmide de testes e o que cada nível protege</h3>
+<table class="data">
+  <thead><tr><th>Nível</th><th>Alvo</th><th>Protege contra</th><th>Ferramenta</th></tr></thead>
+  <tbody>
+    <tr><td>Unitário</td><td>Motores de KPI e financeiro, validações Zod, regras de score</td><td>Erro de cálculo silencioso, divisão por zero, arredondamento indevido</td><td>Vitest</td></tr>
+    <tr><td>Contrato</td><td>Envelope de mensagens, schemas por namespace, códigos de erro</td><td>Quebra de compatibilidade entre extensão e serviço</td><td>Vitest</td></tr>
+    <tr><td>Integração</td><td>Serviço local + SQLite + fila + scheduler</td><td>Duplicação de captura, perda de job no reinício</td><td>Vitest com banco temporário</td></tr>
+    <tr><td>Adapter (fixtures)</td><td>Reconhecimento de página e extração sobre HTML real salvo</td><td>Regressão silenciosa quando o marketplace muda o DOM</td><td>Vitest com fixtures versionadas</td></tr>
+    <tr><td>E2E (ambiente controlado)</td><td>Fluxo completo em navegador automatizado</td><td>Erros de integração entre camadas</td><td>Playwright</td></tr>
+    <tr><td>Manual em sessão real</td><td>Conta real do proprietário nos marketplaces</td><td>Tudo o que fixture não representa</td><td>Checklist da Seção 15</td></tr>
+    <tr><td>Instalação limpa</td><td>Máquina Windows sem ferramentas de desenvolvimento</td><td>Dependência oculta do ambiente de build</td><td>VM Windows limpa</td></tr>
+  </tbody>
+</table>
+<p class="small muted">Fixture não substitui sessão real: um adapter só muda de estado na matriz de capacidades depois de exercitado em navegador autenticado. Playwright acelera a regressão, mas não é a prova de operação.</p>
+
+<h2>15. Prova de Conceito (Entrega 2)</h2>
+
+<p class="lead">A POC existe para provar uma única coisa: que o produto consegue capturar dados reais da sessão do usuário, sem API oficial, persistir e exibir — com as proteções de comunicação funcionando.</p>
+
+<h3>Escopo exato</h3>
+<ol class="steps">
+  <li><b>(a)</b> Extensão carregada no Chrome em modo desenvolvedor, sem erro no service worker.</li>
+  <li><b>(b)</b> Serviço local em execução, servindo o canal loopback no endereço local e respondendo ao handshake.</li>
+  <li><b>(c)</b> Pareamento por token: conexão recusada sem token e com token inválido; aceita com token válido e Origin correto.</li>
+  <li><b>(d)</b> Detecção de sessão e identificação de conta no Mercado Livre e na Shopee.</li>
+  <li><b>(e)</b> Captura real de uma página de anúncios no Mercado Livre.</li>
+  <li><b>(f)</b> Persistência dos dados capturados em SQLite, com proveniência completa.</li>
+  <li><b>(g)</b> Consulta do dado capturado no painel do Side Panel, com status de qualidade visível.</li>
+</ol>
+
+<h3>Critérios de sucesso e de falha</h3>
+<table class="data">
+  <thead><tr><th>Critério</th><th>Sucesso</th><th>Falha</th></tr></thead>
+  <tbody>
+    <tr><td>Sem APIs oficiais</td><td>Nenhuma credencial de API usada em nenhuma etapa do fluxo</td><td>Qualquer dependência de API oficial ou de chave de marketplace</td></tr>
+    <tr><td>Pareamento</td><td>Token válido conecta; token inválido e Origin estranho são recusados e auditados</td><td>Aceitar conexão sem token ou sem validação de Origin</td></tr>
+    <tr><td>Identificação de conta</td><td>Conta/loja correta identificada nos dois marketplaces</td><td>Identificação incorreta, ou ausência sem estado explícito</td></tr>
+    <tr><td>Captura</td><td>Campos da página de anúncios capturados com valores reais conferíveis na tela</td><td>Valores diferentes da tela, valores inventados ou parciais sem marcação</td></tr>
+    <tr><td>Persistência</td><td>Registros no SQLite com proveniência completa e recaptura sem duplicação</td><td>Registro sem proveniência, duplicação ou dado sobrescrito</td></tr>
+    <tr><td>Painel</td><td>Dado exibido corresponde ao capturado, com data de coleta e status</td><td>Exibição de dado simulado ou sem status</td></tr>
+    <tr><td>Isolamento</td><td>Falha de um marketplace não impede o outro</td><td>Queda do serviço local por falha de adapter</td></tr>
+  </tbody>
+</table>
+
+<h2>16. Riscos técnicos e mitigações</h2>
+
+<table class="data">
+  <thead><tr><th>Risco</th><th>Impacto</th><th>Mitigação</th></tr></thead>
+  <tbody>
+    <tr><td>Mudança de DOM nos marketplaces</td><td>Adapter quebra silenciosamente</td><td>Reconhecimento explícito de página; fixtures de teste; diagnóstico por adapter; estado EM MANUTENÇÃO em vez de captura parcial</td></tr>
+    <tr><td>Detecção de automação e bloqueios</td><td>Captura interrompida, conta em risco</td><td>Observer passivo, sem chamadas privadas, sem ritmo agressivo; nada que simule sucesso; recuo imediato ao primeiro sinal de bloqueio</td></tr>
+    <tr><td>Exigência de publicação para Native Messaging</td><td>Transporte de produção indisponível no início</td><td>Canal loopback com token e Origin na POC; Native Messaging só após ID fixo</td></tr>
+    <tr><td>Cota gratuita do Gemini</td><td>Auditoria externa interrompida</td><td>Cache, prevenção de redundância, 3 ciclos/dia, estado AGUARDANDO_COTA; produto opera sem Gemini</td></tr>
+    <tr><td>SmartScreen com instalador sem assinatura</td><td>Aviso de segurança no cliente</td><td>Assinatura de código (decisão pendente) e publicação de checksums; aviso documentado para o usuário</td></tr>
+    <tr><td>Tamanho do instalador com runtime embutido</td><td>Download e instalação mais pesados</td><td>Runtime privado mínimo, artefatos comprimidos, medição real na fase de distribuição (sem estimativa inventada)</td></tr>
+    <tr><td>Interpretação de dados de terceiros</td><td>Conclusão errada sobre concorrência</td><td>Proveniência obrigatória, status <code>ESTIMATED</code> explícito, ausência de inferência apresentada como fato</td></tr>
+  </tbody>
+</table>
+
+<h2>17. Decisões pendentes do proprietário</h2>
+
+<table class="data">
+  <thead><tr><th>#</th><th>Decisão</th><th>Contexto</th><th>Bloqueia</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Nome final do executável</td><td>A especificação cita <code>MarketplaceIntelligence-Setup.exe</code>; o produto agora é Lord Marketplaces Analytics</td><td>Pipeline de build e documentação de instalação</td></tr>
+    <tr><td>2</td><td>Porta do canal local</td><td>Porta dedicada no endereço de loopback, evitando faixas comuns</td><td>Handshake e configuração do serviço local</td></tr>
+    <tr><td>3</td><td>Assinatura de código</td><td>Define comportamento do SmartScreen e confiança do updater</td><td>Fase de distribuição</td></tr>
+    <tr><td>4</td><td>POC vs. fase posterior</td><td>Confirmar que a POC é leitura (captura e exibição), sem escrita no marketplace</td><td>Escopo da Entrega 2</td></tr>
+    <tr><td>5</td><td>Autorização de instalação de ferramentas de build</td><td>Node, pnpm/npm, Playwright e dependências no ambiente de desenvolvimento</td><td>Início da implementação</td></tr>
+  </tbody>
+</table>
+
+<h2>18. Roteiro de fases</h2>
+
+<table class="data">
+  <thead><tr><th>Fase</th><th>Objetivo</th><th>Entregável verificável</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Arquitetura</td><td>Este documento aprovado pelo OWNER_PRINCIPAL</td></tr>
+    <tr><td>2</td><td>Esqueleto da extensão</td><td>Extensão carregada, Side Panel vazio, service worker estável</td></tr>
+    <tr><td>3</td><td>Serviço local e banco</td><td>Serviço sobe, migrations aplicadas, SQLite com WAL e backup</td></tr>
+    <tr><td>4</td><td>Protocolo e canal loopback</td><td>Handshake, token, Origin, heartbeat e erros padronizados testados</td></tr>
+    <tr><td>5</td><td>Prova de Conceito (Entrega 2)</td><td>Critérios da Seção 15 atendidos no Mercado Livre e na Shopee</td></tr>
+    <tr><td>6</td><td>Adapter Mercado Livre completo</td><td>Matriz de capacidades do ML atualizada com estados reais</td></tr>
+    <tr><td>7</td><td>Adapter Shopee completo</td><td>Matriz de capacidades da Shopee atualizada com estados reais</td></tr>
+    <tr><td>8</td><td>Motores analíticos</td><td>KPIs e financeiro com testes de cenários conhecidos</td></tr>
+    <tr><td>9</td><td>IA interna</td><td>AI Director, 9 agentes, Tool Registry e memória operacional funcionando offline</td></tr>
+    <tr><td>10</td><td>Integração Gemini</td><td>Ciclos, cache, cotas, AGUARDANDO_COTA e Workspace de Debate</td></tr>
+    <tr><td>11</td><td>Central de Melhorias</td><td>Fluxo completo de proposta até rollback com aprovação exclusiva</td></tr>
+    <tr><td>12</td><td>Native Messaging e publicação</td><td>Host registrado; extensão publicada com ID fixo</td></tr>
+    <tr><td>13</td><td>Instalador e updater</td><td>Instalação limpa, atualização, desinstalação normal e completa verificadas</td></tr>
+    <tr><td>14</td><td>Pipeline reproduzível</td><td>GitHub Actions <code>windows-latest</code> gera instalador assinado e checksums</td></tr>
+    <tr><td>15</td><td>Expansão</td><td>Novos adapters (Amazon, TikTok Shop, Shein, Netshoes) pelo mesmo contrato</td></tr>
+  </tbody>
+</table>
+
+<h3>19.1 Definição de pronto (aplicada a cada fase)</h3>
+<table class="data">
+  <thead><tr><th>Condição</th><th>Critério objetivo</th></tr></thead>
+  <tbody>
+    <tr><td>Funcionalidade</td><td>Implementada de ponta a ponta, com o caminho de falha também tratado — nenhum botão sem efeito</td></tr>
+    <tr><td>Dados</td><td>Toda escrita com proveniência completa; ausência exibida com status, nunca preenchida por estimativa</td></tr>
+    <tr><td>Permissões</td><td>Regra validada no serviço local, não apenas escondida na interface</td></tr>
+    <tr><td>Testes</td><td>Unitário e contrato verdes; integração quando houver banco ou fila; regressão do adapter quando houver página</td></tr>
+    <tr><td>Observabilidade</td><td>Log estruturado com <code>correlationId</code>; falha identificável pelo painel de saúde</td></tr>
+    <tr><td>Documentação</td><td><code>PROJECT_STATE.md</code> e <code>CHANGELOG.md</code> atualizados na mesma entrega</td></tr>
+    <tr><td>Sem regressão</td><td>Matriz de capacidades e suíte de regressão comparadas com a versão anterior</td></tr>
+  </tbody>
+</table>
+
+<h2>19. Glossário e próximos passos</h2>
+
+<div class="cols-2">
+  <div>
+    <h3>Glossário</h3>
+    <ul>
+      <li><b>Local First</b> — dados e decisão na máquina do usuário; nuvem opcional.</li>
+      <li><b>MV3</b> — Manifest V3, modelo de extensão do Chrome e Edge.</li>
+      <li><b>Side Panel</b> — painel lateral da extensão junto à página.</li>
+      <li><b>MAIN world</b> — contexto JavaScript da própria página, tratado como não confiável.</li>
+      <li><b>Native Messaging</b> — canal entre extensão e executável local via navegador.</li>
+      <li><b>Loopback</b> — comunicação apenas dentro da própria máquina, sem sair para a rede.</li>
+      <li><b>OWNER_PRINCIPAL</b> — conta única com poder de aprovar mudanças.</li>
+      <li><b>AI Director</b> — coordenador dos 9 agentes.</li>
+      <li><b>AI Tool Registry</b> — catálogo fechado de ferramentas executáveis.</li>
+      <li><b>Proveniência</b> — registro obrigatório de origem e qualidade de cada dado.</li>
+      <li><b>POC</b> — Prova de Conceito (Entrega 2).</li>
+      <li><b>ACoS / TACoS</b> — custo de ads sobre receita atribuída / sobre receita total.</li>
+    </ul>
+  </div>
+  <div>
+    <h3>Próximos passos</h3>
+    <ol>
+      <li>Diego decide os cinco pontos da Seção 17.</li>
+      <li>Aprovação formal desta arquitetura como baseline da Entrega 1.</li>
+      <li>Fechamento da lista completa de tabelas nos 16 domínios.</li>
+      <li>Definição da versão inicial do envelope (<code>protocolVersion</code>) e dos schemas Zod por namespace.</li>
+      <li>Início da Fase 2 com autorização de ferramentas de build registrada.</li>
+    </ol>
+    <div class="callout"><p>Nada neste documento deve ser lido como promessa de prazo ou de desempenho. O que está validado está marcado; o que não foi exercitado em navegador real está marcado como <b>não testado</b>.</p></div>
+  </div>
+</div>
+
+
+</body></html>

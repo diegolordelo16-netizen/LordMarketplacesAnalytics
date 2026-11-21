@@ -1,0 +1,3320 @@
+Vamos gerar um novo sftware inteligente um saas que vai se chamar Lord Marketplaces Analytics
+
+primeira entrega técnica seja a arquitetura, seguida pela prova de conceito real do navegador e, depois, pelo desenvolvimento progressivo.
+
+O ponto que eu validaria primeiro é a conexão entre a extensão, o serviço local e o Mercado Livre/Shopee. Depois disso, a construção da inteligência interna, da Central de Melhorias e do instalador terá uma base muito mais segura.
+
+# PROJETO: MARKETPLACE INTELLIGENCE & AUTONOMOUS OPERATIONS
+
+## PLATAFORMA COMPLETA DE INTELIGÊNCIA COMPETITIVA, ANÁLISE, GESTÃO, AUTOMAÇÃO E OTIMIZAÇÃO AUTÔNOMA DE MARKETPLACES
+
+**VERSÃO:** Especificação técnica mestre consolidada  
+**ARQUITETURA:** Local First + Browser Automation + Local Agent + Internal AI + Gemini  
+**AMBIENTE INICIAL:** Windows 11 64 bits, com compatibilidade condicional com Windows 10  
+**NAVEGADORES:** Google Chrome e Microsoft Edge  
+**MODO DE OPERAÇÃO:** Diretamente no navegador autenticado do usuário  
+**APIs OFICIAIS DOS MARKETPLACES:** NÃO OBRIGATÓRIAS PARA AS OPERAÇÕES PRINCIPAIS  
+**INTELIGÊNCIA PRINCIPAL:** IA interna com memória, aprendizagem operacional e agentes especializados  
+**INTELIGÊNCIA EXTERNA:** API gratuita do Google Gemini, respeitando cotas e limites disponíveis  
+**APROVAÇÃO DE MELHORIAS DO SOFTWARE:** EXCLUSIVA DA CONTA PROPRIETÁRIA  
+**ENTREGA FINAL:** INSTALADOR COMPLETO PARA WINDOWS — `MarketplaceIntelligence-Setup.exe`
+
+---
+
+# 0. PRINCÍPIOS FUNDAMENTAIS E REGRAS INEGOCIÁVEIS
+
+Este projeto não deverá ser desenvolvido como um simples robô de scraping, extensão de navegador, dashboard ou gerador de anúncios.
+
+O objetivo é construir uma plataforma profissional de inteligência operacional capaz de observar, analisar, diagnosticar, planejar, executar operações autorizadas, acompanhar resultados e melhorar continuamente.
+
+O sistema deverá ser desenvolvido como um produto comercial completo, com arquitetura modular, segurança, autonomia progressiva, memória persistente e capacidade de expansão.
+
+## 0.1. Independência de APIs oficiais dos marketplaces
+
+O sistema deverá funcionar sem depender de:
+
+- API oficial do Mercado Livre.
+- API oficial da Shopee.
+- API oficial da Amazon.
+- API oficial do TikTok Shop.
+- API oficial da Shein.
+- API oficial da Netshoes.
+- Tokens de desenvolvedor dessas plataformas.
+- Credenciais de aplicações externas dos marketplaces.
+- Contratos comerciais de integração.
+- Serviços pagos de terceiros para scraping.
+- Plataformas intermediárias de integração de marketplaces.
+
+**A operação principal deverá acontecer através do navegador já autenticado do usuário.**
+
+O usuário deverá abrir normalmente Chrome ou Edge, acessar sua conta e realizar o login manualmente.
+
+A extensão utilizará a sessão de navegação já estabelecida, sem solicitar senhas dos marketplaces dentro do software, cópia manual de cookies, tokens internos ou cadastro de aplicações de desenvolvedor.
+
+Não confundir independência de APIs oficiais com ausência de comunicação HTTP. O navegador naturalmente realiza requisições para carregar páginas e informações.
+
+Poderá ocorrer observação passiva de informações disponibilizadas pela navegação normal, desde que tecnicamente acessíveis.
+
+Não utilizar chamadas diretas a endpoints privados não documentados, não reproduzir requisições autenticadas privadas, não extrair tokens de sessão e não contornar mecanismos de segurança ou controles de acesso.
+
+## 0.2. Operação Local First
+
+O projeto deverá começar funcionando no computador do usuário.
+
+As funcionalidades principais deverão funcionar sem:
+
+- Servidor contratado.
+- Banco de dados obrigatório em nuvem.
+- Assinatura de plataforma de automação.
+- APIs oficiais dos marketplaces.
+- Credenciais de desenvolvedor.
+- Backend obrigatório de terceiros.
+- Infraestrutura externa contratada.
+- Configurações técnicas manuais pelo usuário.
+
+A nuvem será uma possibilidade de expansão futura, e não uma exigência para o funcionamento inicial.
+
+## 0.3. Entrega como software comercial
+
+O produto deverá ser entregue como um software Windows completo e instalável.
+
+**Não entregar somente código-fonte, pasta do projeto, extensão separada, arquivos de configuração ou instruções para o usuário montar o ambiente.**
+
+A experiência desejada deverá ser equivalente à instalação de um software comercial:
+
+1. Baixar `MarketplaceIntelligence-Setup.exe`.
+2. Executar o arquivo.
+3. Clicar em Instalar.
+4. Aguardar a instalação automática.
+5. Abrir o Marketplace Intelligence.
+6. Realizar a configuração inicial do próprio software.
+7. Começar a utilizar.
+
+Todos os componentes necessários deverão estar incorporados ao instalador sempre que tecnicamente possível e legalmente permitido.
+
+O usuário não deverá precisar instalar ou configurar manualmente:
+
+- Node.js.
+- npm.
+- pnpm.
+- Python.
+- Git.
+- SQLite.
+- Bibliotecas.
+- Frameworks.
+- Compiladores.
+- Ferramentas de automação.
+- Hosts de comunicação.
+- Serviços locais.
+- Dependências de programação.
+- Drivers ou runtimes distribuíveis.
+
+A única dependência ambiental prevista para a automação no navegador será a existência de Chrome ou Edge compatível, ou sua instalação através de canal oficial e mediante autorização do usuário.
+
+Não exigir utilização de terminal, PowerShell, Prompt de Comando ou ferramentas de desenvolvimento.
+
+Se o ambiente de desenvolvimento não permitir gerar diretamente um binário `.exe`, entregar o código completo, os scripts de empacotamento e um workflow reproduzível, preferencialmente GitHub Actions com `windows-latest`, capaz de gerar o instalador sem intervenção técnica manual.
+
+## 0.4. Hierarquia da inteligência
+
+A arquitetura deverá seguir esta hierarquia:
+
+1. A IA interna é o cérebro principal.
+2. Os agentes internos executam análises especializadas.
+3. A memória operacional acumula conhecimento e resultados.
+4. O Gemini atua como consultor, auditor e segunda opinião externa.
+5. A Central de Melhorias registra propostas de evolução.
+6. Somente a conta proprietária aprova ou rejeita melhorias permanentes no próprio software.
+
+**O Marketplace Intelligence não poderá depender do Gemini para pensar, analisar, aprender ou funcionar.**
+
+Quando a cota gratuita do Gemini acabar, a inteligência interna continuará trabalhando normalmente.
+
+## 0.5. Preservação integral
+
+Nenhuma funcionalidade descrita neste documento poderá ser:
+
+- Excluída.
+- Simplificada.
+- Substituída por uma demonstração.
+- Transformada apenas em elemento visual.
+- Deixada como botão sem implementação.
+- Desativada silenciosamente.
+- Omitida na instalação final.
+
+Se uma funcionalidade não puder ser implementada em determinado marketplace, registrar a limitação específica daquele adapter, preservando sua disponibilidade nas demais plataformas.
+
+## 0.6. Integridade operacional
+
+- Não utilizar dados simulados como se fossem reais.
+- Não inventar indicadores ausentes.
+- Não afirmar que uma automação foi concluída sem verificar seu resultado.
+- Não apresentar estimativas como valores confirmados.
+- Registrar origem e data de referência dos dados.
+- Diferenciar análises internas de análises revisadas pelo Gemini.
+- Registrar todas as decisões relevantes.
+- Preservar históricos.
+- Não executar ações fora das permissões estabelecidas.
+
+---
+
+# 1. PAPEL E OBJETIVO DO DESENVOLVIMENTO
+
+Atue como uma equipe multidisciplinar composta por:
+
+- Arquiteto de Software Sênior.
+- Engenheiro Full-Stack.
+- Engenheiro de Extensões Chrome/Edge Manifest V3.
+- Engenheiro de Automação de Navegadores.
+- Engenheiro de Instalação e Distribuição Windows.
+- Engenheiro de Dados.
+- Especialista em Inteligência Artificial e sistemas multiagentes.
+- Especialista em API Google Gemini.
+- Engenheiro de Banco de Dados.
+- Especialista em Segurança de Aplicações.
+- Desenvolvedor de Sistemas Financeiros e Analytics.
+- Designer de Produto e UX/UI.
+- Engenheiro de Testes e Qualidade.
+
+Sua missão será projetar, desenvolver, empacotar, testar e entregar uma plataforma completa denominada:
+
+**Marketplace Intelligence & Autonomous Operations.**
+
+O produto deverá ser capaz de:
+
+1. Acessar as páginas dos marketplaces pelo navegador autenticado.
+2. Identificar automaticamente marketplace, conta e página.
+3. Capturar dados de anúncios, vendas, visitas, impressões, publicidade e estoque, quando disponíveis.
+4. Construir histórico operacional.
+5. Calcular KPIs e lucratividade.
+6. Identificar problemas e oportunidades.
+7. Analisar concorrentes.
+8. Melhorar títulos, descrições e imagens.
+9. Simular decisões comerciais.
+10. Executar alterações autorizadas.
+11. Criar e administrar tarefas automatizadas.
+12. Realizar experimentos A/B.
+13. Trabalhar com agentes especializados.
+14. Aprender com os resultados das operações.
+15. Consultar o Gemini para revisão externa.
+16. Desenvolver melhorias próprias.
+17. Apresentar melhorias na Central de Melhorias.
+18. Permitir aprovação exclusiva do proprietário.
+19. Executar atualizações aprovadas de forma controlada.
+20. Funcionar sem dependência permanente de IA externa.
+21. Ser instalado no Windows através de instalador completo.
+22. Evoluir sem comprometer funcionalidades existentes.
+
+O projeto deverá começar com Mercado Livre e Shopee, mas possuir arquitetura preparada para Amazon, TikTok Shop, Shein, Netshoes e futuras plataformas.
+
+---
+
+# 2. ARQUITETURA DEFINITIVA DO SISTEMA
+
+Adotar arquitetura Local First composta por seis elementos.
+
+## 2.1. Extensão de navegador
+
+Tecnologias:
+
+- Chrome Manifest V3.
+- Compatibilidade com Microsoft Edge.
+- React.
+- TypeScript.
+- Vite.
+- Tailwind CSS.
+- Chrome Side Panel.
+- Content Scripts.
+- Background Service Worker.
+- Chrome Tabs API.
+- Chrome Scripting API.
+- Chrome Alarms API.
+- Chrome Storage API.
+- IndexedDB.
+- Dexie.js.
+
+Responsabilidades:
+
+- Interface de operação no navegador.
+- Detecção dos marketplaces.
+- Reconhecimento de páginas.
+- Leitura do DOM.
+- Observação de dados disponibilizados pela página.
+- Interação com formulários.
+- Execução de automações.
+- Acompanhamento de tarefas.
+- Comunicação com o serviço local.
+- Apresentação de resultados.
+
+O Service Worker deverá realizar operações pontuais e não poderá ser utilizado como processo permanente.
+
+## 2.2. Serviço local persistente
+
+Criar um serviço independente em Node.js e TypeScript.
+
+Nome sugerido:
+
+`Marketplace Intelligence Local Agent`
+
+Será responsável por:
+
+- Processamento de dados.
+- Banco de dados.
+- Filas.
+- Agendamentos persistentes.
+- Motor financeiro.
+- Motor de KPIs.
+- Inteligência interna.
+- Orquestração de agentes.
+- Integração com o Gemini.
+- Workspace de Debate.
+- Central de Melhorias.
+- Memória operacional.
+- Auditoria.
+- Backup.
+- Monitoramento.
+- Recuperação de tarefas.
+- Comunicação com a extensão.
+
+O serviço deverá funcionar em segundo plano, sem abrir terminal, e poderá iniciar automaticamente com o Windows.
+
+## 2.3. Native Messaging Host
+
+Implementar Chrome Native Messaging como comunicação preferencial entre extensão e serviço local.
+
+Responsabilidades:
+
+- Receber mensagens autorizadas.
+- Validar origem da extensão.
+- Validar payloads.
+- Controlar tamanho de mensagens.
+- Comunicar com o serviço local.
+- Tratar desconexões.
+- Recuperar comunicação.
+- Versionar protocolo.
+- Gerar logs.
+
+Fluxo obrigatório:
+
+`Content Script → Service Worker → Native Messaging Host → Serviço Local`
+
+O serviço local poderá utilizar IPC protegido, como named pipes no Windows.
+
+## 2.4. Banco de dados local
+
+Utilizar SQLite como banco principal.
+
+Implementar:
+
+- Migrations.
+- Índices.
+- Foreign Keys.
+- Constraints.
+- Transações.
+- Integridade referencial.
+- WAL quando apropriado.
+- Backup.
+- Restauração.
+- Consultas otimizadas.
+- Versionamento.
+
+Utilizar Drizzle ORM ou alternativa TypeScript equivalente devidamente justificada.
+
+O SQLite será a fonte principal de verdade local.
+
+O IndexedDB será utilizado para cache, estado temporário e operações da extensão.
+
+## 2.5. Backend em nuvem opcional
+
+Preparar futura expansão para:
+
+- PostgreSQL.
+- Supabase.
+- Supabase Auth.
+- Row Level Security.
+- Edge Functions.
+- Sincronização.
+- Multiempresa.
+- Multiusuário.
+- Administração central.
+- SaaS.
+
+Nenhum desses recursos poderá ser obrigatório para a operação local inicial.
+
+## 2.6. Camada de distribuição Windows
+
+Criar uma camada de empacotamento própria.
+
+Incluir:
+
+- Aplicativo principal.
+- Extensão compilada.
+- Serviço local.
+- Runtime Node.js incorporado.
+- Dependências.
+- SQLite.
+- Native Messaging Host.
+- Arquivos de configuração.
+- Recursos.
+- Atualizador.
+- Desinstalador.
+- Scripts internos de instalação.
+- Verificação de integridade.
+
+O usuário deverá receber um único instalador principal.
+
+---
+
+# 3. STACK TECNOLÓGICA
+
+## 3.1. Extensão
+
+- Manifest V3.
+- React.
+- TypeScript.
+- Vite.
+- Tailwind CSS.
+- Dexie.js.
+- Chrome Side Panel.
+- Content Scripts.
+- Service Worker.
+- Chrome APIs.
+
+## 3.2. Serviço local
+
+- Node.js LTS incorporado ao aplicativo.
+- TypeScript.
+- SQLite.
+- Drizzle ORM ou equivalente.
+- Zod.
+- Logs estruturados.
+- Fila persistente.
+- IPC protegido.
+
+## 3.3. Interface
+
+- React.
+- Tailwind CSS.
+- Design System próprio.
+- Gráficos.
+- Tabelas.
+- Filtros.
+- Indicadores.
+- Notificações.
+- Modais.
+- Painéis administrativos.
+- Workspace de Debate com Gemini.
+- Central de Melhorias.
+
+## 3.4. Inteligência artificial
+
+Criar camada independente de provedores.
+
+Prioridade:
+
+1. Inteligência interna.
+2. Gemini como consultor externo.
+3. Modelos locais opcionais.
+4. Outros provedores opcionais em futuras versões.
+
+Suportar:
+
+- Modelos.
+- Agentes.
+- Memória.
+- Controle de consumo.
+- Versionamento de prompts.
+- Histórico.
+- Avaliação.
+- Feedback.
+
+Não armazenar chaves privadas da API no frontend da extensão.
+
+## 3.5. Exportação
+
+- SheetJS.
+- XLSX.
+- CSV.
+- Impressão A4.
+- CSS de impressão.
+- PDF pelo navegador.
+
+## 3.6. Testes
+
+- Vitest.
+- Testes unitários.
+- Testes de integração.
+- Testes de componentes.
+- Testes E2E.
+- Testes de adapters.
+- Testes financeiros.
+- Testes de segurança.
+- Testes de instalação Windows.
+
+Playwright poderá ser usado para testes em ambientes controlados, mas não substituirá a extensão na operação normal com o navegador autenticado.
+
+## 3.7. Código executável remoto
+
+Todo código da extensão deverá estar empacotado.
+
+Não executar JavaScript, WASM ou código arbitrário remoto para modificar o comportamento da extensão.
+
+O Gemini poderá propor mudanças no código, mas a geração, compilação, assinatura e distribuição deverão ocorrer por pipeline confiável, com aprovação do proprietário.
+
+---
+
+# 4. OPERAÇÃO DIRETA NO NAVEGADOR AUTENTICADO — SEM APIs DOS MARKETPLACES
+
+O usuário deverá abrir Chrome ou Edge e entrar normalmente no marketplace.
+
+A extensão reutilizará a sessão já existente.
+
+Não solicitar:
+
+- Senha do marketplace.
+- Login separado.
+- Cookies copiados.
+- Tokens internos.
+- Chaves de API.
+- Cadastro de aplicações de desenvolvedor.
+
+## 4.1. Detecção da sessão
+
+Implementar:
+
+- Detecção de login.
+- Detecção de logout.
+- Detecção de sessão expirada.
+- Identificação de página de login.
+- Identificação de redirecionamentos.
+- Identificação da loja.
+- Identificação da conta ativa.
+- Monitoramento de troca de conta.
+- Recuperação após atualização.
+
+Se a conta não puder ser identificada com segurança, solicitar validação humana.
+
+## 4.2. Contextos de execução
+
+**ISOLATED WORLD**
+
+Content Scripts responsáveis por leitura do DOM, identificação de elementos, interação com formulários e envio de mensagens.
+
+**MAIN WORLD**
+
+Utilizado somente quando necessário para observação passiva de dados disponibilizados pela página, como respostas acessíveis de fetch e XMLHttpRequest.
+
+Não alterar o comportamento original da página nem realizar replay de requisições privadas.
+
+**SERVICE WORKER**
+
+Responsável por mensagens, coordenação, controle de abas e comunicação com Native Messaging.
+
+Não utilizar memória volátil do Service Worker como armazenamento de estado permanente.
+
+## 4.3. Segurança da comunicação
+
+Dados provenientes do MAIN World serão considerados não confiáveis.
+
+Implementar:
+
+- Validação de schema.
+- Validação de origem.
+- Tipos.
+- Limites de payload.
+- Controle de comandos.
+- Proteção contra mensagens forjadas.
+- Logs de eventos suspeitos.
+
+## 4.4. Captura híbrida
+
+Combinar:
+
+1. DOM.
+2. Observação passiva de respostas acessíveis.
+3. Navegação assistida.
+
+Não presumir que todos os indicadores estarão disponíveis diretamente.
+
+Se necessário, navegar por telas, relatórios e filtros para obter dados complementares.
+
+## 4.5. Reconhecimento de páginas
+
+Reconhecer:
+
+- Dashboard.
+- Lista de anúncios.
+- Detalhes de anúncios.
+- Edição.
+- Estoque.
+- Ads.
+- Relatórios.
+- Pedidos.
+- Resultados de busca.
+- Páginas públicas de concorrentes.
+
+Suportar SPAs, navegação sem reload, carregamento assíncrono, DOM dinâmico, paginação e scroll infinito.
+
+## 4.6. Navegação
+
+Implementar:
+
+- Múltiplas abas.
+- Identificação de aba.
+- Identificação de conta.
+- Associação de tarefas.
+- Controle de concorrência.
+- Recuperação de contexto.
+- Prevenção de tarefas conflitantes.
+
+Não alterar silenciosamente a navegação do usuário.
+
+## 4.7. Sessões expiradas
+
+Quando a sessão expirar:
+
+1. Pausar operações dependentes.
+2. Registrar o evento.
+3. Preservar tarefas.
+4. Notificar.
+5. Solicitar login manual.
+6. Identificar novamente a conta.
+7. Validar contexto.
+8. Retomar tarefas ainda válidas.
+
+---
+
+# 5. MARKETPLACES E SISTEMA DE ADAPTERS
+
+Marketplaces:
+
+1. Mercado Livre.
+2. Shopee.
+3. Amazon.
+4. TikTok Shop.
+5. Shein.
+6. Netshoes.
+
+Criar adapters independentes e implementando `IMarketplaceAdapter`.
+
+Estrutura:
+
+- `mercadolivre`
+- `shopee`
+- `amazon`
+- `tiktokshop`
+- `shein`
+- `netshoes`
+
+Cada adapter deverá possuir:
+
+- Detecção de domínio.
+- Identificação de conta.
+- Reconhecimento de páginas.
+- Captura.
+- Normalização.
+- Validação.
+- Navegação.
+- Operações autorizadas.
+- Diagnóstico.
+- Versionamento.
+- Testes específicos.
+
+Criar uma matriz de funcionalidades por marketplace com estados:
+
+- Suportado.
+- Parcialmente suportado.
+- Não disponível.
+- Em desenvolvimento.
+- Em manutenção.
+- Não testado.
+
+Não declarar funcionalidade como suportada sem teste real.
+
+Mudanças de um marketplace não poderão interromper os demais.
+
+---
+
+# 6. IDENTIFICAÇÃO MULTICONTA E CONSOLIDAÇÃO
+
+Detectar contas autenticadas.
+
+Permitir:
+
+- Visualização por plataforma.
+- Visualização por loja.
+- Visualização por conta.
+- Visão consolidada.
+- Comparação entre contas.
+- Comparação entre plataformas.
+
+Cada registro deverá preservar sua identidade e origem.
+
+Não misturar contas, empresas, SKUs, anúncios ou períodos incompatíveis.
+
+Criar identificador canônico de produto para relacionar o mesmo produto em diferentes marketplaces, mantendo os IDs originais de cada anúncio e variação.
+
+Solicitar confirmação humana quando a identificação for inconclusiva.
+
+---
+
+# 7. DATA INTELLIGENCE E QUALIDADE DOS DADOS
+
+Criar camada independente de validação.
+
+Identificar:
+
+- Dados ausentes.
+- Duplicações.
+- Inconsistências.
+- Valores anormais.
+- Dados desatualizados.
+- Divergências entre fontes.
+- Falhas de coleta.
+- Problemas de normalização.
+- Problemas de cálculo.
+
+Diferenciar obrigatoriamente:
+
+- ZERO.
+- UNKNOWN.
+- NOT_COLLECTED.
+- UNAVAILABLE.
+- ESTIMATED.
+- CALCULATED.
+- VERIFIED.
+
+Cada dado deverá registrar:
+
+- Fonte.
+- Marketplace.
+- Conta.
+- Página.
+- Data de referência.
+- Data da coleta.
+- Método.
+- Status de validação.
+- Confiabilidade.
+
+A IA deverá considerar a qualidade dos dados antes de emitir recomendações.
+
+---
+
+# 8. SNAPSHOTS E HISTÓRICO
+
+Salvar snapshots em cada sincronização.
+
+Permitir consulta:
+
+- Hoje.
+- Ontem.
+- 7 dias.
+- 30 dias.
+- 90 dias.
+- Período personalizado.
+
+Implementar:
+
+- Histórico.
+- Comparações.
+- Tendências.
+- Evolução.
+- Detecção de anomalias.
+- Histórico de alterações.
+
+Criar botão:
+
+**ATUALIZAR DADOS DO DIA**
+
+A atualização deverá navegar pelas telas necessárias de forma controlada e apresentar:
+
+- Progresso.
+- Marketplace.
+- Conta.
+- Página.
+- Indicadores coletados.
+- Falhas.
+- Última atualização.
+
+Nunca apagar ou substituir o histórico anterior sem preservação.
+
+---
+
+# 9. MOTOR DE KPIs E ANÁLISE DE DESEMPENHO
+
+Criar motor matemático centralizado, independente e testável.
+
+## 9.1. Tráfego
+
+- Impressões.
+- Cliques.
+- Visitas.
+- CTR.
+- Evolução de tráfego.
+- Origem de visitas quando disponível.
+
+`CTR = Cliques / Impressões × 100`
+
+## 9.2. Conversão
+
+- Pedidos.
+- Unidades vendidas.
+- CVR.
+- Adições ao carrinho.
+- Favoritos.
+- Cancelamentos.
+- Devoluções.
+
+`CVR = Pedidos / Visitas × 100`
+
+Diferenciar pedidos, unidades, pedidos pagos, vendas atribuídas e pedidos efetivamente concluídos.
+
+## 9.3. Receita e margem
+
+- GMV.
+- Faturamento.
+- Receita após descontos.
+- Receita líquida.
+- Unidades.
+- Giro diário.
+- Ticket médio.
+- Lucro estimado.
+- Lucro realizado.
+- Margem de contribuição.
+- Rentabilidade por anúncio.
+- Rentabilidade por SKU.
+
+## 9.4. Ads
+
+- Investimento.
+- Vendas atribuídas.
+- ROAS.
+- ACoS.
+- TACoS.
+- Custo por venda.
+- Participação da publicidade no faturamento.
+- Rentabilidade das campanhas.
+
+`ROAS = Receita atribuída a Ads / Investimento em Ads`
+
+`ACoS = Investimento em Ads / Receita atribuída a Ads × 100`
+
+`TACoS = Investimento em Ads / Faturamento total × 100`
+
+## 9.5. Operação
+
+- Estoque.
+- Cobertura.
+- Média diária de vendas.
+- Risco de ruptura.
+- Qualidade do cadastro.
+- Perguntas pendentes.
+- Posição orgânica.
+- Alertas.
+
+`Cobertura de estoque = Estoque disponível / Média diária de vendas`
+
+## 9.6. Regras
+
+- Respeitar períodos compatíveis.
+- Considerar fuso horário.
+- Tratar valores ausentes.
+- Evitar divisão por zero.
+- Diferenciar receita total e atribuída.
+- Evitar contagens duplicadas.
+- Utilizar precisão decimal ou centavos inteiros.
+
+As metodologias dos marketplaces deverão ser identificadas. Não presumir que indicadores de plataformas diferentes possuam exatamente a mesma definição.
+
+---
+
+# 10. MOTOR FINANCEIRO AVANÇADO
+
+Considerar:
+
+- Custo de compra.
+- Custo de fabricação.
+- Embalagem.
+- Comissão.
+- Taxas fixas.
+- Frete.
+- Impostos.
+- Ads.
+- Cupons.
+- Descontos.
+- Campanhas.
+- Devoluções.
+- Cancelamentos.
+- Outras despesas.
+
+Permitir regras por:
+
+- Marketplace.
+- Conta.
+- Produto.
+- SKU.
+- Categoria.
+
+Diferenciar:
+
+1. Faturamento bruto.
+2. Receita após descontos.
+3. Receita líquida.
+4. Margem de contribuição.
+5. Lucro operacional estimado.
+6. Resultado realizado.
+
+Preservar versões históricas dos custos e taxas.
+
+## 10.1. Simulador de margem
+
+Permitir simular:
+
+- Aumento de preço.
+- Redução de preço.
+- Mudança de custo.
+- Mudança de comissão.
+- Frete.
+- Descontos.
+- Campanhas.
+- Orçamento de Ads.
+
+Exibir margem atual, margem projetada, lucro, variação, preço mínimo e margem mínima.
+
+Simulação positiva não autoriza automaticamente a execução.
+
+---
+
+# 11. RANKING DE PRIORIDADE E MISSÕES DO DIA
+
+Criar Score de Prioridade e Saúde configurável.
+
+## 11.1. Alertas críticos
+
+- Ruptura iminente.
+- Margem negativa.
+- Ads deficitário.
+- Queda de conversão.
+- Queda brusca de vendas.
+- Problemas operacionais.
+
+## 11.2. Oportunidades quentes
+
+- Boa conversão com baixo tráfego.
+- Margem positiva.
+- Possibilidade de escala.
+- Potencial de SEO.
+- Oportunidade competitiva.
+
+## 11.3. Estagnados/Zumbis
+
+- Visitas sem vendas.
+- Anúncios sem evolução.
+- Baixa conversão persistente.
+- Ads consumindo margem.
+- Estoque parado.
+
+## 11.4. Missões do Dia
+
+Apresentar de 3 a 5 ações prioritárias.
+
+Cada missão deverá incluir:
+
+- Problema.
+- Evidências.
+- Anúncio.
+- Conta.
+- Marketplace.
+- Impacto estimado.
+- Prioridade.
+- Ação recomendada.
+- Risco.
+- Status.
+
+Permitir filtros por severidade, plataforma, conta e curva ABC.
+
+---
+
+# 12. RADAR DE CONCORRÊNCIA E INTELIGÊNCIA COMPETITIVA
+
+Ao pesquisar um termo dentro do marketplace, analisar os 10 a 20 principais concorrentes disponíveis na página.
+
+Capturar informações públicas visíveis:
+
+- Título.
+- Preço.
+- Imagem.
+- Frete.
+- Entrega.
+- Avaliações.
+- Posicionamento.
+- Palavras-chave.
+- Ofertas.
+- Características comerciais.
+
+Criar histórico de concorrentes para identificar:
+
+- Mudanças de preço.
+- Mudanças de título.
+- Mudanças de imagem.
+- Novos concorrentes.
+- Promoções.
+- Evolução de avaliações.
+- Alterações de posicionamento.
+- Tendências.
+
+Identificar oportunidades de diferenciação, faixas de preço e padrões comerciais.
+
+Não presumir acesso a dados privados dos concorrentes.
+
+---
+
+# 13. BIBLIOTECA DE IMAGENS E TROCA DE CAPA
+
+Criar módulo próprio para imagens.
+
+## 13.1. Biblioteca
+
+- Upload.
+- Visualização.
+- Organização.
+- Associação ao SKU.
+- Associação ao anúncio.
+- Histórico.
+- Versionamento.
+- Exclusão controlada.
+
+## 13.2. Validação
+
+- Resolução.
+- Proporção.
+- Formato.
+- Peso.
+- Fundo.
+- Regras do marketplace.
+- Compatibilidade do produto.
+
+## 13.3. Automação
+
+- Abrir edição.
+- Localizar imagens.
+- Fazer upload.
+- Reordenar.
+- Alterar capa.
+- Salvar.
+- Verificar resultado.
+
+Executar individualmente ou em fila.
+
+## 13.4. Comparação Antes/Depois
+
+Congelar indicadores dos sete dias anteriores.
+
+Monitorar sete dias posteriores.
+
+Comparar:
+
+- CTR.
+- CVR.
+- Visitas.
+- Pedidos.
+- Receita.
+- Margem.
+
+Permitir rollback quando suportado, preservando original e histórico.
+
+Não afirmar que alterações visuais foram a única causa de mudanças nas vendas.
+
+---
+
+# 14. DUPLICADOR AUTOMÁTICO DE ANÚNCIOS
+
+Preservar o anúncio original e criar variantes B, C e adicionais.
+
+Campos protegidos:
+
+- Preço base.
+- Margem mínima.
+- Estoque.
+- Grade.
+- SKU.
+- Ficha técnica.
+- Categoria.
+- Dados fiscais.
+- Dados logísticos.
+
+Permitir variar:
+
+- Títulos.
+- Palavras-chave.
+- Blocos iniciais de descrição.
+- Imagem de capa.
+- Abordagem comercial.
+
+Opções:
+
+- Rascunho.
+- Pausado.
+- Publicação direta quando permitida.
+- Revisão humana.
+
+Detectar anúncios semelhantes.
+
+Não duplicar indevidamente nem tentar contornar restrições da plataforma.
+
+---
+
+# 15. TESTES A/B E EXPERIMENTAÇÃO
+
+Registrar:
+
+- Hipótese.
+- Variável.
+- Grupo controle.
+- Variante.
+- Métrica principal.
+- Métricas secundárias.
+- Data inicial.
+- Data final.
+- Amostra.
+- Resultado.
+- Conclusão.
+
+Implementar:
+
+- Comparação A/B.
+- Monitoramento.
+- Amostra mínima.
+- Significância estatística quando aplicável.
+- Controle de sazonalidade.
+- Eventos externos.
+- Testes inconclusivos.
+- Histórico.
+
+Não declarar vencedores por pequenas diferenças sem evidência suficiente.
+
+Diferenciar testes simultâneos e sequenciais.
+
+---
+
+# 16. CENTRAL DE TAREFAS E JOB SCHEDULER
+
+## 16.1. Task Builder
+
+Permitir selecionar vários produtos diferentes na mesma tarefa.
+
+Para cada produto, definir individualmente:
+
+- Quantidade de cópias.
+- Título.
+- Descrição.
+- Foto de capa.
+- Marketplace.
+- Conta.
+- Tipo de operação.
+- Rascunho ou publicação.
+
+Exemplo:
+
+Produto A: 2 cópias.
+
+Produto B: 3 cópias.
+
+Produto C: 1 cópia.
+
+## 16.2. Execução
+
+Criar botão Executar Agora.
+
+Exibir:
+
+- Progresso.
+- Item atual.
+- Concluídos.
+- Pendentes.
+- Falhas.
+- Histórico.
+
+## 16.3. Agendamento
+
+Permitir:
+
+- Data e hora exatas.
+- Recorrência.
+- Execução imediata.
+- Lotes.
+
+O serviço local será o agendador persistente.
+
+O Chrome Alarms será utilizado apenas para eventos da extensão.
+
+Se o navegador estiver fechado:
+
+- Continuar processamentos locais.
+- Manter análises já coletadas.
+- Suspender operações dependentes do marketplace.
+- Marcar `WAITING_BROWSER`.
+
+Ao reabrir, revalidar sessão, conta e estado da tarefa.
+
+## 16.4. Fila
+
+Implementar:
+
+- Delay configurável.
+- Limites.
+- Pausar.
+- Retomar.
+- Pular item.
+- Cancelar.
+- Retentativas controladas.
+- Isolamento de erros.
+- Recuperação.
+- Idempotência.
+
+Estados:
+
+- PENDING.
+- SCHEDULED.
+- WAITING_BROWSER.
+- RUNNING.
+- PAUSED.
+- COMPLETED.
+- FAILED.
+- CANCELLED.
+
+Persistir todas as etapas no banco.
+
+---
+
+# 17. AUTOMATION GUARD
+
+Validar antes de cada operação:
+
+1. Marketplace.
+2. Conta.
+3. Anúncio.
+4. Estado atual.
+5. Permissão.
+6. Limites financeiros.
+7. Dados obrigatórios.
+8. Regras da plataforma.
+9. Autorização.
+10. Ausência de conflito.
+
+Após a operação:
+
+- Confirmar salvamento.
+- Verificar estado.
+- Comparar antes/depois.
+- Registrar auditoria.
+- Tratar falhas.
+- Preparar rollback quando aplicável.
+
+Interromper quando a página ou contexto estiver diferente do esperado.
+
+Nunca afirmar sucesso sem confirmação real.
+
+---
+
+# 18. ARQUITETURA DE INTELIGÊNCIA: AI DIRECTOR, IA INTERNA E GEMINI
+
+## 18.1. Princípio fundamental
+
+**A IA interna é o cérebro principal do Marketplace Intelligence. O Gemini é um consultor externo e auditor complementar.**
+
+O software deverá funcionar, analisar, aprender e continuar evoluindo sem depender permanentemente do Gemini.
+
+A falta de chave, internet ou cota gratuita não poderá interromper:
+
+- KPIs.
+- Motor financeiro.
+- Análises determinísticas.
+- Memória operacional.
+- Ranking.
+- Diagnósticos internos.
+- Agentes locais.
+- Relatórios.
+- Histórico.
+- Automações autorizadas.
+
+## 18.2. Camadas da inteligência interna
+
+### A. Motor determinístico
+
+Responsável por:
+
+- Cálculos.
+- KPIs.
+- Margens.
+- Regras.
+- Classificações.
+- Limites.
+- Detecção de anomalias.
+- Validações.
+
+Não depender de IA externa.
+
+### B. AI Director
+
+Agente central que coordena especialistas, combina evidências, prioriza investigações, supervisiona tarefas e avalia resultados.
+
+### C. Agentes internos
+
+Agentes com objetivos e ferramentas específicos.
+
+### D. Memória operacional
+
+Preservar problemas, estratégias, resultados, decisões e lições aprendidas.
+
+### E. Base de conhecimento
+
+Indexar e recuperar o conhecimento operacional acumulado.
+
+### F. Modelo local opcional
+
+Preparar suporte a modelos locais quando houver hardware compatível.
+
+O modelo local poderá ampliar raciocínio e interpretação, mas não será obrigatório para o funcionamento do motor analítico e da memória.
+
+## 18.3. Os nove agentes especializados
+
+**1. Agente de SEO**
+
+- Analisar títulos.
+- Pesquisar palavras-chave.
+- Identificar oportunidades orgânicas.
+- Comparar concorrentes.
+- Recomendar melhorias.
+
+**2. Agente de Ads**
+
+- Analisar ROAS.
+- Analisar ACoS.
+- Analisar TACoS.
+- Identificar desperdícios.
+- Recomendar orçamento.
+- Avaliar rentabilidade.
+
+**3. Agente de Concorrência**
+
+- Monitorar preços.
+- Analisar anúncios.
+- Encontrar tendências.
+- Identificar oportunidades.
+
+**4. Agente de Conversão**
+
+- Analisar CTR.
+- Analisar CVR.
+- Avaliar imagens.
+- Avaliar títulos.
+- Investigar problemas.
+
+**5. Agente Financeiro**
+
+- Calcular margem.
+- Avaliar rentabilidade.
+- Simular preços.
+- Identificar prejuízos.
+
+**6. Agente de Estoque**
+
+- Avaliar giro.
+- Prever rupturas.
+- Identificar produtos parados.
+- Recomendar reposição.
+
+**7. Agente de Conteúdo**
+
+- Avaliar anúncios.
+- Melhorar descrições.
+- Verificar atributos.
+- Recomendar imagens.
+
+**8. Agente de Precificação**
+
+- Avaliar competitividade.
+- Calcular preço mínimo.
+- Simular cenários.
+- Preservar margem.
+
+**9. Agente de Performance**
+
+- Consolidar indicadores.
+- Identificar anomalias.
+- Comparar períodos.
+- Gerar diagnósticos.
+
+## 18.4. Integração com Google Gemini
+
+Integrar a API do Gemini como segunda opinião e ferramenta de revisão independente.
+
+O Gemini deverá conferir o trabalho da IA interna.
+
+Não deverá substituir a inteligência principal.
+
+O fluxo será:
+
+1. IA interna realiza análise.
+2. Registra conclusão.
+3. Registra evidências.
+4. Prepara contexto.
+5. Consulta Gemini quando houver disponibilidade.
+6. Obtém análise independente.
+7. Compara resultados.
+8. Identifica concordâncias e divergências.
+9. Atualiza a memória.
+10. Gera propostas quando houver oportunidades.
+
+O Gemini poderá revisar:
+
+- KPIs.
+- Anúncios.
+- Margens.
+- Precificação.
+- Ads.
+- Concorrência.
+- Estoque.
+- Testes A/B.
+- Erros de adapters.
+- Falhas de automação.
+- Estratégias.
+- Diagnósticos dos agentes.
+- Melhorias do próprio sistema.
+
+A IA interna não deverá assumir automaticamente que o Gemini está correto.
+
+Registrar evidências e desempenho de ambas as inteligências.
+
+## 18.5. Cota gratuita e limites do Gemini
+
+A utilização inicial deverá considerar exclusivamente a cota gratuita disponível.
+
+**Não contratar automaticamente planos pagos.**
+
+Não realizar cobranças sem autorização expressa do proprietário.
+
+Implementar Gerenciador de Cotas com:
+
+- Registro de chamadas.
+- Tokens de entrada e saída quando disponíveis.
+- Consumo por agente.
+- Consumo por período.
+- Erros de limite.
+- Identificação de cota esgotada.
+- Controle de prioridades.
+- Cache.
+- Prevenção de chamadas redundantes.
+- Histórico de consumo.
+- Alertas.
+
+Os limites reais deverão ser obtidos das configurações e respostas do provedor, sem presumir que sejam valores fixos.
+
+## 18.6. Três revisões programadas por dia
+
+Configurar, por padrão, três ciclos de revisão com o Gemini por dia.
+
+Os horários deverão ser configuráveis pelo proprietário.
+
+Em cada ciclo:
+
+1. A inteligência interna realiza suas análises.
+2. Seleciona os diagnósticos relevantes.
+3. Consolida os resultados.
+4. Consulta o Gemini, caso haja cota disponível.
+5. Compara as análises.
+6. Registra divergências.
+7. Atualiza a memória.
+8. Prepara propostas de melhoria, se necessário.
+
+Não gastar chamadas quando não houver informações novas ou relevantes.
+
+Preferir uma consulta consolidada a várias chamadas redundantes.
+
+## 18.7. Consultas extraordinárias
+
+Além dos três ciclos diários, a inteligência interna poderá solicitar consultas extraordinárias quando identificar:
+
+- Falha crítica.
+- Dúvida relevante.
+- Diagnósticos divergentes.
+- Erro persistente.
+- Alteração de desempenho.
+- Falha de adapter.
+- Resultado inesperado.
+- Oportunidade comercial importante.
+- Decisão estratégica de alto impacto.
+- Possível falha do próprio sistema.
+
+Não criar limite artificial adicional dentro do software para a quantidade de solicitações extraordinárias.
+
+Entretanto, respeitar os limites reais do Google.
+
+Se a cota acabar:
+
+1. Interromper chamadas rejeitadas por limite.
+2. Registrar a solicitação.
+3. Marcar `AGUARDANDO_COTA`.
+4. Preservar o contexto.
+5. Continuar a investigação internamente.
+6. Reavaliar quando houver disponibilidade.
+7. Consultar novamente quando possível.
+
+**Sem limite artificial do software não significa ultrapassar a cota gratuita ou os limites da API do Google.**
+
+## 18.8. Fallback automático
+
+Quando o Gemini estiver indisponível, a IA interna deverá continuar funcionando integralmente dentro de suas capacidades.
+
+Exemplos:
+
+- SEO continua analisando anúncios.
+- Financeiro continua calculando margens.
+- Ads continua analisando campanhas.
+- Concorrência continua comparando preços.
+- Estoque continua calculando riscos.
+- AI Director continua coordenando agentes.
+- Memória continua recebendo aprendizados.
+- Central de Melhorias continua registrando propostas.
+
+Identificar claramente análises internas e análises revisadas externamente.
+
+## 18.9. Workspace de Debate Gemini
+
+Criar um painel interativo em que o proprietário ou usuários autorizados possam consultar o Gemini sobre dados selecionados.
+
+Permitir selecionar:
+
+- KPIs.
+- Anúncios.
+- Margens.
+- Campanhas.
+- Concorrentes.
+- Estoque.
+- Logs.
+- Erros.
+- Experimentos.
+- Relatórios.
+
+O Gemini deverá receber contexto real selecionado, não inventado.
+
+Registrar:
+
+- Pergunta.
+- Contexto enviado.
+- Resposta.
+- Modelo.
+- Data.
+- Consumo.
+- Decisão.
+- Resultado.
+
+## 18.10. Limites de privacidade e custos
+
+Armazenar a chave da API no serviço local, protegida por Windows DPAPI ou Windows Credential Manager.
+
+Não armazená-la no frontend.
+
+Implementar:
+
+- Controle de chamadas.
+- Cache.
+- Limites configuráveis.
+- Alertas.
+- Timeouts.
+- Retentativas controladas.
+- Proteção da chave.
+- Exclusão segura.
+- Controle de dados enviados.
+
+Antes de compartilhar contexto comercial com o Gemini, permitir visualizar quais informações serão transmitidas.
+
+Não enviar dados pessoais desnecessários de clientes.
+
+---
+
+# 19. CENTRAL DE MELHORIAS DA IA — APROVAÇÃO EXCLUSIVA DO PROPRIETÁRIO
+
+Criar uma seção independente chamada:
+
+**CENTRAL DE MELHORIAS DA IA**
+
+Será a área responsável por apresentar propostas de evolução identificadas pela IA interna, pelo AI Director e pelas análises do Gemini.
+
+## 19.1. Exclusividade de aprovação
+
+Somente a conta principal do proprietário poderá aprovar ou rejeitar melhorias permanentes no próprio software.
+
+Criar identidade exclusiva:
+
+`OWNER_PRINCIPAL`
+
+Durante a instalação e configuração inicial, o primeiro proprietário deverá ser identificado e registrado no sistema.
+
+Registrar o identificador interno `owner_user_id` com proteção adequada.
+
+A conta proprietária poderá também possuir a função `super_admin`, mas a capacidade de aprovar melhorias será uma permissão exclusiva e separada.
+
+Nenhum outro usuário poderá receber essa permissão.
+
+Nem o Gemini, nem os agentes, nem administradores auxiliares poderão aprovar mudanças em nome do proprietário.
+
+**A exclusividade deverá ser validada no serviço local, não apenas escondendo botões na interface.**
+
+## 19.2. O que a proposta deverá explicar
+
+Toda proposta deverá conter obrigatoriamente:
+
+1. Título da melhoria.
+2. Problema identificado.
+3. Situação atual.
+4. Como funciona atualmente.
+5. O que será melhorado.
+6. Como será melhorado.
+7. Benefício esperado.
+8. Motivo.
+9. Evidências.
+10. Impacto.
+11. Riscos.
+12. Módulos afetados.
+13. Mudança para o usuário.
+14. Testes previstos.
+15. Estratégia de rollback.
+16. Origem da proposta.
+17. Nível de confiança.
+18. Prioridade.
+19. Complexidade.
+20. Estimativa de consumo ou recursos adicionais, quando aplicável.
+
+Se envolver código, incluir resumo do diff, arquivos afetados e detalhes técnicos.
+
+A descrição deverá ser compreensível para o proprietário, sem exigir conhecimento de programação.
+
+## 19.3. Exemplo de proposta
+
+**Título:** Melhorar a detecção de anúncios no Mercado Livre.
+
+**Problema:** o adapter não reconhece determinados anúncios após mudanças na interface.
+
+**Situação atual:** alguns formatos apresentam falha de captura.
+
+**Melhoria proposta:** adicionar seletores validados e melhorar o fallback.
+
+**Benefício:** aumentar o reconhecimento de anúncios e reduzir falhas.
+
+**Evidências:** registros reais de coleta.
+
+**Risco:** baixo após testes de regressão.
+
+**Arquivos afetados:** adapter do Mercado Livre e testes.
+
+**Validação:** execução de testes em formatos diferentes.
+
+**Rollback:** restauração da versão anterior.
+
+**Origem:** IA interna com revisão do Gemini.
+
+**Status:** AGUARDANDO APROVAÇÃO DO PROPRIETÁRIO.
+
+## 19.4. Interface
+
+Exibir:
+
+- Aprovar melhoria.
+- Rejeitar melhoria.
+- Adiar decisão.
+- Solicitar mais informações.
+- Ver detalhes.
+- Ver evidências.
+- Ver diff.
+- Ver testes.
+- Ver histórico.
+
+Somente `OWNER_PRINCIPAL` poderá aprovar ou rejeitar.
+
+Ao rejeitar, permitir registrar o motivo.
+
+Preservar todas as decisões.
+
+## 19.5. Fluxo de aprovação
+
+Após clicar em Aprovar:
+
+1. Registrar a decisão.
+2. Identificar exatamente o escopo autorizado.
+3. Criar backup.
+4. Preparar alteração isolada.
+5. Executar testes.
+6. Verificar integridade.
+7. Verificar permissões.
+8. Avaliar riscos.
+9. Preparar atualização.
+10. Aplicar somente o que foi aprovado.
+11. Verificar funcionamento.
+12. Registrar resultado.
+13. Disponibilizar rollback.
+
+Se testes falharem, não aplicar automaticamente.
+
+A aprovação de uma proposta não autoriza alterações adicionais que não estejam descritas nela.
+
+## 19.6. Estados
+
+- DRAFT.
+- PENDING_OWNER_APPROVAL.
+- APPROVED.
+- REJECTED.
+- DEFERRED.
+- VALIDATING.
+- VALIDATION_FAILED.
+- READY_TO_APPLY.
+- APPLYING.
+- APPLIED.
+- ROLLED_BACK.
+
+## 19.7. Propostas internas e melhorias automáticas
+
+A IA interna poderá aprender, testar hipóteses e melhorar suas análises sem modificar o código de produção.
+
+Ajustes experimentais de parâmetros somente poderão ocorrer em ambiente controlado e reversível, dentro dos limites autorizados.
+
+Toda melhoria permanente no software deverá seguir o processo de aprovação exclusiva do proprietário.
+
+---
+
+# 20. AUTONOMIA PROGRESSIVA DA IA
+
+Implementar três níveis.
+
+**NÍVEL 1 — CONSULTIVO**
+
+A IA analisa, aprende e recomenda.
+
+**NÍVEL 2 — ASSISTIDO**
+
+Prepara alterações e solicita aprovação antes das operações que exigem confirmação.
+
+**NÍVEL 3 — AUTÔNOMO**
+
+Executa operações previamente autorizadas, dentro de limites rígidos.
+
+Configurar por:
+
+- Usuário.
+- Empresa.
+- Marketplace.
+- Conta.
+- Módulo.
+- Tipo de ação.
+
+Separar autonomia operacional de autonomia de desenvolvimento.
+
+Uma autorização para alterar um anúncio não concede autorização para modificar o código do software.
+
+Nenhuma IA poderá:
+
+- Alterar suas próprias permissões.
+- Desativar Automation Guard.
+- Modificar limites administrativos.
+- Conceder acesso administrativo.
+- Aprovar suas próprias melhorias.
+- Alterar diretamente seu código de produção.
+- Ignorar políticas.
+
+O nível inicial será consultivo.
+
+---
+
+# 21. MEMÓRIA OPERACIONAL E APRENDIZADO CONTÍNUO
+
+Criar uma base de conhecimento persistente.
+
+Armazenar:
+
+- Problemas.
+- Diagnósticos.
+- Recomendações.
+- Estratégias.
+- Ações.
+- Resultados esperados.
+- Resultados obtidos.
+- Feedback humano.
+- Aprovações.
+- Rejeições.
+- Contexto.
+- Evidências.
+- Comparações com Gemini.
+
+Implementar Feedback Loop:
+
+1. Registrar previsão.
+2. Registrar execução.
+3. Monitorar resultado.
+4. Comparar previsão com resultado.
+5. Avaliar sucesso.
+6. Atualizar memória.
+7. Revisar estratégias.
+8. Versionar conhecimento.
+9. Reavaliar desempenho.
+
+A IA interna deverá melhorar progressivamente sem depender de consultas constantes ao Gemini.
+
+Não confundir memória operacional com treinamento automático de pesos de modelos.
+
+A aprendizagem deverá ocorrer através de dados, resultados, regras, heurísticas, estratégias, avaliações e memória.
+
+Alterações permanentes de código, prompts críticos e permissões continuarão submetidas à aprovação do proprietário.
+
+---
+
+# 22. DASHBOARD EXECUTIVO E CENTRAL DE COMANDO
+
+Criar interface profissional de SaaS B2B.
+
+## 22.1. Visão consolidada
+
+Exibir:
+
+- Faturamento.
+- Lucro estimado.
+- Margem.
+- Pedidos.
+- Vendas.
+- Investimento em Ads.
+- ROAS.
+- ACoS.
+- TACoS.
+- Produtos mais vendidos.
+- Produtos mais lucrativos.
+- Produtos deficitários.
+- Estoque.
+- Anúncios prioritários.
+- Oportunidades.
+
+## 22.2. Filtros
+
+- Hoje.
+- Ontem.
+- 7 dias.
+- 30 dias.
+- 90 dias.
+- Período personalizado.
+- Marketplace.
+- Conta.
+- SKU.
+- Categoria.
+
+## 22.3. Comparativos
+
+- Conta versus conta.
+- Marketplace versus marketplace.
+- Produto versus produto.
+- Período versus período.
+- Real versus estimado.
+
+## 22.4. Notificações
+
+Alertas para:
+
+- Queda de vendas.
+- Queda de conversão.
+- Margem negativa.
+- Risco de ruptura.
+- Desperdício de Ads.
+- Crescimento competitivo.
+- Problemas de captura.
+- Erros de execução.
+- Melhorias propostas.
+- Cota do Gemini esgotada.
+- Revisões externas pendentes.
+- Falhas dos agentes.
+
+---
+
+# 23. RELATÓRIOS, PLANILHAS E IMPRESSÃO
+
+## 23.1. XLSX e CSV
+
+Criar nove abas:
+
+1. Resumo Executivo.
+2. Ranking de Prioridade.
+3. Anúncios e KPIs.
+4. Ads.
+5. Testes A/B.
+6. Inteligência Competitiva.
+7. Rentabilidade.
+8. Estoque.
+9. Histórico de Operações.
+
+Incluir fórmulas, totais, formatação, filtros, data, hora e identificação de conta.
+
+## 23.2. Impressão A4 e PDF
+
+Criar visualização paginada com:
+
+- Cabeçalho.
+- Conta.
+- Marketplace.
+- Período.
+- Indicadores.
+- Gráficos.
+- Tabelas.
+- Resumo executivo.
+
+Permitir impressão direta e salvamento em PDF pelo navegador.
+
+---
+
+# 24. AUTENTICAÇÃO E ADMINISTRAÇÃO
+
+## 24.1. Primeiro acesso
+
+Criar assistente inicial para:
+
+- Criar o primeiro proprietário.
+- Criar super_admin.
+- Definir senha.
+- Configurar parâmetros.
+- Inserir opcionalmente chave da API Gemini.
+
+A primeira conta deverá receber identidade `OWNER_PRINCIPAL`.
+
+Não permitir alteração dessa identidade por agentes ou outros usuários.
+
+## 24.2. Usuários
+
+O super_admin poderá:
+
+- Cadastrar.
+- Redefinir senhas.
+- Ativar.
+- Desativar.
+- Bloquear.
+- Definir permissões.
+- Gerenciar contas.
+- Configurar limites.
+- Configurar autonomia.
+
+Nenhum usuário além do proprietário poderá aprovar melhorias do software.
+
+Utilizar Argon2id para senhas.
+
+Implementar sessões com expiração e revogação.
+
+## 24.3. Expansão para nuvem
+
+Preparar:
+
+- Multiempresa.
+- Multiusuário.
+- Tenant ID.
+- PostgreSQL.
+- Supabase Auth.
+- RLS.
+- Administração central.
+
+---
+
+# 25. AUDITORIA E RASTREABILIDADE
+
+Criar logs append-only na aplicação, com encadeamento criptográfico para evidência de adulteração.
+
+Registrar:
+
+- Usuário.
+- Organização.
+- Data.
+- Marketplace.
+- Conta.
+- Anúncio.
+- Ação.
+- Estado anterior.
+- Estado posterior.
+- Resultado.
+- Origem.
+- Correlation ID.
+- Consultas Gemini.
+- Tokens consumidos.
+- Propostas.
+- Aprovações.
+- Rejeições.
+- Auto-upgrades.
+- Rollbacks.
+- Falhas.
+
+Permitir filtros administrativos e exportação.
+
+No modo local, não afirmar imutabilidade absoluta contra acesso direto ao arquivo do computador.
+
+---
+
+# 26. SEGURANÇA E PRIVACIDADE
+
+Implementar:
+
+- Menor privilégio.
+- Permissões mínimas.
+- Validação de mensagens.
+- Comunicação protegida.
+- Criptografia de segredos.
+- Proteção de banco.
+- Proteção de sessões.
+- Backups.
+- Logs seguros.
+- Retenção.
+- Exclusão controlada.
+- LGPD.
+
+Nunca armazenar senhas de marketplaces, cookies copiados ou tokens privados de sessão.
+
+Não transmitir dados comerciais ao Gemini sem autorização e contexto necessário.
+
+Proteger a chave de API com mecanismo seguro do Windows, preferencialmente DPAPI ou Credential Manager.
+
+---
+
+# 27. SERVIÇO LOCAL, FILAS E MODO OFFLINE
+
+O serviço local deverá possuir ciclo de vida independente do Service Worker.
+
+Implementar:
+
+- Inicialização automática.
+- Reinicialização controlada.
+- Monitoramento.
+- Backup.
+- Recuperação.
+- Encerramento seguro.
+
+Sem internet, permitir:
+
+- Consultar histórico.
+- Calcular KPIs.
+- Simular margens.
+- Consultar relatórios.
+- Gerenciar dados locais.
+- Gerar arquivos.
+- Executar análises determinísticas.
+- Consultar memória operacional.
+- Trabalhar com agentes internos dentro de suas capacidades.
+
+Funções que exigem marketplace ou Gemini deverão aguardar disponibilidade.
+
+---
+
+# 28. ESTRUTURA DO BANCO DE DADOS
+
+Entregar SQL completo para SQLite e modelo equivalente para PostgreSQL.
+
+## 28.1. Identidade e segurança
+
+- users
+- roles
+- permissions
+- user_permissions
+- organizations
+- memberships
+- sessions
+- security_events
+- owner_identity
+
+## 28.2. Marketplaces
+
+- marketplaces
+- marketplace_accounts
+- marketplace_profiles
+- marketplace_capabilities
+- adapter_versions
+
+## 28.3. Produtos e anúncios
+
+- products
+- skus
+- product_marketplace_links
+- listings
+- listing_variations
+- listing_images
+- listing_attributes
+- listing_history
+
+## 28.4. Pedidos e vendas
+
+- orders
+- order_items
+- returns_refunds
+- sales_history
+
+## 28.5. Dados e indicadores
+
+- data_sources
+- collection_runs
+- collection_evidence
+- data_quality_checks
+- metric_snapshots
+- traffic_metrics
+- conversion_metrics
+- revenue_metrics
+- ads_metrics
+- stock_metrics
+
+## 28.6. Financeiro
+
+- product_costs
+- marketplace_fees
+- tax_rules
+- shipping_costs
+- discount_rules
+- financial_snapshots
+- margin_calculations
+
+## 28.7. Estoque
+
+- inventory_balances
+- inventory_movements
+- stock_reservations
+- fulfillment_balances
+
+## 28.8. Publicidade
+
+- ads_campaigns
+- ads_daily_metrics
+
+## 28.9. Concorrência
+
+- competitors
+- competitor_listings
+- competitor_snapshots
+- keyword_observations
+- competitive_reports
+
+## 28.10. Automação
+
+- tasks
+- task_items
+- task_steps
+- task_attempts
+- job_schedules
+- execution_logs
+- automation_policies
+- automation_approvals
+
+## 28.11. Experimentação
+
+- experiments
+- experiment_variants
+- experiment_snapshots
+- experiment_results
+
+## 28.12. Inteligência artificial
+
+- ai_providers
+- ai_models
+- ai_agents
+- ai_agent_versions
+- ai_sessions
+- ai_messages
+- ai_recommendations
+- ai_approvals
+- ai_execution_records
+- ai_knowledge
+- ai_feedback
+- ai_costs
+- ai_tool_registry
+- ai_learning_history
+- ai_analysis_reviews
+
+## 28.13. Gemini
+
+- gemini_usage
+- gemini_quota_status
+- gemini_review_cycles
+- gemini_review_requests
+- gemini_review_results
+- gemini_debate_sessions
+
+## 28.14. Central de Melhorias
+
+- improvement_proposals
+- improvement_evidence
+- improvement_approvals
+- improvement_rejections
+- improvement_versions
+- improvement_test_results
+
+## 28.15. Atualizações do sistema
+
+- system_upgrade_proposals
+- system_upgrade_history
+- application_versions
+- update_history
+
+## 28.16. Auditoria e instalação
+
+- audit_logs
+- audit_integrity
+- notifications
+- system_settings
+- backups
+- migrations
+- sync_outbox
+- sync_inbox
+- installation_metadata
+- runtime_health
+- component_health
+- migration_history
+
+Garantir relacionamentos, índices, constraints e integridade.
+
+---
+
+# 29. ESTRUTURA DE PASTAS
+
+Criar monorepo profissional.
+
+Estrutura de referência:
+
+```text
+marketplace-intelligence/
+│
+├── apps/
+│   ├── extension/
+│   │   ├── manifest.json
+│   │   └── src/
+│   │       ├── background/
+│   │       ├── sidepanel/
+│   │       ├── content/
+│   │       ├── main-world/
+│   │       ├── messaging/
+│   │       ├── adapters/
+│   │       ├── components/
+│   │       ├── pages/
+│   │       ├── hooks/
+│   │       ├── services/
+│   │       ├── store/
+│   │       ├── permissions/
+│   │       ├── automation/
+│   │       └── utils/
+│   │
+│   ├── local-agent/
+│   │   └── src/
+│   │       ├── server/
+│   │       ├── native-messaging/
+│   │       ├── database/
+│   │       ├── repositories/
+│   │       ├── scheduler/
+│   │       ├── queue/
+│   │       ├── finance/
+│   │       ├── intelligence/
+│   │       ├── ai/
+│   │       ├── gemini/
+│   │       ├── memory/
+│   │       ├── improvement-center/
+│   │       ├── security/
+│   │       ├── audit/
+│   │       └── monitoring/
+│   │
+│   └── admin/
+│
+├── packages/
+│   ├── shared-types/
+│   ├── domain/
+│   ├── validation/
+│   ├── calculations/
+│   ├── marketplace-contracts/
+│   ├── ui/
+│   └── test-utils/
+│
+├── adapters/
+│   ├── mercadolivre/
+│   ├── shopee/
+│   ├── amazon/
+│   ├── tiktokshop/
+│   ├── shein/
+│   └── netshoes/
+│
+├── infrastructure/
+│   ├── sqlite/
+│   ├── postgres/
+│   ├── backups/
+│   ├── installer/
+│   ├── windows/
+│   ├── native-messaging/
+│   ├── packaging/
+│   ├── updates/
+│   └── ci-build/
+│
+├── docs/
+│   ├── architecture/
+│   ├── adapters/
+│   ├── security/
+│   ├── database/
+│   ├── installer/
+│   └── user-guide/
+│
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── e2e/
+│   ├── security/
+│   ├── installation/
+│   └── regression/
+│
+├── PROJECT_STATE.md
+├── CHANGELOG.md
+└── package.json
+```
+
+A estrutura poderá evoluir, desde que preserve a separação de responsabilidades.
+
+---
+
+# 30. OBSERVABILIDADE, MONITORAMENTO E BACKUP
+
+Criar painel de saúde do sistema.
+
+Monitorar:
+
+- Extensão.
+- Serviço local.
+- Banco.
+- Adapters.
+- Capturas.
+- Fila.
+- Agendamentos.
+- Sincronização.
+- IA interna.
+- Gemini.
+- Cotas.
+- Custos.
+- Central de Melhorias.
+- Erros.
+
+Implementar:
+
+- Logs estruturados.
+- Relatórios de falhas.
+- Diagnóstico.
+- Monitoramento.
+- Alertas.
+- Backup automático.
+- Restauração.
+- Verificação de integridade.
+
+Controlar também:
+
+- Abas simultâneas.
+- Tarefas simultâneas.
+- Retentativas.
+- Memória.
+- Espaço em disco.
+- Crescimento do banco.
+- Chamadas de IA.
+- Consumo de rede.
+
+Interromper operações em falhas consecutivas ou inconsistências de contexto.
+
+---
+
+# 31. EXPERIÊNCIA DO USUÁRIO E DESIGN
+
+Criar interface profissional semelhante a um SaaS B2B de inteligência comercial.
+
+Módulos:
+
+- Dashboard.
+- Anúncios.
+- Produtos.
+- Concorrência.
+- Ads.
+- Financeiro.
+- Estoque.
+- Testes A/B.
+- Tarefas.
+- AI Director.
+- Agentes.
+- Workspace de Debate Gemini.
+- Memória Operacional.
+- Central de Melhorias.
+- Relatórios.
+- Notificações.
+- Administração.
+- Configurações.
+
+Priorizar:
+
+- Navegação intuitiva.
+- Hierarquia.
+- Agilidade.
+- Responsividade.
+- Indicadores claros.
+- Gráficos.
+- Filtros avançados.
+- Tabelas.
+- Histórico.
+- Ações rápidas.
+
+A Central de Melhorias deverá possuir destaque visual e mostrar claramente as propostas aguardando aprovação do proprietário.
+
+---
+
+# 32. INSTALADOR COMPLETO PARA WINDOWS
+
+Esta é uma entrega obrigatória.
+
+**O produto deverá terminar com um instalador completo denominado `MarketplaceIntelligence-Setup.exe`.**
+
+Não considerar o projeto concluído sem criar, testar e disponibilizar esse instalador ou, quando o ambiente impedir a geração direta, entregar o pipeline reproduzível configurado para produzi-lo.
+
+## 32.1. Experiência desejada
+
+1. Baixar o instalador.
+2. Executar.
+3. Clicar em Instalar.
+4. Aguardar.
+5. Abrir.
+6. Configurar o primeiro usuário.
+7. Utilizar.
+
+Não exigir terminal, comandos, cópia de arquivos ou configurações técnicas.
+
+## 32.2. Componentes incorporados
+
+Incluir:
+
+- Aplicativo.
+- Runtime Node.js.
+- Dependências.
+- Serviço local.
+- SQLite.
+- Native Messaging Host.
+- Extensão compilada ou distribuição oficial.
+- Arquivos de configuração.
+- Recursos.
+- Atualizador.
+- Desinstalador.
+
+O runtime deverá ser privado ao aplicativo.
+
+Não depender de instalações globais.
+
+## 32.3. Instalação offline
+
+Dar preferência a instalador autocontido.
+
+Incorporar todas as dependências distribuíveis.
+
+Quando algum componente exigir download, identificar explicitamente a dependência.
+
+Não criar um instalador que silenciosamente dependa de uma sequência de instalações externas.
+
+## 32.4. Compatibilidade
+
+Priorizar:
+
+- Windows 11 64 bits.
+- Compatibilidade condicional com Windows 10 64 bits.
+- Preparação arquitetural para ARM64.
+
+Verificar versão, arquitetura, espaço em disco e permissões.
+
+## 32.5. Preparação automática
+
+O instalador deverá:
+
+1. Verificar sistema.
+2. Detectar instalações anteriores.
+3. Verificar espaço.
+4. Criar diretórios.
+5. Instalar arquivos.
+6. Configurar runtime.
+7. Configurar serviço.
+8. Preparar banco.
+9. Registrar Native Messaging.
+10. Preparar navegador.
+11. Criar atalhos.
+12. Configurar inicialização.
+13. Verificar integridade.
+14. Finalizar.
+
+## 32.6. Native Messaging
+
+Registrar automaticamente o host.
+
+Configurar:
+
+- Executável.
+- Manifesto.
+- Caminho absoluto.
+- IDs autorizados.
+- Registros do Windows.
+- Permissões.
+
+Preferir configuração por usuário quando possível.
+
+Não utilizar curingas de autorização.
+
+## 32.7. Extensão do navegador
+
+Priorizar publicação nas lojas oficiais:
+
+- Chrome Web Store.
+- Complementos do Microsoft Edge.
+
+Manter IDs estáveis.
+
+Registrar explicitamente os IDs autorizados no Native Messaging Host.
+
+O instalador deverá conduzir o usuário ao fluxo oficial quando houver necessidade de confirmação.
+
+Não exigir modo desenvolvedor nem carregamento manual.
+
+Não utilizar políticas ocultas ou instalações não suportadas.
+
+## 32.8. Primeiro uso
+
+Ao concluir:
+
+- Abrir o aplicativo.
+- Verificar serviços.
+- Verificar banco.
+- Verificar extensão.
+- Verificar comunicação.
+- Criar proprietário.
+- Configurar super_admin.
+- Solicitar chave Gemini opcional.
+- Mostrar orientações de login nos marketplaces.
+
+## 32.9. Inicialização automática
+
+Permitir inicialização do serviço com Windows.
+
+Trabalhar em segundo plano.
+
+Não abrir terminais.
+
+Implementar:
+
+- Reinício controlado.
+- Logs.
+- Monitoramento.
+- Detecção de duplicidade.
+- Encerramento seguro.
+
+Disponibilizar controles na interface.
+
+## 32.10. Atualizador
+
+Implementar:
+
+- Verificação de versão.
+- Download.
+- Verificação de assinatura.
+- Backup.
+- Atualização.
+- Migrations.
+- Reinício.
+- Validação.
+- Rollback.
+
+Nunca apagar histórico ou configurações durante atualização.
+
+## 32.11. Desinstalador
+
+Criar desinstalação normal e completa.
+
+**Normal:** remover programa, serviços, registros, Native Messaging e atalhos, preservando dados por padrão.
+
+**Completa:** remover também dados e configurações mediante confirmação.
+
+## 32.12. Integridade
+
+Implementar:
+
+- Checksums.
+- Assinatura digital quando disponível.
+- Verificação de arquivos.
+- Logs.
+- Recuperação.
+- Rollback.
+
+Nunca desativar antivírus ou firewall.
+
+Não ocultar processos.
+
+## 32.13. Ferramentas de construção
+
+A IA desenvolvedora poderá identificar e preparar ferramentas necessárias à compilação e empacotamento, como:
+
+- Node.js.
+- Ferramentas de compilação.
+- Inno Setup.
+- WiX Toolset.
+- NSIS.
+- Ferramentas de assinatura.
+- Gerenciadores de pacotes.
+- Ferramentas de teste.
+
+**Antes de instalar programas no ambiente do desenvolvedor ou executar alterações relevantes no Windows, deverá solicitar minha permissão.**
+
+Informar:
+
+1. Nome.
+2. Motivo.
+3. Finalidade.
+4. Fonte oficial.
+5. Necessidade de administrador.
+6. Impacto no sistema.
+7. Possibilidade de instalação apenas para o usuário atual.
+
+Se a permissão for negada, explicar a consequência e continuar com o que for possível.
+
+## 32.14. Ambiente de desenvolvimento versus usuário final
+
+Diferenciar:
+
+**Desenvolvimento:** poderá exigir ferramentas, compiladores, SDKs e dependências.
+
+**Usuário final:** não deverá precisar dessas ferramentas.
+
+O instalador deverá incorporar o runtime e as dependências necessárias.
+
+## 32.15. Artefatos finais
+
+Entregar:
+
+- `MarketplaceIntelligence-Setup.exe`.
+- Pacote de atualização.
+- Desinstalador.
+- Checksums.
+- Versão.
+- Documentação.
+- Manual de instalação.
+- Manual de recuperação.
+- Logs de testes.
+
+---
+
+# 33. GOVERNANÇA AVANÇADA E CONTROLE DO PRÓPRIO SISTEMA
+
+## 33.1. Separação de melhorias
+
+Diferenciar:
+
+**Melhoria analítica:** ajustes de memória, comparação, conhecimento e avaliação interna.
+
+**Melhoria operacional:** novas estratégias e recomendações para os marketplaces.
+
+**Melhoria do software:** mudanças no código, arquitetura, agentes, prompts críticos, interface e componentes.
+
+Melhorias analíticas e aprendizagem interna deverão ocorrer continuamente dentro de limites.
+
+Melhorias permanentes no software deverão ser propostas na Central de Melhorias e aprovadas exclusivamente pelo proprietário.
+
+## 33.2. Auto-Upgrade governado
+
+A IA poderá:
+
+- Detectar falhas.
+- Diagnosticar.
+- Consultar Gemini.
+- Gerar hipóteses.
+- Propor patches.
+- Preparar diffs.
+- Criar testes.
+- Preparar novas versões.
+
+Não poderá aplicar código arbitrário diretamente em produção.
+
+O pipeline deverá:
+
+1. Receber proposta aprovada.
+2. Preparar ambiente isolado.
+3. Validar diff.
+4. Executar testes.
+5. Verificar segurança.
+6. Compilar.
+7. Assinar quando aplicável.
+8. Criar backup.
+9. Aplicar atualização.
+10. Verificar.
+11. Registrar.
+12. Permitir rollback.
+
+## 33.3. AI Tool Registry
+
+Cada ferramenta de agente deverá possuir:
+
+- Nome.
+- Descrição.
+- Entrada.
+- Saída.
+- Schema.
+- Permissões.
+- Risco.
+- Marketplace.
+- Limites.
+- Necessidade de aprovação.
+- Auditoria.
+
+Nenhum agente poderá executar ferramentas não cadastradas.
+
+---
+
+# 34. FASES DE DESENVOLVIMENTO
+
+Desenvolver progressivamente.
+
+## FASE 1 — FUNDAÇÃO LOCAL
+
+- Monorepo.
+- Extensão.
+- Serviço local.
+- Native Messaging.
+- SQLite.
+- Dexie.
+- Autenticação.
+- Proprietário.
+- Super Admin.
+- Auditoria.
+
+## FASE 2 — NAVEGADOR AUTENTICADO
+
+- Detecção de domínio.
+- Sessão.
+- Conta.
+- Páginas.
+- DOM.
+- Observação passiva de rede.
+- Ponte segura.
+
+## FASE 3 — ADAPTERS INICIAIS
+
+- Mercado Livre.
+- Shopee.
+- Matriz de funcionalidades.
+- Testes reais.
+
+## FASE 4 — DATA INTELLIGENCE
+
+- Validação.
+- Proveniência.
+- Qualidade.
+- Snapshots.
+- Histórico.
+
+## FASE 5 — MOTOR ANALÍTICO
+
+- KPIs.
+- Financeiro.
+- Margem.
+- Prioridades.
+- Missões do Dia.
+- Simulador.
+
+## FASE 6 — DASHBOARD E RELATÓRIOS
+
+- Dashboard.
+- Comparativos.
+- Notificações.
+- XLSX.
+- CSV.
+- Impressão.
+
+## FASE 7 — CONCORRÊNCIA
+
+- Radar.
+- Histórico.
+- Preços.
+- SEO.
+- Tendências.
+
+## FASE 8 — AUTOMAÇÃO
+
+- Biblioteca de imagens.
+- Troca de capa.
+- Duplicador.
+- Testes A/B.
+- Task Builder.
+- Scheduler.
+- Fila.
+- Guard.
+
+## FASE 9 — IA INTERNA
+
+- AI Director.
+- Nove agentes.
+- Memória.
+- Ferramentas.
+- Aprendizado.
+- Feedback Loop.
+
+## FASE 10 — GEMINI
+
+- Integração.
+- Gerenciador de cotas.
+- Três revisões por dia.
+- Consultas extraordinárias.
+- Workspace de Debate.
+- Comparação entre análises.
+
+## FASE 11 — CENTRAL DE MELHORIAS
+
+- Propostas.
+- Evidências.
+- Descrição.
+- Aprovação exclusiva.
+- Testes.
+- Backup.
+- Rollback.
+
+## FASE 12 — AUTONOMIA E AUTO-UPGRADE
+
+- Níveis.
+- Permissões.
+- Ferramentas.
+- Governança.
+- Aprendizagem.
+- Atualizações aprovadas.
+
+## FASE 13 — INSTALADOR WINDOWS
+
+- Empacotamento.
+- Runtime.
+- Dependências.
+- Native Messaging.
+- Extensão.
+- Atualizador.
+- Desinstalador.
+- Testes limpos.
+
+## FASE 14 — EXPANSÃO
+
+- Amazon.
+- TikTok Shop.
+- Shein.
+- Netshoes.
+- Novos marketplaces.
+
+## FASE 15 — SAAS OPCIONAL
+
+- PostgreSQL.
+- Supabase.
+- Multiempresa.
+- Sincronização.
+- Administração central.
+
+---
+
+# 35. ENTREGÁVEIS TÉCNICOS OBRIGATÓRIOS
+
+Entregar efetivamente:
+
+1. Arquitetura completa.
+2. Diagramas.
+3. Estrutura de pastas.
+4. Manifest V3.
+5. Extensão.
+6. Native Messaging Host.
+7. Serviço local.
+8. Banco SQLite.
+9. Migrations.
+10. PostgreSQL preparado.
+11. Autenticação.
+12. Proprietário e Super Admin.
+13. Adapters.
+14. Captura.
+15. Navegação.
+16. Data Intelligence.
+17. Motor de KPIs.
+18. Motor financeiro.
+19. Ranking.
+20. Radar.
+21. Imagens.
+22. Troca de capas.
+23. Duplicador.
+24. Testes A/B.
+25. Task Builder.
+26. Scheduler.
+27. Fila.
+28. Automation Guard.
+29. AI Director.
+30. Nove agentes.
+31. Memória operacional.
+32. Aprendizado interno.
+33. Integração Gemini.
+34. Gerenciador de Cotas.
+35. Três ciclos de revisão.
+36. Consultas extraordinárias.
+37. Workspace de Debate.
+38. Central de Melhorias.
+39. Aprovação exclusiva.
+40. Auto-Upgrade governado.
+41. Dashboard.
+42. Exportação XLSX/CSV.
+43. Impressão A4.
+44. Auditoria.
+45. Segurança.
+46. Backup.
+47. Monitoramento.
+48. Instalador Windows.
+49. Atualizador.
+50. Desinstalador.
+51. Documentação.
+52. Testes automatizados.
+53. Testes de instalação limpa.
+54. Arquivo final executável.
+
+Nenhum entregável poderá ser representado somente por interface visual ou arquivo vazio.
+
+---
+
+# 36. TESTES E CRITÉRIOS DE ACEITAÇÃO
+
+O sistema não será considerado funcional apenas porque compila ou abre a interface.
+
+## 36.1. Teste de operação sem APIs oficiais
+
+Demonstrar:
+
+1. Instalação.
+2. Abertura do navegador.
+3. Login manual.
+4. Reconhecimento de sessão.
+5. Identificação da loja.
+6. Captura real.
+7. Navegação.
+8. Normalização.
+9. Persistência SQLite.
+10. Consulta no dashboard.
+
+Testar Mercado Livre e Shopee.
+
+Não utilizar dados fictícios como prova de operação real.
+
+## 36.2. Teste de automação
+
+Demonstrar operação autorizada com:
+
+- Seleção.
+- Validação.
+- Edição.
+- Aprovação.
+- Execução.
+- Verificação.
+- Auditoria.
+
+## 36.3. Teste de recuperação
+
+- Refresh.
+- Fechamento do navegador.
+- Reinicialização.
+- Expiração de sessão.
+- Recuperação da fila.
+
+## 36.4. Testes financeiros
+
+Validar CTR, CVR, ROAS, ACoS, TACoS, margem, lucro e estoque com cenários conhecidos.
+
+## 36.5. Testes da IA interna
+
+Demonstrar:
+
+- Análise sem Gemini.
+- Memória persistente.
+- Recuperação de conhecimento.
+- Identificação de oportunidades.
+- Comparação entre previsões e resultados.
+- Evolução dos indicadores de qualidade.
+- Continuidade sem internet.
+
+## 36.6. Testes Gemini
+
+Demonstrar:
+
+1. Configuração opcional da chave.
+2. Consulta de revisão.
+3. Registro de consumo.
+4. Três ciclos programados.
+5. Consulta extraordinária.
+6. Tratamento de cota esgotada.
+7. Fallback para IA interna.
+8. Retomada quando houver disponibilidade.
+9. Ausência de cobrança automática.
+
+## 36.7. Testes da Central de Melhorias
+
+Demonstrar:
+
+- Geração de proposta.
+- Descrição clara.
+- Benefícios.
+- Riscos.
+- Evidências.
+- Tentativa de aprovação por usuário comum bloqueada.
+- Aprovação pelo proprietário.
+- Backup.
+- Teste isolado.
+- Aplicação.
+- Rollback.
+
+## 36.8. Testes de segurança
+
+Verificar:
+
+- Permissões.
+- Autenticação.
+- Isolamento.
+- Mensagens falsas.
+- Acesso não autorizado.
+- Manipulação de dados.
+- Proteção de credenciais.
+- Acesso exclusivo do proprietário.
+- Impossibilidade de autoaprovação pelo Gemini.
+
+## 36.9. Testes de instalação limpa
+
+Utilizar Windows limpo sem ferramentas de desenvolvimento previamente instaladas.
+
+Testar:
+
+1. Baixar instalador.
+2. Executar.
+3. Instalar.
+4. Verificar ausência de Node.js global.
+5. Verificar ausência de Python.
+6. Verificar ausência de Git.
+7. Verificar ausência de npm/pnpm.
+8. Verificar banco.
+9. Verificar serviço.
+10. Verificar Native Messaging.
+11. Verificar extensão pelo canal oficial.
+12. Abrir programa.
+13. Criar proprietário.
+14. Reiniciar Windows.
+15. Verificar inicialização.
+16. Realizar leitura real.
+17. Criar backup.
+18. Atualizar.
+19. Reinstalar.
+20. Desinstalar.
+21. Verificar preservação ou remoção correta dos dados.
+
+Critério: um usuário sem conhecimento técnico deverá conseguir instalar e abrir o programa sem configurar manualmente dependências.
+
+---
+
+# 37. METODOLOGIA DE DESENVOLVIMENTO DA IA PROGRAMADORA
+
+## ETAPA 1 — ANÁLISE
+
+Ler todo o documento.
+
+Identificar riscos, dependências, limitações e conflitos.
+
+Não começar a programação antes de apresentar a arquitetura.
+
+## ETAPA 2 — PROJETO TÉCNICO
+
+Entregar:
+
+- Diagramas.
+- Estrutura.
+- Banco.
+- Contratos.
+- Fluxos.
+- Permissões.
+- Estratégia de instalação.
+- Estratégia de distribuição.
+- Plano de testes.
+
+## ETAPA 3 — PREPARAÇÃO DO AMBIENTE
+
+Verificar ferramentas instaladas.
+
+Identificar dependências para compilar, empacotar e testar.
+
+A IA desenvolvedora poderá preparar seu próprio ambiente, mas deverá solicitar autorização antes de instalar programas ou fazer alterações relevantes no Windows.
+
+Informar nome, motivo, finalidade, origem oficial, necessidade de administrador e impacto.
+
+## ETAPA 4 — PROVA DE CONCEITO
+
+Implementar:
+
+- Extensão.
+- Serviço.
+- Native Messaging.
+- SQLite.
+- Mercado Livre.
+- Shopee.
+- Detecção de sessão.
+- Captura real.
+- Persistência.
+
+Comprovar operação sem APIs oficiais.
+
+## ETAPA 5 — CONSTRUÇÃO PROGRESSIVA
+
+Cada módulo deverá possuir:
+
+- Código funcional.
+- Testes.
+- Tratamento de erros.
+- Documentação.
+- Integração.
+- Critério de aceite.
+
+## ETAPA 6 — EMPACOTAMENTO
+
+Construir o instalador durante o desenvolvimento.
+
+Validar runtime, serviços, banco, Native Messaging, extensão, atalhos, atualização e recuperação.
+
+## ETAPA 7 — VALIDAÇÃO
+
+Executar testes reais, segurança, regressão e instalação limpa.
+
+## ETAPA 8 — ENTREGA
+
+Disponibilizar:
+
+- Instalador.
+- Documentação.
+- Versão.
+- Checksums.
+- Manual.
+- Histórico.
+- Recuperação.
+
+Não declarar o trabalho concluído sem arquivo real de instalação ou pipeline reproduzível devidamente configurado quando a geração direta estiver impossibilitada.
+
+## ETAPA 9 — CONTINUIDADE
+
+Manter obrigatoriamente:
+
+`PROJECT_STATE.md`
+
+Registrar fases, módulos, funcionalidades, pendências, problemas, decisões, dependências, estado do instalador e versão distribuída.
+
+Manter também:
+
+`CHANGELOG.md`
+
+Registrar alterações relevantes.
+
+A cada sessão de desenvolvimento, consultar esses arquivos antes de continuar.
+
+Não reconstruir módulos concluídos sem necessidade técnica.
+
+---
+
+# 38. REGRAS INEGOCIÁVEIS
+
+1. Preservar todas as funcionalidades.
+2. Não remover módulos.
+3. Não simplificar a arquitetura.
+4. Não criar botões mortos.
+5. Não utilizar dados simulados em produção.
+6. Não inventar resultados.
+7. Não armazenar senhas dos marketplaces.
+8. Não depender de APIs oficiais.
+9. Não depender de nuvem no modo local.
+10. Não depender do Service Worker para processos persistentes.
+11. Não executar alterações sem validação.
+12. Não duplicar tarefas.
+13. Não misturar contas.
+14. Preservar históricos.
+15. Registrar falhas.
+16. Não executar código remoto arbitrário.
+17. Não permitir que agentes burlem permissões.
+18. Não tentar contornar políticas das plataformas.
+19. Não esconder limitações.
+20. Não considerar interface como módulo concluído.
+21. Não substituir dados reais por demonstrações.
+22. Manter documentação.
+23. Fazer testes de regressão.
+24. Priorizar baixo custo.
+25. Preparar expansão SaaS.
+26. Entregar instalador Windows.
+27. Não exigir dependências de programação do usuário.
+28. Não exigir configuração manual de banco.
+29. Não exigir Native Messaging manual.
+30. Não exigir comandos do usuário.
+31. Não entregar apenas código-fonte.
+32. Testar instalação.
+33. Preservar dados nas atualizações.
+34. Solicitar autorização antes de instalar programas ou alterar o Windows de forma relevante.
+35. Utilizar fontes oficiais.
+36. Não instalar extensões por métodos não suportados.
+37. Não contratar serviços Gemini pagos automaticamente.
+38. Não deixar o sistema parar quando a cota Gemini acabar.
+39. Não apresentar consulta interna como se tivesse sido revisada pelo Gemini.
+40. Realizar três ciclos de revisão Gemini por dia, quando houver cota.
+41. Permitir consultas extraordinárias sem limite artificial do software, respeitando a cota real.
+42. Somente o proprietário poderá aprovar ou rejeitar melhorias permanentes do software.
+43. Nunca permitir autoaprovação de melhorias.
+44. Toda atualização deverá ter backup, teste e rollback.
+45. Não modificar código de produção sem aprovação do proprietário.
+
+---
+
+# 39. DEFINIÇÃO FINAL DO PRODUTO
+
+O Marketplace Intelligence & Autonomous Operations deverá ser uma plataforma profissional capaz de operar diretamente no navegador autenticado do usuário, sem depender de APIs oficiais dos marketplaces para suas operações principais.
+
+A extensão será responsável pela interface, captura e interação.
+
+O serviço local será responsável pelo processamento, persistência, filas, agendamentos e inteligência.
+
+O SQLite será responsável pelo histórico e armazenamento local.
+
+A inteligência interna será o cérebro principal, responsável por aprender, analisar, diagnosticar, propor estratégias e evoluir.
+
+O Google Gemini será um consultor externo, utilizado para revisões programadas e consultas extraordinárias, conforme a disponibilidade da cota gratuita.
+
+A Central de Melhorias será o único fluxo para apresentar e controlar as alterações permanentes no próprio software.
+
+**Somente o proprietário poderá aprovar ou rejeitar essas melhorias.**
+
+O software deverá aprender continuamente com suas operações, sem exigir que o Gemini esteja disponível o tempo inteiro.
+
+O produto deverá iniciar no computador do usuário e possuir possibilidade de expansão para SaaS.
+
+Deverá suportar Mercado Livre, Shopee, Amazon, TikTok Shop, Shein, Netshoes e futuras plataformas por adapters independentes.
+
+## RESULTADO FINAL ESPERADO
+
+Construir uma inteligência operacional que:
+
+- Observa o negócio.
+- Coleta dados reais.
+- Consolida informações.
+- Analisa desempenho.
+- Identifica problemas.
+- Descobre oportunidades.
+- Compara concorrentes.
+- Calcula lucratividade.
+- Desenvolve estratégias.
+- Aprende com resultados.
+- Consulta o Gemini para revisão quando disponível.
+- Melhora sua própria inteligência.
+- Propõe evoluções do software.
+- Explica cada melhoria.
+- Aguarda aprovação exclusiva do proprietário.
+- Executa alterações autorizadas.
+- Verifica os resultados.
+- Preserva histórico.
+- Evolui continuamente.
+
+**Não desenvolver apenas um sistema que responde a comandos. Desenvolver um sistema que observa, entende, diagnostica, planeja, executa, verifica, aprende e evolui continuamente, respeitando a autoridade e o controle do proprietário.**
+
+## PRINCÍPIO FINAL INEGOCIÁVEL
+
+Todas as funcionalidades deste documento deverão ser preservadas, implementadas, testadas, documentadas e entregues em um software completo.
+
+Nenhuma funcionalidade poderá ser descartada ou simplificada sem autorização expressa do proprietário.
+
+A entrega deverá incluir um instalador funcional para Windows, com todos os componentes distribuíveis incorporados e sem exigir que o usuário instale manualmente ferramentas de programação ou configure o ambiente.
+
+A inteligência interna deverá funcionar independentemente do Gemini.
+
+O Gemini será um consultor externo de uso gratuito limitado, com três ciclos programados de revisão por dia e consultas extraordinárias quando necessárias e disponíveis.
+
+Todas as melhorias permanentes no próprio software deverão ser apresentadas com descrição clara, benefícios, riscos, evidências e testes.
+
+**SOMENTE A CONTA PROPRIETÁRIA PODERÁ APROVAR OU REJEITAR ESSAS MELHORIAS.**
+
+--- PWD ---
+C:/Users/ferro/.abacusai-bot/session-home
+--- NODE ---
+--- NPM ---
+--- GIT ---
+C:/Users/ferro/.abacusai-bot/trash-shim/11bbf295ccbd259e/git
+--- GH ---
+--- PYTHON ---
+C:/Users/ferro/.abacusai-bot/shell-python/Scripts/python.exe
+--- DISCO ---
+Filesystem                Size      Used Available Use% Mounted on
+C:                      475.4G    103.7G    371.7G  22% C:/
+--- OS ---
+Windows_NT HP-5CG5394XRZ 10.0 26200 x86_64 MS/Windows
+
+
+total 12
+drwxrwxr-x    2 ferro    ferro            0 Nov 21 12:15 .
+drwxrwxr-x   19 ferro    ferro        12288 Nov 21 13:52 ..
+--- busca repos ---
+Contacts
+Documents
+Downloads
+Favorites
+Links
+Music
+OneDrive
+OneDrive - HP Inc
+Saved Games
+Searches
+Videos
+
+
+ABACUSAI_BOT_NODE=C:/Users/ferro/.abacusai-bot/node/d71dac6c3508c8f0/node
+C:/Users/ferro/.abacusai-bot/node/d71dac6c3508c8f0/node
+--- versao ---
+v24.22.0
+--- npm? ---
+node
+
+
+--- git real ---
+git: command not found
+--- gh ---
+c:/users/ferro/appdata/local/abacusai-bot/posix-shell/frp-6075-g169694ebd-a49cd18e7db9fb72/bin/sh: line 0: gh: not found
+--- winget ---
+C:/Users/ferro/AppData/Local/Microsoft/WindowsApps/winget.exe
+--- powershell ---
+C:/Users/ferro/.abacusai-bot/trash-shim/11bbf295ccbd259e/powershell
+--- python ver ---
+Python 3.13.16
+
+
+--- powershell real ---
+5.1.26100.9711
+--- node.exe paths ---
+--- pnpm/npx ---
+
+
+Command exited with code 127
+
+--- downloads recentes ---
+AbacusAI-Bot-1.1.17-x64-setup.exe
+Calendário Gerencial 2027.pdf
+CO 464 CDCR_Adds_Moves_Removes_OTC  - signed.pdf
+Quest Diagnostics _CO 4928 _NEW and UPDATE Address.xlsx
+CO 4928 - Quest - Address Change - Multiple Sites - signed.pdf
+CO 4919 - Quest Move-2026-001 Move  Paramus NJ - signed.pdf
+2024-PROC-HPINC-CW2335293-Costco and HP GSOW 10 16 2024 Final Version 32 Executable final 10172024.d 1 (1).pdf
+Costco Pricing table 1 (2).xlsx
+Swap CAN MSL Costco Wholesale Corporation Global CLOUD CBA_10-20-2026 (1).xlsx
+Clorox Extensions October 2026 E (2).xlsx
+REPORT ITSM_19112026.xlsx
+Swap CAN MSL Costco Wholesale Corporation Global CLOUD CBA_10-20-2026.xlsx
+Costco Pricing table 1 (1).xlsx
+Vancouver Coastal Health Authority Change File_31082026_PHC Devices only_Solution IDs (1).xlsx
+Raymond_James_Associates_Inc_CO_295_3PI-Bloomfield_Hills signed (1).pdf
+--- documentos ---
+
+
+Saturday, November 21, 2026 at 1:52 PM GMT-3 (America/Sao_Paulo)
+
+This chat now works in Lord Marketplaces Analytics; "save" with about "project" goes there.
+
+Project Lord Marketplaces Analytics (topic), its card:
+What: Lord Marketplaces Analytics
+Goal:
+Status:
+Decisions:
+
+C:/Users/ferro/LordMarketplacesAnalytics
+ok

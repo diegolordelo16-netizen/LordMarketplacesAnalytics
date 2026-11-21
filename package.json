@@ -1,0 +1,21 @@
+{
+  "name": "lord-marketplaces-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lord Marketplaces Analytics — inteligência operacional de marketplaces (Local First)",
+  "scripts": {
+    "dev:agent": "pnpm --filter @lma/local-agent dev",
+    "dev:ext": "pnpm --filter @lma/extension dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "packageManager": "pnpm@9.15.9",
+  "pnpm": {
+    "overrides": {
+      "undici": "^6.21.0"
+    }
+  }
+}
