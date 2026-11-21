@@ -102,6 +102,39 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       -- Recaptura não sobrescreve: nunca há chave única por (entidade, métrica, data).
       -- Uma segunda leitura idêntica é uma nova observação, não uma correção silenciosa.
 
+      -- Uso do Gemini: contado no banco para a cota sobreviver a reinícios.
+      CREATE TABLE IF NOT EXISTS gemini_calls (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        day          TEXT NOT NULL,
+        at           TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        prompt_chars INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS ix_gemini_calls_day ON gemini_calls(day);
+
+      -- Consultas extraordinárias autorizadas pelo proprietário.
+      CREATE TABLE IF NOT EXISTS gemini_grants (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        day      TEXT NOT NULL,
+        at       TEXT NOT NULL,
+        quantity INTEGER NOT NULL CHECK (quantity > 0)
+      );
+
+      -- Central de Melhorias: propostas que só o OWNER_PRINCIPAL aprova.
+      CREATE TABLE IF NOT EXISTS improvements (
+        id            TEXT PRIMARY KEY,
+        created_at    TEXT NOT NULL,
+        title         TEXT NOT NULL,
+        rationale     TEXT NOT NULL,
+        kind          TEXT NOT NULL CHECK (kind IN ('rule','adapter','metric','ui','prompt')),
+        payload       TEXT NOT NULL,
+        status        TEXT NOT NULL CHECK (status IN ('PROPOSED','APPROVED','REJECTED','APPLIED')),
+        decided_by    TEXT,
+        decided_at    TEXT,
+        decision_note TEXT
+      );
+      CREATE INDEX IF NOT EXISTS ix_improvements_status ON improvements(status, created_at);
+
       -- Trilha de auditoria com encadeamento de hash (append-only na aplicação).
       CREATE TABLE IF NOT EXISTS audit_log (
         seq        INTEGER PRIMARY KEY AUTOINCREMENT,

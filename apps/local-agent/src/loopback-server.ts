@@ -50,7 +50,7 @@ export interface LocalAgentOptions {
   onAudit?: (event: AuditEvent) => void;
 }
 
-type Handler = (envelope: EnvelopeT, socket: WebSocket) => unknown;
+type Handler = (envelope: EnvelopeT, socket: WebSocket) => unknown | Promise<unknown>;
 
 interface Session {
   socket: WebSocket;
@@ -269,24 +269,29 @@ export class LocalAgentServer {
         return;
       }
 
-      try {
-        const result = handler(env.data, socket);
-        socket.send(
-          JSON.stringify(
-            makeEnvelope("RESPONSE", env.data.namespace as Namespace, result, {
-              correlationId: env.data.correlationId,
-            }),
-          ),
-        );
-        this.record("message", { kind: "handled", key, messageId: env.data.messageId });
-      } catch (err) {
-        this.record("error", { kind: "handler_failed", key, error: String(err) });
-        socket.send(
-          JSON.stringify(
-            makeError("INTERNAL_ERROR", "falha ao processar mensagem", env.data.correlationId),
-          ),
-        );
-      }
+      // Handler assíncrono (ex.: auditoria no Gemini) é aguardado: responder fora
+      // de ordem quebraria a correlação das mensagens seguintes.
+      void (async () => {
+        try {
+          const result = await handler(env.data, socket);
+          socket.send(
+            JSON.stringify(
+              makeEnvelope("RESPONSE", env.data.namespace as Namespace, result, {
+                correlationId: env.data.correlationId,
+              }),
+            ),
+          );
+          this.record("message", { kind: "handled", key, messageId: env.data.messageId });
+        } catch (err) {
+          // Erro de negócio devolve o código do próprio erro, não INTERNAL_ERROR:
+          // "marketplace sem adapter" não é falha interna, é recusa esperada.
+          const known = err instanceof Error ? (err as Error & { code?: ErrorCode }).code : undefined;
+          const code: ErrorCode = known ?? "INTERNAL_ERROR";
+          const message = err instanceof Error ? err.message : "falha ao processar mensagem";
+          this.record("error", { kind: "handler_failed", key, code, error: message });
+          socket.send(JSON.stringify(makeError(code, message, env.data.correlationId)));
+        }
+      })();
     });
 
     socket.on("close", () => {

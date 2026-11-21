@@ -1,61 +1,71 @@
+#!/usr/bin/env node
 /**
- * Entrada do serviço local.
+ * Ponto de entrada do serviço local do Lord Marketplaces Analytics.
  *
- * Arranque: gera/reaproveita o token de pareamento, abre o canal loopback,
- * registra os handlers do namespace system e imprime o token no console local
- * (é assim que o usuário pareia a extensão na POC).
+ * O que ele faz ao subir:
+ *  1. abre (ou cria) o banco em %LOCALAPPDATA%\LordMarketplacesAnalytics\data.db;
+ *  2. escuta APENAS em 127.0.0.1 na porta 47821;
+ *  3. imprime o token de pareamento para o usuário colar na extensão;
+ *  4. registra todos os handlers de negócio.
  *
- * Nada aqui abre porta fora do loopback nem exige administrador.
+ * Sem extensão configurada ele não aceita conexão nenhuma — por projeto.
  */
-import { DEFAULT_HOST, DEFAULT_PORT, LocalAgentServer } from "./loopback-server.js";
+import { DEFAULT_PORT, DEFAULT_HOST } from "./loopback-server.js";
+import { startAgent, AGENT_VERSION } from "./agent.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-const port = Number(process.env.LMA_PORT ?? DEFAULT_PORT);
-const host = process.env.LMA_HOST ?? DEFAULT_HOST;
-
-/**
- * Origens aceitas. Na POC a extensão é carregada sem empacotamento e o ID
- * varia; o ID real aparece em chrome://extensions e deve ser colado aqui
- * (ou em LMA_EXTENSION_ORIGIN). Sem allowlist, o serviço recusa tudo —
- * isso é proposital.
- */
-const allowedOrigins = (process.env.LMA_EXTENSION_ORIGIN ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-const server = new LocalAgentServer({ port, host, allowedOrigins });
-
-server.handle("system.ping", () => ({
-  action: "system.ping",
-  pong: true,
-  serverVersion: "0.1.0",
-  uptimeSeconds: Math.round(process.uptime()),
-}));
-
-server.handle("system.health", () => ({
-  action: "system.health",
-  sessions: server.openSessions,
-  auditEvents: server.auditTrail.length,
-  paired: server.openSessions > 0,
-}));
-
-const started = await server.start();
-
-console.log("──────────────────────────────────────────────");
-console.log(" Lord Marketplaces Analytics — Serviço local");
-console.log(` canal:  ws://${started.host}:${started.port}`);
-console.log(` token:  ${server.pairingToken}`);
-console.log(` expira: em 10 minutos ou no primeiro uso`);
-if (allowedOrigins.length === 0) {
-  console.log(" origens aceitas: NENHUMA (defina LMA_EXTENSION_ORIGIN)");
-} else {
-  console.log(` origens aceitas: ${allowedOrigins.join(", ")}`);
+function defaultDbPath(): string {
+  const base = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
+  return join(base, "LordMarketplacesAnalytics", "data.db");
 }
-console.log("──────────────────────────────────────────────");
 
-const shutdown = async () => {
-  await server.stop();
-  process.exit(0);
-};
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+async function main(): Promise<void> {
+  const origins = (process.env.LMA_EXTENSION_ORIGIN ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const dbPath = process.env.LMA_DB_PATH ?? defaultDbPath();
+  const port = Number(process.env.LMA_PORT ?? DEFAULT_PORT);
+
+  const { server, ctx } = await startAgent({
+    dbPath,
+    allowedOrigins: origins,
+    port,
+  });
+
+  const line = "─".repeat(64);
+  console.log(line);
+  console.log(` Lord Marketplaces Analytics — serviço local v${AGENT_VERSION}`);
+  console.log(line);
+  console.log(` banco:  ${dbPath}`);
+  console.log(` canal:  ws://${DEFAULT_HOST}:${port}`);
+  if (origins.length === 0) {
+    console.log(" origem: NENHUMA configurada — conexões serão recusadas.");
+    console.log("         rode com LMA_EXTENSION_ORIGIN=chrome-extension://<ID>");
+  } else {
+    console.log(` origem: ${origins.join(", ")}`);
+  }
+  console.log(` gemini: ${ctx.gemini.isConfigured() ? "configurado" : "não configurado (produto funciona sem ele)"}`);
+  console.log(` dono:   ${ctx.ownerId}`);
+  console.log(line);
+  console.log(` TOKEN DE PAREAMENTO: ${server.pairingToken}`);
+  console.log(" uso único, expira em 10 minutos. Cole no painel da extensão.");
+  console.log(line);
+
+  const shutdown = async () => {
+    console.log("\nEncerrando…");
+    ctx.audit.append("shutdown", {});
+    await server.stop();
+    ctx.db.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+main().catch((err) => {
+  console.error("Falha ao iniciar o serviço local:", err);
+  process.exit(1);
+});

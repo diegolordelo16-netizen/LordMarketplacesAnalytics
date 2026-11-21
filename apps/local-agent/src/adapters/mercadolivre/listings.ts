@@ -11,7 +11,7 @@
  * O parser recebe o documento como parâmetro para poder ser testado com
  * fixtures reais sem navegador.
  */
-import type { ObservationInput } from "../database/collection-repository.js";
+import type { ObservationInput } from "../../database/collection-repository.js";
 
 export const ADAPTER_VERSION = "0.1.0";
 export const METHOD = "adapter.mercadolivre.listing-list.dom-v1";
@@ -107,8 +107,19 @@ export function parseListingList(doc: Document): CaptureResult {
       Array.from(card.querySelectorAll("span")).find((s) => /unidade|estoque/i.test(s.textContent ?? "")) ??
       null;
 
+    // Título é texto: não é numérico. Vai como valueRaw com status de legibilidade.
+    const titleObs: ObservationInput = {
+      entityType: "listing",
+      entityRef: externalRef,
+      metric: "title",
+      valueRaw: title,
+      valueNum: null,
+      unit: null,
+      quality: title ? "VERIFIED" : "NOT_COLLECTED",
+    };
+
     const observations: ObservationInput[] = [
-      { ...metric("title", title, () => null, null), valueNum: null, quality: title ? "VERIFIED" : "NOT_COLLECTED" },
+      titleObs,
       metric("price_cents", textOf(priceEl), parsePriceToCents, "centavos"),
       metric(
         "stock",
