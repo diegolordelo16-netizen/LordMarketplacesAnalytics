@@ -91,8 +91,13 @@ interface Improvement {
 interface CaptureReply {
   runId: string;
   outcome: string;
-  cardsSeen: number;
-  cardsParsed: number;
+  /** Presente na captura de anúncios. */
+  cardsSeen?: number;
+  cardsParsed?: number;
+  /** Presente na captura de pedidos. */
+  rowsSeen?: number;
+  rowsParsed?: number;
+  rowsWithoutId?: number;
   observationsWritten: number;
   note?: string;
 }
@@ -246,13 +251,27 @@ function App() {
       if (!page?.ok || !page.html || !page.context) {
         throw new Error(page?.error ?? "a aba atual não é uma página de marketplace reconhecida");
       }
-      const result = await request<CaptureReply>("capture", "capture.page", {
-        marketplace: page.context.marketplace,
-        pageKind: page.context.pageKind,
-        pageUrl: page.context.url,
-        html: page.html,
-        accountRef: page.context.account,
-      });
+      // Pedidos têm ação própria no protocolo: entidade diferente, conta
+      // diferente de "anúncios lidos".
+      const isOrders = page.context.pageKind === "orders";
+      const result = await request<CaptureReply>(
+        "capture",
+        isOrders ? "capture.orders" : "capture.page",
+        isOrders
+          ? {
+              marketplace: page.context.marketplace,
+              pageUrl: page.context.url,
+              html: page.html,
+              accountRef: page.context.account,
+            }
+          : {
+              marketplace: page.context.marketplace,
+              pageKind: page.context.pageKind,
+              pageUrl: page.context.url,
+              html: page.html,
+              accountRef: page.context.account,
+            },
+      );
       setCapture(result);
       await refresh();
     } catch (err) {
@@ -345,10 +364,10 @@ function App() {
           Capturar esta página
         </button>
         {capture && (
-          <p className={capture.cardsParsed > 0 ? "ok" : "alert"}>
-            {capture.cardsParsed > 0
-              ? `${capture.cardsParsed} anúncio(s) lidos, ${capture.observationsWritten} observações gravadas.`
-              : (capture.note ?? "Nenhum anúncio reconhecido.")}
+          <p className={(capture.cardsParsed ?? capture.rowsParsed ?? 0) > 0 ? "ok" : "alert"}>
+            {(capture.cardsParsed ?? 0) > 0 || (capture.rowsParsed ?? 0) > 0
+              ? `${capture.cardsParsed ?? capture.rowsParsed} ${capture.rowsParsed !== undefined ? "pedido(s)" : "anúncio(s)"} lidos, ${capture.observationsWritten} observações gravadas.`
+              : (capture.note ?? "Nenhum item reconhecido.")}
           </p>
         )}
       </Card>

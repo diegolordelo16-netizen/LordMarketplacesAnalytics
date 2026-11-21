@@ -21,6 +21,7 @@ import { buildAuditPrompt, think } from "./services/brain.js";
 import { GeminiAuditor, configFromEnv } from "./services/gemini.js";
 import { ImprovementService } from "./services/improvements.js";
 import { parseListingList } from "./adapters/mercadolivre/listings.js";
+import { ORDERS_ADAPTER_VERSION, parseOrderList } from "./adapters/orders.js";
 import {
   SHOPEE_ADAPTER_VERSION,
   SHOPEE_METHOD,
@@ -203,6 +204,133 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
         parsed.cardsSeen === 0
           ? "Nenhum item reconhecido nesta página. Confirme que está na lista de produtos do vendedor."
           : undefined,
+    };
+  });
+
+  /**
+   * Captura de pedidos. Diferente da lista de anúncios: aqui cada pedido é uma
+   * entidade própria, e o que interessa é o cruzamento posterior com estoque.
+   */
+  server.handle("capture.orders", async (envelope) => {
+    const payload = envelope.payload as {
+      marketplace?: string;
+      pageUrl?: string;
+      html?: string;
+      accountRef?: string | null;
+    };
+    if (!payload?.html || !payload.pageUrl || !payload.marketplace) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", "payload incompleto: html, pageUrl e marketplace são obrigatórios");
+    }
+    if (!["mercadolivre", "shopee"].includes(payload.marketplace)) {
+      throw new BusinessError("ADAPTER_UNAVAILABLE", `pedidos sem adapter para: ${payload.marketplace}`);
+    }
+
+    const startedAt = new Date().toISOString();
+    const runId = repo.startRun({
+      marketplace: payload.marketplace,
+      accountId: null,
+      pageKind: "orders",
+      pageUrl: payload.pageUrl,
+      startedAt,
+    });
+
+    const parsed = parseOrderList(await createDocument(payload.html), payload.marketplace);
+    const provenance = {
+      source: "dom",
+      marketplace: payload.marketplace,
+      accountRef: payload.accountRef ?? null,
+      pageKind: "orders",
+      pageUrl: payload.pageUrl,
+      referenceDate: startedAt,
+      collectedAt: startedAt,
+      method: `adapter.${payload.marketplace}.orders.dom-v1`,
+      adapterVersion: ORDERS_ADAPTER_VERSION,
+    };
+
+    let written = 0;
+    for (const order of parsed.orders) {
+      for (const o of order.observations) {
+        repo.record(runId, provenance, o);
+        written += 1;
+      }
+    }
+
+    const outcome = parsed.rowsParsed > 0 ? "COMPLETED" : parsed.rowsSeen > 0 ? "PARTIAL" : "COMPLETED";
+    repo.finishRun(
+      runId,
+      outcome,
+      new Date().toISOString(),
+      parsed.rowsSeen > 0 && parsed.rowsParsed === 0 ? "linhas com valor, nenhum id legível" : undefined,
+    );
+    audit.append("capture_orders", { runId, marketplace: payload.marketplace, written, outcome });
+
+    return {
+      runId,
+      outcome,
+      entityType: "order",
+      rowsSeen: parsed.rowsSeen,
+      rowsParsed: parsed.rowsParsed,
+      rowsWithoutId: parsed.rowsWithoutId,
+      observationsWritten: written,
+      note: parsed.rowsSeen === 0 ? "Nenhum pedido reconhecido nesta página." : undefined,
+    };
+  });
+
+  /**
+   * Cruzamento venda × estoque: a conta que justifica ter capturado pedido.
+   * Devolve só o que os dados sustentam; sem histórico, diz que não dá.
+   */
+  server.handle("kpi.salesStock", () => {
+    const rows = db
+      .raw()
+      .prepare(
+        `SELECT entity_ref, metric, value_num, collected_at, marketplace
+         FROM data_points WHERE entity_type = 'order' AND metric IN ('order_total_cents','order_date')`,
+      )
+      .all() as { entity_ref: string; metric: string; value_num: number | null; collected_at: string; marketplace: string }[];
+
+    const orders = new Map<string, { total: number | null; date: string | null; marketplace: string }>();
+    for (const r of rows) {
+      const current = orders.get(r.entity_ref) ?? { total: null, date: null, marketplace: r.marketplace };
+      if (r.metric === "order_total_cents") current.total = r.value_num;
+      if (r.metric === "order_date") current.date = r.collected_at;
+      orders.set(r.entity_ref, current);
+    }
+
+    const withValue = [...orders.values()].filter((o) => o.total !== null);
+    const totalCents = withValue.reduce((sum, o) => sum + (o.total ?? 0), 0);
+    const byMarketplace: Record<string, { orders: number; totalCents: number }> = {};
+    for (const o of withValue) {
+      const bucket = (byMarketplace[o.marketplace] ??= { orders: 0, totalCents: 0 });
+      bucket.orders += 1;
+      bucket.totalCents += o.total ?? 0;
+    }
+
+    const stockRows = db
+      .raw()
+      .prepare(
+        `SELECT entity_ref, value_num FROM data_points
+         WHERE metric = 'stock' AND collected_at = (
+           SELECT MAX(collected_at) FROM data_points d2
+           WHERE d2.entity_ref = data_points.entity_ref AND d2.metric = 'stock'
+         )`,
+      )
+      .all() as { entity_ref: string; value_num: number | null }[];
+    const stockKnown = stockRows.filter((s) => s.value_num !== null).length;
+
+    return {
+      ordersCaptured: orders.size,
+      ordersWithValue: withValue.length,
+      totalCents,
+      byMarketplace,
+      stockKnown,
+      // Honestidade: sem estoque lido não há cobertura de vendas.
+      note:
+        orders.size === 0
+          ? "Nenhum pedido capturado ainda: capture a página de pedidos para ter este número."
+          : stockKnown === 0
+            ? "Há pedidos, mas nenhum estoque legível: a cobertura de vendas não pode ser calculada."
+            : undefined,
     };
   });
 

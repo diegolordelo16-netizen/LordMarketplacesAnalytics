@@ -52,7 +52,7 @@ Requisitos: Node 22+, pnpm 9+.
 
 ```sh
 pnpm install
-pnpm -r test          # 112 testes
+pnpm -r test          # 126 testes
 pnpm --filter @lma/local-agent dev    # imprime o token de pareamento
 pnpm --filter @lma/extension build    # gera apps/extension/dist
 ```
@@ -88,11 +88,11 @@ O usuário final **não instala Node, Python, Git nem npm**: abre `start.cmd`.
 
 ## Estado
 
-Versão `0.2.0` — prova de conceito completa: captura real, persistência com
+Versão `0.3.0` — prova de conceito completa: captura real, persistência com
 proveniência, alertas, plano do cérebro, Gemini opcional, central de melhorias,
-pacote Windows portátil e 112 testes verdes.
+pacote Windows portátil e 126 testes verdes.
 
-Ainda não implementado: captura de pedidos e publicidade,
+Ainda não implementado: captura de publicidade,
 instalador `Setup.exe` assinado, Native Messaging (depende de extensão publicada).
 
 Detalhes em [`docs/`](docs/).

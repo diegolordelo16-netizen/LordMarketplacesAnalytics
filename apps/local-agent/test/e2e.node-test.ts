@@ -51,6 +51,12 @@ const SHOPEE_PAGE = `<!doctype html><html><body>
 </tbody></table>
 </body></html>`;
 
+const ORDERS_PAGE = `<!doctype html><html><body><table><tbody>
+  <tr><td>Venda 2000012345678901</td><td>R$ 249,90</td><td>21/11/2026</td><td>Enviado</td></tr>
+  <tr><td>Venda 2000012345678902</td><td>R$ 1.010,00</td><td>2026-11-20</td><td>Entregue</td></tr>
+  <tr><td>Venda sem numero</td><td>R$ 59,90</td><td>19/11/2026</td><td>Pendente</td></tr>
+</tbody></table></body></html>`;
+
 let dir: string;
 let server: Awaited<ReturnType<typeof startAgent>>["server"];
 let ctx: Awaited<ReturnType<typeof startAgent>>["ctx"];
@@ -191,6 +197,32 @@ describe("captura real", () => {
         }),
       /sem adapter implementado/,
     );
+  });
+
+  test("captura pedidos do Mercado Livre com valor e data", async () => {
+    const result = await call("capture", "orders", {
+      marketplace: "mercadolivre",
+      pageUrl: "https://www.mercadolivre.com.br/vendas/pedidos",
+      html: ORDERS_PAGE,
+    });
+    assert.equal(result.entityType, "order");
+    assert.equal(result.rowsParsed, 2);
+    assert.equal(result.rowsWithoutId, 1);
+    assert.equal(result.observationsWritten, 8);
+  });
+
+  test("cruzamento venda x estoque soma so o que tem valor", async () => {
+    const result = await call("kpi", "salesStock", {});
+    assert.equal(result.ordersWithValue, 2);
+    assert.equal(result.totalCents, 24990 + 101000);
+    assert.equal(result.byMarketplace.mercadolivre.orders, 2);
+  });
+
+  test("cruzamento reporta o estoque que ja foi lido, e nao reclama sem motivo", async () => {
+    const result = await call("kpi", "salesStock", {});
+    // O estoque da captura anterior do teste segue no banco: 2 produtos com valor.
+    assert.equal(result.stockKnown, 2);
+    assert.equal(result.note, undefined);
   });
 
   test("captura a lista de produtos da Shopee com proveniência do adapter certo", async () => {
