@@ -21,9 +21,20 @@ import { buildAuditPrompt, think } from "./services/brain.js";
 import { GeminiAuditor, configFromEnv } from "./services/gemini.js";
 import { ImprovementService } from "./services/improvements.js";
 import { parseListingList } from "./adapters/mercadolivre/listings.js";
-import { JSDOM } from "jsdom";
 
 export const AGENT_VERSION = "0.1.0";
+
+/**
+ * Cria um Document a partir de HTML, sem rede e sem carregar recursos.
+ * Fica num único ponto para poder ser trocado por um parser mais leve no
+ * instalador final sem tocar em nenhuma regra de negócio.
+ */
+export async function createDocument(html: string): Promise<Document> {
+  // Import dinâmico: o jsdom só carrega quando uma captura acontece, então o
+  // serviço sobe rápido e o empacotador consegue deixá-lo externo.
+  const { JSDOM } = await import("jsdom");
+  return new JSDOM(html, { runScripts: "outside-only" }).window.document;
+}
 
 export interface AgentContext {
   db: LocalDatabase;
@@ -86,7 +97,7 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
    * Recebe o HTML de uma página já aberta na sessão do usuário e extrai os
    * anúncios. O HTML chega pronto: o serviço não faz requisição a marketplace.
    */
-  server.handle("capture.page", (envelope) => {
+  server.handle("capture.page", async (envelope) => {
     const payload = envelope.payload as {
       marketplace?: string;
       pageKind?: string;
@@ -114,8 +125,9 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
       startedAt,
     });
 
-    const doc = new JSDOM(payload.html).window.document;
-    const parsed = parseListingList(doc);
+    // O HTML chega pronto do content script; o parsing é feito com o DOM que o
+    // Node já tem (jsdom em desenvolvimento/teste). Nunca há requisição aqui.
+    const parsed = parseListingList(await createDocument(payload.html));
 
     const provenance = {
       source: "dom",
