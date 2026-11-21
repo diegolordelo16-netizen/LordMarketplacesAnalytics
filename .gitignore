@@ -1,6 +1,7 @@
 # runtime portátil e dependências
 tools/
 node_modules/
+**/node_modules/
 .pnpm-store/
 
 # artefatos de build
