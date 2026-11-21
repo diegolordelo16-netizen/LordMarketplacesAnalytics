@@ -70,7 +70,7 @@ Depois clique em **Atualizar** no cartão da extensão em `chrome://extensions`.
 pnpm -r test
 ```
 
-Esperado: **79 testes** verdes (protocolo 9, extensão 12, serviço local 14 + 56 no runner do Node, integração 2).
+Esperado: **112 testes** verdes (protocolo 9, extensão 16, serviço local 14 + 71 no runner do Node, integração 2).
 
 ## 7. Usar o pacote portátil (sem Node instalado)
 
@@ -83,7 +83,7 @@ Abra `release/LordMarketplacesAnalytics/start.cmd` com duplo clique. Ele usa o
 
 ## O que está implementado
 
-- Captura da lista de anúncios do Mercado Livre (DOM → dados tipados)
+- Captura da lista de anúncios do Mercado Livre e de produtos da Shopee (DOM → dados tipados)
 - Persistência em SQLite com proveniência obrigatória
 - Alertas determinísticos (estoque zero, baixo, variação de preço)
 - Plano do cérebro (IA interna), com pontos cegos declarados
@@ -93,7 +93,6 @@ Abra `release/LordMarketplacesAnalytics/start.cmd` com duplo clique. Ele usa o
 
 ## O que ainda NÃO está implementado
 
-- Adapter da Shopee (detecta a página, mas não captura)
 - Captura de pedidos, estoque central e publicidade
 - Instalador `Setup.exe` assinado
 - Native Messaging (depende de extensão publicada com ID fixo)
