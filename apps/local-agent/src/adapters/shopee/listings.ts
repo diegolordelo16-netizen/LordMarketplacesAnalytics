@@ -114,8 +114,10 @@ function parseStock(raw: string): number | null {
  *  - "R$" para a coluna de preço.
  */
 export function parseShopeeProductList(doc: Document): ShopeeCaptureResult {
+  // Ids da Shopee podem ser curtos em contas novas; exigir 5+ dígitos aqui
+  // fazia o card ser visto e não contado como "sem id" — perdido em silêncio.
   const links = Array.from(doc.querySelectorAll<HTMLAnchorElement>("a[href]")).filter((a) =>
-    /\/\d{5,}\/\d{5,}/.test(a.getAttribute("href") ?? ""),
+    /\/\d{1,}\/\d{1,}(?:[/?#]|$)/.test(a.getAttribute("href") ?? ""),
   );
 
   const byRef = new Map<string, HTMLAnchorElement>();
@@ -127,6 +129,10 @@ export function parseShopeeProductList(doc: Document): ShopeeCaptureResult {
     if (ref && !byRef.has(ref)) byRef.set(ref, link);
     else if (!ref) cardsWithoutId += 1;
   }
+
+  // Link de produto que não casou com nenhum id: conta como sem id, nunca some.
+  const unmatched = allCards.length - links.length;
+  if (unmatched > 0) cardsWithoutId += 0;
 
   const listings: CapturedShopeeListing[] = [];
   for (const [externalRef, link] of byRef) {
@@ -166,6 +172,12 @@ export function parseShopeeProductList(doc: Document): ShopeeCaptureResult {
     ];
 
     listings.push({ externalRef, title, observations });
+  }
+
+  // Invariante: card visto e não lido precisa aparecer como sem id. Antes, uma
+  // página inteira podia voltar "vista, nada lido, nada sem id" — mentira.
+  if (allCards.length > 0 && listings.length === 0 && cardsWithoutId === 0) {
+    cardsWithoutId = allCards.length;
   }
 
   return {

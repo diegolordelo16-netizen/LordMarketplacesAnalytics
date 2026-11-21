@@ -146,3 +146,26 @@ describe("parseShopeeProductList", () => {
     assert.deepEqual(empty.listings, []);
   });
 });
+
+describe("ids curtos e invariante de card sem id", () => {
+  test("aceita shopid e itemid curtos (conta nova)", () => {
+    const html = `<html><body><table><tbody><tr>
+      <td><a href="/portal/product/1/2">Capa</a></td>
+      <td class="price">R$ 19,90</td>
+      <td class="stock">Estoque: 0</td>
+    </tr></tbody></table></body></html>`;
+    const r = parseShopeeProductList(doc(html));
+    assert.equal(r.cardsParsed, 1);
+    assert.equal(r.listings[0].externalRef, "1:2");
+  });
+
+  test("card visto e nao lido nunca volta como 'nada sem id'", () => {
+    const html = `<html><body><table><tbody><tr>
+      <td>Produto sem link nenhum</td>
+      <td class="price">R$ 10,00</td>
+    </tr></tbody></table></body></html>`;
+    const r = parseShopeeProductList(doc(html));
+    assert.equal(r.cardsParsed, 0);
+    assert.ok(r.cardsWithoutId > 0, "cardsWithoutId deve ser > 0 quando houve card e nada foi lido");
+  });
+});
