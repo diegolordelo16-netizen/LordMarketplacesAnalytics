@@ -8,13 +8,13 @@
  *     app/node_modules/       ← dependências de produção (sem toolchain)
  *     start.cmd               ← duplo clique abre o serviço e o painel
  *     README.txt
- *   LordMarketplacesAnalytics-0.1.0.zip
+ *     extension/              ← extensão compilada (a que o Setup instala)
+ *     tools/instalar-extensao.cmd
+ *   LordMarketplacesAnalytics-<versao>.zip      ← pacote portátil
+ *   Setup-LordMarketplacesAnalytics-<versao>.exe ← instalador (Inno Setup)
  *
- * Por que não um Setup.exe ainda: gerar instalador exige Inno Setup, que é um
- * programa de terceiros. O pacote abaixo é portátil e funciona hoje; o
- * instalador é um passo posterior sobre este mesmo conteúdo.
- *
- * Uso:  node scripts/package-windows.mjs
+ * Uso:  node scripts/package-windows.mjs            (portátil + Setup)
+ *       node scripts/package-windows.mjs --sem-setup
  */
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync, copyFileSync, statSync, readdirSync, readFileSync } from "node:fs";
@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const VERSION = "0.1.0";
+const VERSION = "0.4.0";
 const OUT = join(ROOT, "release");
 const APP = join(OUT, `LordMarketplacesAnalytics`);
 const NODE_BIN = join(ROOT, "tools", "node-v22.14.0-win-x64", "node.exe");
@@ -92,6 +92,7 @@ step("Limpando release anterior");
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(join(APP, "app"), { recursive: true });
 mkdirSync(join(APP, "runtime"), { recursive: true });
+mkdirSync(join(APP, "tools"), { recursive: true });
 
 step("Copiando runtime do Node");
 copyFileSync(NODE_BIN, join(APP, "runtime", "node.exe"));
@@ -149,6 +150,14 @@ function copyPackageWithDeps(name, depth = 0) {
 copyPackageWithDeps("jsdom");
 console.log(`  ${copied.size} pacotes copiados`);
 
+step("Copiando a extensão compilada");
+const EXT_DIST = join(ROOT, "apps", "extension", "dist");
+if (!existsSync(EXT_DIST)) {
+  throw new Error("extensão não compilada: rode `pnpm --filter @lma/extension build` antes");
+}
+cpSync(EXT_DIST, join(APP, "extension"), { recursive: true });
+console.log("  extension/ pronta");
+
 step("Gerando start.cmd e README");
 writeFileSync(
   join(APP, "start.cmd"),
@@ -165,7 +174,7 @@ writeFileSync(
     "  echo.",
     ")",
     'echo Iniciando o servico local...',
-    '"%HERE%runtime\\node.exe" "%HERE%app\\src\\main.js"',
+    '"%HERE%runtime\\node.exe" "%HERE%app\\main.bundle.mjs"',
     "pause",
   ].join("\r\n"),
   "utf8",
@@ -194,6 +203,32 @@ writeFileSync(
   "utf8",
 );
 
+step("Gerando instalar-extensao.cmd");
+writeFileSync(
+  join(APP, "tools", "instalar-extensao.cmd"),
+  [
+    "@echo off",
+    "setlocal",
+    'set "EXT=%~dp0..\\extension"',
+    'echo.',
+    'echo  Lord Marketplaces Analytics - instalar a extensao no Chrome/Edge',
+    'echo.',
+    'echo  Uma janela do navegador vai abrir na tela de extensoes.',
+    'echo  1. Ative o "Modo do desenvolvedor" (canto superior direito).',
+    'echo  2. Clique em "Carregar sem compactacao".',
+    'echo  3. Escolha a pasta:',
+    'echo      %EXT%',
+    'echo.',
+    'echo  O ID da extensao ja esta registrado no servico local -',
+    'echo  nao e preciso copiar nada.',
+    'echo.',
+    "pause",
+    'start "" chrome "chrome://extensions/" 2>nul || start "" msedge "edge://extensions/"',
+    "endlocal",
+  ].join("\r\n"),
+  "utf8",
+);
+
 step("Compactando");
 const zipPath = join(OUT, `LordMarketplacesAnalytics-${VERSION}.zip`);
 execFileSync(
@@ -207,5 +242,44 @@ execFileSync(
 );
 
 const size = (statSync(zipPath).size / (1024 * 1024)).toFixed(1);
-console.log(`\n✓ Pronto: ${zipPath} (${size} MB)`);
+console.log(`\n✓ Portátil: ${zipPath} (${size} MB)`);
 console.log(`  Pasta: ${APP}`);
+
+// ------------------------------------------------------------------ Setup.exe
+const semSetup = process.argv.includes("--sem-setup");
+const ISCC = join(ROOT, "tools", "inno", "setup", "ISCC.exe");
+
+if (semSetup) {
+  console.log("\n(instalador ignorado: --sem-setup)");
+} else if (!existsSync(ISCC)) {
+  console.log("\n⚠ Inno Setup não encontrado em tools/inno/setup — Setup.exe não gerado.");
+  console.log("  Instale com:  winget download --id JRSoftware.InnoSetup --download-directory tools/inno");
+  console.log("  e execute o .exe com /VERYSILENT /DIR=tools/inno/setup /CURRENTUSER");
+  process.exitCode = 2;
+} else {
+  step("Gerando o instalador (Inno Setup)");
+  const setupDir = join(OUT, "installer");
+  mkdirSync(setupDir, { recursive: true });
+
+  // O ID é derivado do caminho em que a extensão vai ficar na máquina do
+  // usuário — aqui usamos o caminho padrão do instalador só para conferência.
+  const defaultExtDir = "%LOCALAPPDATA%\\LordMarketplacesAnalytics\\extension";
+
+  execFileSync(
+    ISCC,
+    [
+      `/DAppVersion=${VERSION}`,
+      `/DSourceDir=${APP}`,
+      `/DOutputDir=${setupDir}`,
+      join(ROOT, "installer", "setup.iss"),
+    ],
+    { stdio: "inherit", cwd: join(ROOT, "installer") },
+  );
+
+  const setupPath = join(setupDir, `Setup-LordMarketplacesAnalytics-${VERSION}.exe`);
+  if (!existsSync(setupPath)) throw new Error("ISCC terminou sem gerar o Setup.exe");
+  const setupSize = (statSync(setupPath).size / (1024 * 1024)).toFixed(1);
+  console.log(`\n✓ Instalador: ${setupPath} (${setupSize} MB)`);
+  console.log(`  Destino padrão: %LOCALAPPDATA%\\LordMarketplacesAnalytics`);
+  console.log(`  Extensão: ${defaultExtDir}  (ID calculado na instalação)`);
+}

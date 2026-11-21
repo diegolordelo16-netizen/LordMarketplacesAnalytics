@@ -46,7 +46,29 @@ scripts/               empacotador Windows
 docs/                  arquitetura e guia de uso
 ```
 
-## Como rodar (desenvolvimento)
+## Instalação
+
+**Opção 1 — instalador (recomendado)**
+
+Execute `release/installer/Setup-LordMarketplacesAnalytics-0.4.0.exe`.
+Instala por usuário (sem UAC, sem admin) em `%LOCALAPPDATA%\LordMarketplacesAnalytics`.
+Não é preciso ter Node, Python, Git ou npm na máquina: o runtime vai embutido.
+
+Depois de instalar, abra **"Instalar extensão no navegador"** no menu Iniciar e
+carregue a pasta `extension` com "Carregar sem compactação". O ID da extensão
+é calculado na instalação e gravado em `extension.json` — o serviço local já
+aceita exatamente aquela origem, sem copiar ID nem editar nada.
+
+Painel do serviço: <http://127.0.0.1:47822/> (estado, banco, e gerar novo
+token de pareamento quando o anterior expirar).
+
+**Opção 2 — portátil**
+
+Extraia `LordMarketplacesAnalytics-0.4.0.zip` e rode `start.cmd`. Nesse caso
+defina `LMA_EXTENSION_ORIGIN=chrome-extension://<ID>` antes de conectar.
+
+---
+## Como rodar (desenvolvimento) (desenvolvimento)
 
 Requisitos: Node 22+, pnpm 9+.
 
