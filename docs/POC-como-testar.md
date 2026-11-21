@@ -70,13 +70,32 @@ Depois clique em **Atualizar** no cartão da extensão em `chrome://extensions`.
 pnpm -r test
 ```
 
-Esperado: **37 testes** verdes (protocolo 9, extensão 12, serviço local 14, integração 2).
+Esperado: **79 testes** verdes (protocolo 9, extensão 12, serviço local 14 + 56 no runner do Node, integração 2).
+
+## 7. Usar o pacote portátil (sem Node instalado)
+
+```sh
+node scripts/package-windows.mjs
+```
+
+Abra `release/LordMarketplacesAnalytics/start.cmd` com duplo clique. Ele usa o
+`runtime/node.exe` embutido. Para o usuário final, o zip em `release/` basta.
+
+## O que está implementado
+
+- Captura da lista de anúncios do Mercado Livre (DOM → dados tipados)
+- Persistência em SQLite com proveniência obrigatória
+- Alertas determinísticos (estoque zero, baixo, variação de preço)
+- Plano do cérebro (IA interna), com pontos cegos declarados
+- Auditoria opcional pelo Gemini, com cota local
+- Central de Melhorias com aprovação exclusiva do proprietário
+- Pacote Windows portátil com runtime embutido
 
 ## O que ainda NÃO está implementado
 
-- Captura de anúncios (DOM → dados) e gravação em SQLite
-- Persistência com proveniência
-- Adapter completo do Mercado Livre e da Shopee
-- Native Messaging (só depois de publicação com ID fixo)
+- Adapter da Shopee (detecta a página, mas não captura)
+- Captura de pedidos, estoque central e publicidade
+- Instalador `Setup.exe` assinado
+- Native Messaging (depende de extensão publicada com ID fixo)
 
 Nenhuma dessas ausências é silenciosa: a interface mostra apenas o que existe.
