@@ -1,0 +1,27 @@
+# runtime portátil e dependências
+tools/
+node_modules/
+.pnpm-store/
+
+# artefatos de build
+dist/
+build/
+release/
+*.tsbuildinfo
+
+# banco local e dados do usuário (NUNCA versionar)
+data/
+*.db
+*.db-wal
+*.db-shm
+logs/
+
+# segredos e configuração local
+.env
+.env.local
+*.token
+secrets/
+
+# sistema
+.DS_Store
+Thumbs.db
