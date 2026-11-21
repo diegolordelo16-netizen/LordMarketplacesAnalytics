@@ -36,6 +36,21 @@ const PAGE = `<!doctype html><html><body>
   </li>
 </ul></body></html>`;
 
+const SHOPEE_PAGE = `<!doctype html><html><body>
+<table><tbody>
+  <tr>
+    <td><a href="/portal/product/123456/987654321">Fone TWS</a></td>
+    <td class="price">R$ 129,90</td>
+    <td class="stock">Estoque: 42</td>
+  </tr>
+  <tr>
+    <td><a href="/portal/product/123456/987654322">Capa Transparente</a></td>
+    <td class="price">R$ 19,90 - R$ 34,90</td>
+    <td class="stock">Estoque: 0</td>
+  </tr>
+</tbody></table>
+</body></html>`;
+
 let dir: string;
 let server: Awaited<ReturnType<typeof startAgent>>["server"];
 let ctx: Awaited<ReturnType<typeof startAgent>>["ctx"];
@@ -169,13 +184,38 @@ describe("captura real", () => {
     await assert.rejects(
       () =>
         call("capture", "page", {
-          marketplace: "shopee",
+          marketplace: "amazon",
           pageKind: "listing-list",
-          pageUrl: "https://shopee.com.br",
+          pageUrl: "https://sellercentral.amazon.com.br",
           html: PAGE,
         }),
       /sem adapter implementado/,
     );
+  });
+
+  test("captura a lista de produtos da Shopee com proveniência do adapter certo", async () => {
+    const result = await call("capture", "page", {
+      marketplace: "shopee",
+      pageKind: "listing-list",
+      pageUrl: "https://seller.shopee.com.br/portal/product/list",
+      accountRef: "shop:778899",
+      html: SHOPEE_PAGE,
+    });
+    assert.equal(result.entityType, "product");
+    assert.equal(result.cardsParsed, 2);
+    assert.equal(result.observationsWritten, 6);
+  });
+
+  test("o produto da Shopee é consultável com o método do adapter da Shopee", async () => {
+    const series = await call("kpi", "series", {
+      entityType: "product",
+      entityRef: "123456:987654321",
+      metric: "stock",
+    });
+    assert.equal(series.rows.length, 1);
+    assert.equal(series.rows[0].valueNum, 42);
+    assert.equal(series.rows[0].method, "adapter.shopee.listing-list.dom-v1");
+    assert.equal(series.rows[0].marketplace, "shopee");
   });
 });
 

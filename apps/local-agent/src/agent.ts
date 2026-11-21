@@ -21,8 +21,20 @@ import { buildAuditPrompt, think } from "./services/brain.js";
 import { GeminiAuditor, configFromEnv } from "./services/gemini.js";
 import { ImprovementService } from "./services/improvements.js";
 import { parseListingList } from "./adapters/mercadolivre/listings.js";
+import {
+  SHOPEE_ADAPTER_VERSION,
+  SHOPEE_METHOD,
+  parseShopeeProductList,
+} from "./adapters/shopee/listings.js";
 
-export const AGENT_VERSION = "0.1.0";
+export const AGENT_VERSION = "0.2.0";
+
+/** Forma comum que todo adapter de captura devolve. */
+interface CaptureShape {
+  listings: { externalRef: string; observations: import("./database/collection-repository.js").ObservationInput[] }[];
+  cardsSeen: number;
+  cardsParsed: number;
+}
 
 /**
  * Cria um Document a partir de HTML, sem rede e sem carregar recursos.
@@ -109,11 +121,35 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
     if (!payload?.html || !payload.pageUrl || !payload.marketplace) {
       throw new BusinessError("SCHEMA_VALIDATION_FAILED", "payload incompleto: html, pageUrl e marketplace são obrigatórios");
     }
-    if (payload.marketplace !== "mercadolivre") {
-      throw new BusinessError("ADAPTER_UNAVAILABLE", `marketplace sem adapter implementado: ${payload.marketplace}`);
-    }
     if (payload.pageKind !== "listing-list") {
       throw new BusinessError("PAGE_NOT_RECOGNIZED", `tipo de página sem adapter implementado: ${payload.pageKind}`);
+    }
+
+    // Um adapter por marketplace; nenhum deles faz requisição de rede.
+    const adapters: Record<
+      string,
+      { method: string; version: string; entityType: string; parse: (doc: Document) => CaptureShape }
+    > = {
+      mercadolivre: {
+        method: "adapter.mercadolivre.listing-list.dom-v1",
+        version: "0.1.0",
+        entityType: "listing",
+        parse: (doc) => parseListingList(doc),
+      },
+      shopee: {
+        method: SHOPEE_METHOD,
+        version: SHOPEE_ADAPTER_VERSION,
+        entityType: "product",
+        parse: (doc) => parseShopeeProductList(doc),
+      },
+    };
+
+    const adapter = adapters[payload.marketplace];
+    if (!adapter) {
+      throw new BusinessError(
+        "ADAPTER_UNAVAILABLE",
+        `marketplace sem adapter implementado: ${payload.marketplace}`,
+      );
     }
 
     const startedAt = new Date().toISOString();
@@ -125,9 +161,9 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
       startedAt,
     });
 
-    // O HTML chega pronto do content script; o parsing é feito com o DOM que o
-    // Node já tem (jsdom em desenvolvimento/teste). Nunca há requisição aqui.
-    const parsed = parseListingList(await createDocument(payload.html));
+    // O HTML chega pronto do content script; o parsing usa um DOM local.
+    const doc = await createDocument(payload.html);
+    const parsed = adapter.parse(doc);
 
     const provenance = {
       source: "dom",
@@ -137,34 +173,35 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
       pageUrl: payload.pageUrl,
       referenceDate: startedAt,
       collectedAt: startedAt,
-      method: "adapter.mercadolivre.listing-list.dom-v1",
-      adapterVersion: "0.1.0",
+      method: adapter.method,
+      adapterVersion: adapter.version,
     };
 
     let written = 0;
-    for (const listing of parsed.listings) {
-      for (const obs of listing.observations) {
+    for (const item of parsed.listings) {
+      for (const obs of item.observations) {
         repo.record(runId, provenance, obs);
         written += 1;
       }
     }
 
-    // Se a página tinha cards mas nenhum foi lido, isso é falha de adapter, não sucesso vazio.
+    // Cards vistos e não lidos = falha de adapter, não sucesso vazio.
     const outcome = parsed.cardsParsed > 0 ? "COMPLETED" : parsed.cardsSeen > 0 ? "PARTIAL" : "COMPLETED";
-    const reason = parsed.cardsSeen > 0 && parsed.cardsParsed === 0 ? "cards encontrados, nenhum legível" : undefined;
+    const reason =
+      parsed.cardsSeen > 0 && parsed.cardsParsed === 0 ? "cards encontrados, nenhum legível" : undefined;
     repo.finishRun(runId, outcome, new Date().toISOString(), reason);
     audit.append("capture", { runId, marketplace: payload.marketplace, written, outcome });
 
     return {
       runId,
       outcome,
+      entityType: adapter.entityType,
       cardsSeen: parsed.cardsSeen,
       cardsParsed: parsed.cardsParsed,
       observationsWritten: written,
-      // Deixa claro na resposta: nada foi "estimado".
       note:
         parsed.cardsSeen === 0
-          ? "Nenhum anúncio reconhecido nesta página. Confirme que está na lista de anúncios do vendedor."
+          ? "Nenhum item reconhecido nesta página. Confirme que está na lista de produtos do vendedor."
           : undefined,
     };
   });

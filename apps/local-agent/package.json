@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "start": "tsx src/main.ts",
-    "test": "vitest run && node --import tsx --test test/database.node-test.ts test/listings-adapter.node-test.ts test/brain.node-test.ts test/improvements.node-test.ts test/e2e.node-test.ts"
+    "test": "vitest run && node --import tsx --test test/database.node-test.ts test/listings-adapter.node-test.ts test/shopee-adapter.node-test.ts test/brain.node-test.ts test/improvements.node-test.ts test/e2e.node-test.ts"
   },
   "dependencies": {
     "@lma/protocol": "workspace:*",

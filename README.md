@@ -6,9 +6,9 @@ local. Sem servidor, sem nuvem obrigatória, sem API oficial de marketplace.
 
 ## O que ele faz hoje
 
-- **Reconhece** a página do marketplace aberta (Mercado Livre; Shopee em detecção)
-- **Captura** a lista de anúncios do painel do vendedor — lendo o DOM que a página
-  já mostra, nunca endpoint privado
+- **Reconhece** a página do marketplace aberta (Mercado Livre e Shopee)
+- **Captura** a lista de anúncios/produtos do painel do vendedor nos dois — lendo o
+  DOM que a página já mostra, nunca endpoint privado
 - **Grava com proveniência**: fonte, marketplace, conta, URL, data de referência,
   data de coleta, método e versão do adapter em cada observação
 - **Calcula** alertas (estoque zerado, estoque baixo, variação de preço)
@@ -52,7 +52,7 @@ Requisitos: Node 22+, pnpm 9+.
 
 ```sh
 pnpm install
-pnpm -r test          # 79 testes
+pnpm -r test          # 112 testes
 pnpm --filter @lma/local-agent dev    # imprime o token de pareamento
 pnpm --filter @lma/extension build    # gera apps/extension/dist
 ```
@@ -88,11 +88,11 @@ O usuário final **não instala Node, Python, Git nem npm**: abre `start.cmd`.
 
 ## Estado
 
-Versão `0.1.0` — prova de conceito completa: captura real, persistência com
+Versão `0.2.0` — prova de conceito completa: captura real, persistência com
 proveniência, alertas, plano do cérebro, Gemini opcional, central de melhorias,
-pacote Windows portátil e 79 testes verdes.
+pacote Windows portátil e 112 testes verdes.
 
-Ainda não implementado: adapter da Shopee, captura de pedidos e publicidade,
+Ainda não implementado: captura de pedidos e publicidade,
 instalador `Setup.exe` assinado, Native Messaging (depende de extensão publicada).
 
 Detalhes em [`docs/`](docs/).

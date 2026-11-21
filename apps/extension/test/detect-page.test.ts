@@ -100,3 +100,26 @@ describe("detectPage", () => {
     expect(ctx.account).toBeNull();
   });
 });
+
+describe("Shopee", () => {
+  it("reconhece a lista de produtos do Seller Centre", () => {
+    const ctx = detectPage("https://seller.shopee.com.br/portal/product/list", "Produtos", "");
+    expect(ctx.marketplace).toBe("shopee");
+    expect(ctx.pageKind).toBe("listing-list");
+  });
+
+  it("distingue edição de produto da lista", () => {
+    const ctx = detectPage("https://seller.shopee.com.br/portal/product/123456/987654321", "", "");
+    expect(ctx.pageKind).toBe("listing-edit");
+  });
+
+  it("reconhece a raiz do portal de produtos como lista", () => {
+    const ctx = detectPage("https://seller.shopee.com.br/portal/product", "", "");
+    expect(ctx.pageKind).toBe("listing-list");
+  });
+
+  it("não reconhece domínio parecido como Shopee", () => {
+    const ctx = detectPage("https://shopee-clone.example.com/portal/product/list", "", "");
+    expect(ctx.marketplace).toBe("unknown");
+  });
+});

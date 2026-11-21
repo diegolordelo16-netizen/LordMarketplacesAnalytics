@@ -75,7 +75,11 @@ export function detectPageKind(url: string, marketplace: Marketplace): PageKind 
   }
 
   if (marketplace === "shopee") {
-    if (/^\/portal\/(product|product-list)/.test(path)) return "listing-list";
+    // Lista de produtos do Seller Centre: /portal/product/list, /portal/product,
+    // e também /portal/product/{shopid}/{itemid} é edição, não lista.
+    if (/^\/portal\/product\/list/.test(path)) return "listing-list";
+    if (/^\/portal\/product\/\d+\/\d+/.test(path)) return "listing-edit";
+    if (/^\/portal\/(product|product-list)\/?$/.test(path)) return "listing-list";
     if (/^\/portal\/product\/edit/.test(path)) return "listing-edit";
     if (/^\/portal\/(stock|inventory)/.test(path)) return "inventory";
     if (/^\/portal\/marketing|\/ads/.test(path)) return "ads";
