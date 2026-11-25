@@ -99,3 +99,24 @@ Abra `release/LordMarketplacesAnalytics/start.cmd` com duplo clique. Ele usa o
 - Native Messaging (depende de extensão publicada com ID fixo)
 
 Nenhuma dessas ausências é silenciosa: a interface mostra apenas o que existe.
+
+## Novidades da versão 0.6.0
+
+**Concorrentes por link.** Cole o link do anúncio em *Concorrentes → Adicionar concorrente por link*.
+O marketplace é identificado pelo próprio link, sem chamar nada para fora. Depois de salvar, abra o
+anúncio no navegador, volte ao dashboard e clique em **Coletar**: a sua sessão lê a página e a leitura
+vira um snapshot datado. A partir da segunda leitura o sistema detecta mudança de preço, avanço de
+vendas e saída de estoque. A primeira leitura nunca gera alerta — não há com o que comparar.
+
+**Edição de descrição.** Em *Descrição & CRO*, escolha o anúncio, cole a descrição atual e informe os
+dados confirmados do produto (uma linha por campo). O sistema propõe acréscimos com motivo e fonte e
+mostra original × complementada. O título não muda: não existe campo de título novo no banco e o
+serviço recusa qualquer proposta que perca texto do original. O que falta vira lacuna para você
+preencher — a IA não inventa característica.
+
+**Margem e preço.** Em *Margem & preço*, cadastre custo, embalagem, comissão, imposto, taxa fixa,
+frete e margem mínima. Sem custo cadastrado a margem aparece como "sem custo" — nunca como zero.
+Os cenários de preço mostram em quais valores a margem mínima é violada.
+
+**Missões do dia.** Depois de coletar anúncios e pedidos, clique em *Gerar missões*. No máximo cinco
+ações, cada uma com gargalo, hipótese, evidência numérica, impacto, esforço, urgência e risco.
