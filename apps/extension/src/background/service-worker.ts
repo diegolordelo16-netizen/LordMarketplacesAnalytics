@@ -37,6 +37,12 @@ chrome.runtime.onStartup.addListener(() => {
   void channel.resume();
 });
 
+// Atalho de teclado: Alt+Shift+D abre o dashboard de qualquer aba, sem caçar
+// ícone na barra. O mesmo caminho do botão, para não haver duas verdades.
+chrome.commands?.onCommand.addListener((command) => {
+  if (command === "abrir-dashboard") void openDashboard();
+});
+
 // O dashboard em aba inteira pede para ser aberto (a partir do painel lateral).
 chrome.runtime.onMessage.addListener((message: { kind?: string }, _sender, sendResponse) => {
   if (message.kind === "open.dashboard") {

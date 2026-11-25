@@ -38,7 +38,7 @@ import {
   parseShopeeProductList,
 } from "./adapters/shopee/listings.js";
 
-export const AGENT_VERSION = "0.6.1";
+export const AGENT_VERSION = "0.6.2";
 
 /** Forma comum que todo adapter de captura devolve. */
 interface CaptureShape {

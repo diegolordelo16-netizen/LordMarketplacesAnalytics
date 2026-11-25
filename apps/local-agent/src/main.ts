@@ -45,6 +45,8 @@ function defaultDbPath(): string {
 
 /** Pasta de configuração do produto (ao lado do banco). */
 function configDir(): string {
+  // LMA_CONFIG_DIR existe para teste e para quem quer o dado em outro disco.
+  if (process.env.LMA_CONFIG_DIR) return process.env.LMA_CONFIG_DIR;
   const base = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
   return join(base, "LordMarketplacesAnalytics");
 }
@@ -57,12 +59,19 @@ function configDir(): string {
  * instalador gera o ID da pasta que ele mesmo criou e grava aqui; o serviço
  * então já sabe qual origem aceitar sem o usuário copiar nada.
  */
-function readInstalledOrigin(): string | null {
+/**
+ * ID da extensão instalada, lido do arquivo que o instalador grava.
+ *
+ * Só aceita um ID de extensão de verdade: 32 letras a-p. Um ID quebrado aqui
+ * virava `chrome-extension://invalid/` no botão do painel — e o Chrome mostra
+ * "invalid está bloqueado", que parece defeito do produto e não é.
+ */
+function readInstalledExtensionId(): string | null {
   try {
     const raw = readFileSync(join(configDir(), "extension.json"), "utf8");
-    const parsed = JSON.parse(raw) as { origin?: string };
-    const origin = parsed.origin?.trim();
-    return origin && origin.startsWith("chrome-extension://") ? origin : null;
+    const parsed = JSON.parse(raw) as { origin?: string; id?: string };
+    const candidate = (parsed.id ?? parsed.origin ?? "").trim().replace(/^chrome-extension:\/\//, "").replace(/\/$/, "");
+    return /^[a-p]{32}$/.test(candidate) ? candidate : null;
   } catch {
     return null;
   }
@@ -103,7 +112,8 @@ async function main(): Promise<void> {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  const installed = fromEnv.length === 0 ? readInstalledOrigin() : null;
+  const installedId = fromEnv.length === 0 ? readInstalledExtensionId() : null;
+  const installed = installedId ? `chrome-extension://${installedId}` : null;
   const origins = installed ? [installed] : fromEnv;
 
   const dbPath = process.env.LMA_DB_PATH ?? defaultDbPath();
@@ -155,6 +165,29 @@ async function main(): Promise<void> {
    */
   const statusPort = port + 1;
   const statusServer = createServer((req, res) => {
+  // Botão de conserto: grava o ID de novo a partir do que o navegador informou.
+  // Serve para quem recebeu "invalid está bloqueado" de uma versão anterior.
+  if (req.url === "/reparar-extensao" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const id = (body.match(/[a-p]{32}/) ?? [""])[0];
+      if (!/^[a-p]{32}$/.test(id)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "ID de extensão inválido" }));
+        return;
+      }
+      writeFileSync(
+        join(configDir(), "extension.json"),
+        JSON.stringify({ origin: `chrome-extension://${id}`, id, writtenAt: new Date().toISOString() }, null, 2),
+        "utf8",
+      );
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, id }));
+    });
+    return;
+  }
+
     if (req.url === "/token" && req.method === "POST") {
       const fresh = server.rotateToken();
       writeFileSync(
@@ -166,11 +199,15 @@ async function main(): Promise<void> {
       res.end(JSON.stringify({ token: fresh }));
       return;
     }
+    // Lido a cada requisição: o conserto do ID grava o arquivo enquanto o
+    // serviço já está de pé, e a página precisa mostrar o ID novo na hora.
+    const currentId = readInstalledExtensionId();
+    const currentOrigin = currentId ? `chrome-extension://${currentId}` : (origins[0] ?? null);
     const state = {
       version: AGENT_VERSION,
       port,
       dbPath,
-      origin: origins[0] ?? null,
+      origin: currentOrigin,
       gemini: ctx.gemini.isConfigured(),
       api: `${ctx.credentials.list().length} credencial(is) de API · ${
         ctx.credentials.encryptionAvailable ? "criptografia ativa" : "sem chave"
@@ -210,7 +247,11 @@ async function main(): Promise<void> {
  <dt>API</dt><dd class="${state.api.includes("criptografia ativa") ? "ok" : "off"}">${state.api}</dd>
 </dl>
 <div class="actions">
-  <button class="primary" onclick="abrirDashboard()">Abrir o dashboard</button>
+  ${
+    currentId
+      ? '<button class="primary" onclick="abrirDashboard()">Abrir o dashboard</button>'
+      : '<button class="primary" disabled title="A extensão ainda não foi registrada">Abrir o dashboard</button>'
+  }
   <button onclick="novoToken()">Gerar novo token de pareamento</button>
 </div>
 <div id="tok"></div>
@@ -219,7 +260,11 @@ async function main(): Promise<void> {
   <h2>O painel é uma aba da extensão</h2>
   <p>Este serviço não tem tela própria: quem mostra os anúncios, os pedidos e as APIs é a extensão instalada no Chrome ou no Edge. O botão acima leva direto para ela.</p>
   <ol>
-    <li>Clique em <b>Abrir o dashboard</b>. Se a extensão não estiver instalada, o navegador não abre nada.</li>
+    ${
+      currentId
+        ? "<li>Clique em <b>Abrir o dashboard</b>.</li>"
+        : '<li><b>A extensão ainda não está registrada</b>: abra o painel pelo ícone da extensão (ele grava o ID sozinho) ou rode o instalador de novo.</li>'
+    }
     <li>Na primeira vez, o painel pede o token: cole o que apareceu acima (ou gere um novo).</li>
     <li>Se você acabou de instalar ou atualizar a extensão, recarregue-a em <b>chrome://extensions</b> para o botão funcionar.</li>
   </ol>
@@ -228,10 +273,14 @@ async function main(): Promise<void> {
 // O dashboard é uma página da extensão (chrome-extension://<id>/dashboard.html).
 // Um site aberto em 127.0.0.1 não pode abrir esse endereço por link, mas pode
 // navegar até ele: por isso a navegação, não o window.open com URL de extensão.
-const EXT_ID = ${JSON.stringify(origins[0] ?? "")};
+const EXT_ID = ${JSON.stringify(installed ?? origins[0] ?? "")};
+// A página se conserta sozinha: se o ID gravado estiver faltando ou inválido,
+// ela recarrega em 3 s — o painel da extensão grava o ID certo assim que abre.
 function abrirDashboard(){
-  if (!EXT_ID) {
-    alert('A extensão ainda não foi registrada. Rode o instalador de novo ou abra o painel pelo ícone da extensão.');
+  // Sem ID válido não existe aba para abrir: avisa em vez de navegar para um
+  // endereço quebrado.
+  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXT_ID)) {
+    alert('A extensão ainda não foi registrada. Rode o instalador de novo e recarregue esta página.');
     return;
   }
   location.href = EXT_ID + '/dashboard.html';

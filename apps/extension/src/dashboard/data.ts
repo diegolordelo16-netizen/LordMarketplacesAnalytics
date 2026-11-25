@@ -280,3 +280,27 @@ export interface OverviewReply {
   competitors: unknown[];
   alerts: AlertRow[];
 }
+
+/**
+ * Avisa o serviço local qual é o ID desta extensão.
+ *
+ * O instalador calcula o ID a partir da pasta de instalação; se o usuário
+ * carrega a extensão de outro jeito, o ID muda e o botão da página do serviço
+ * aponta para um endereço que não existe ("invalid está bloqueado"). Aqui o
+ * próprio navegador informa o ID verdadeiro, sem o usuário copiar nada.
+ */
+export async function registrarExtensao(url: string): Promise<boolean> {
+  const id = typeof chrome !== "undefined" && chrome.runtime?.id ? chrome.runtime.id : null;
+  if (!id) return false;
+  const base = url.replace(/^ws/, "http").replace(/\/?$/, "");
+  try {
+    const r = await fetch(`${base}/reparar-extensao`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}

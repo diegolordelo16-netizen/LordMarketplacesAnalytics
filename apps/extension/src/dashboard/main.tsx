@@ -15,6 +15,7 @@ import { MARKETPLACE_LABEL, PAGE_KIND_LABEL, type PageContext } from "../adapter
 import {
   ask,
   channelStatus,
+  registrarExtensao,
   connectChannel,
   readStored,
   saveStored,
@@ -153,6 +154,7 @@ const TABS: { id: Tab; label: string; icon: string; group: string }[] = [
 export function Dashboard() {
   const [tab, setTab] = useState<Tab>("visao");
   const [status, setStatus] = useState<ChannelStatus>({ state: "disconnected" });
+  const [, setIdRepaired] = useState<boolean | null>(null);
   const [url, setUrl] = useState("ws://127.0.0.1:47821");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -188,6 +190,9 @@ export function Dashboard() {
       if (typeof v.lmaToken === "string") setToken(v.lmaToken);
       if (typeof v.lmaUrl === "string") setUrl(v.lmaUrl);
       if (typeof v.lmaRecordings === "number") setRecordings(v.lmaRecordings);
+      // Uma vez por abertura: o navegador informa o ID verdadeiro ao serviço,
+      // para o botão da página dele nunca apontar para um endereço inválido.
+      void registrarExtensao(typeof v.lmaUrl === "string" ? v.lmaUrl : "ws://127.0.0.1:47821").then(setIdRepaired);
     });
   }, []);
 
@@ -414,6 +419,14 @@ export function Dashboard() {
           <div className="top-actions">
             <button className="btn ghost" onClick={() => setTab("visao")} type="button" title="Voltar ao dashboard principal">
               ⌂ Abrir painel
+            </button>
+            <button
+              className="btn ghost"
+              type="button"
+              title="Onde está o serviço local e como parear"
+              onClick={() => window.open(url.replace(/^ws/, "http").replace(/:\d+$/, (p) => String(Number(p.slice(1)) + 1)), "_blank")}
+            >
+              ⚙ Serviço local
             </button>
             <button className="btn ghost" onClick={() => void refresh()} disabled={!paired || busy} type="button">
               Atualizar dados

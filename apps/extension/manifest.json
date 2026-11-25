@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lord Marketplaces Analytics",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Inteligência operacional de marketplaces — captura na sessão autenticada do próprio usuário, sem APIs oficiais.",
   "minimum_chrome_version": "114",
   "permissions": [
@@ -51,5 +51,13 @@
       "run_at": "document_idle"
     }
   ],
-  "options_page": "dashboard.html"
+  "options_page": "dashboard.html",
+  "commands": {
+    "abrir-dashboard": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Abrir o dashboard em aba inteira"
+    }
+  }
 }
