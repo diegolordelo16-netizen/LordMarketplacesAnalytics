@@ -287,7 +287,7 @@ const EXT_ID = ${JSON.stringify(installed ?? origins[0] ?? "")};
 // A página se conserta sozinha: se o ID gravado estiver faltando ou inválido,
 // ela recarrega em 3 s — o painel da extensão grava o ID certo assim que abre.
 function abrirDashboard(){
-  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXT_ID)) {
+  if (!/^chrome-extension:[/][/][a-p]{32}$/.test(EXT_ID)) {
     alert('A extensão ainda não foi registrada. Rode o instalador de novo e recarregue esta página.');
     return;
   }
@@ -323,7 +323,7 @@ async function copiarToken(){
   catch { document.getElementById('tokInput').select(); document.execCommand('copy'); alert('Token copiado.'); }
 }
 function abrirPainel(){
-  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXT_ID)) { alert('A extensão ainda não foi registrada.'); return; }
+  if (!/^chrome-extension:[/][/][a-p]{32}$/.test(EXT_ID)) { alert('A extensão ainda não foi registrada.'); return; }
   // Página da extensão em aba nova: se o navegador bloquear, o usuário tem o
   // endereço na mão para colar na barra.
   window.open(EXT_ID + '/sidepanel.html', '_blank');
