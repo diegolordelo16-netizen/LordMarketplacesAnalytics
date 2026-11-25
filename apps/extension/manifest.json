@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Lord Marketplaces Analytics",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Inteligência operacional de marketplaces — captura na sessão autenticada do próprio usuário, sem APIs oficiais.",
   "minimum_chrome_version": "114",
-  "permissions": ["storage", "tabs", "scripting", "sidePanel", "alarms"],
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "sidePanel",
+    "alarms"
+  ],
   "host_permissions": [
     "https://*.mercadolivre.com.br/*",
     "https://*.mercadolivre.com/*",
@@ -34,9 +40,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.mercadolivre.com.br/*", "https://*.shopee.com.br/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://*.mercadolivre.com.br/*",
+        "https://*.shopee.com.br/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "options_page": "dashboard.html"
 }

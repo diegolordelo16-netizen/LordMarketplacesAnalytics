@@ -61,16 +61,16 @@ Name: "startup"; Description: "Iniciar o serviço junto com o Windows"; GroupDes
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Lord Marketplaces Analytics"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\runtime\node.exe"
+Name: "{group}\Lord Marketplaces Analytics (servico + painel)"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\runtime\node.exe"; Comment: "Sobe o servico local e abre o painel no navegador"
 Name: "{group}\Painel do serviço local"; Filename: "http://127.0.0.1:47822/"
 Name: "{group}\Instalar extensão no navegador"; Filename: "{app}\tools\instalar-extensao.cmd"
 Name: "{group}\Pasta de dados"; Filename: "{localappdata}\LordMarketplacesAnalytics"
 Name: "{group}\Desinstalar"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\Lord Marketplaces Analytics"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\runtime\node.exe"; Tasks: desktopicon
+Name: "{userdesktop}\Lord Marketplaces Analytics"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\runtime\node.exe"; Tasks: desktopicon; Comment: "Sobe o servico local e abre o painel no navegador"
 Name: "{userstartup}\Lord Marketplaces Analytics"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Tasks: startup
 
 [Run]
-Filename: "{app}\start.cmd"; Description: "Iniciar o serviço local agora"; Flags: postinstall nowait skipifsilent shellexec
+Filename: "{app}\start.cmd"; Description: "Iniciar o serviço local e abrir o painel"; Flags: postinstall nowait skipifsilent shellexec
 Filename: "http://127.0.0.1:47822/"; Description: "Abrir o painel do serviço local"; Flags: postinstall shellexec nowait skipifsilent unchecked
 Filename: "{app}\tools\instalar-extensao.cmd"; Description: "Abrir a tela de extensões do navegador"; Flags: postinstall nowait skipifsilent shellexec unchecked
 

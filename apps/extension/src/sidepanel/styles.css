@@ -131,3 +131,10 @@ button.ghost { background: #fff; color: var(--ink); border-color: var(--line); }
 .imps p { margin: 2px 0 4px; font-size: 11.5px; }
 
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-dashboard {
+  width: 100%; margin: 0; font: inherit; font-size: 12px; font-weight: 600;
+  padding: 8px 10px; border-radius: 7px; cursor: pointer;
+  border: 1px dashed var(--line); background: #fff; color: var(--accent);
+}
+.btn-dashboard:hover { background: var(--accent-soft); border-style: solid; }

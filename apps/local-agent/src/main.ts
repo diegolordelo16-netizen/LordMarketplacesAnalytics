@@ -16,6 +16,27 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { generateKeyBase64 } from "./services/api-credentials.js";
+
+/**
+ * Abre uma URL no navegador padrão do Windows.
+ *
+ * `start` e comando interno do cmd.exe: sem o titulo vazio ("") antes da URL,
+ * o cmd toma a URL como titulo da janela e nao abre nada.
+ */
+function openBrowser(url: string): void {
+  try {
+    if (process.platform === "win32") {
+      spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      return;
+    }
+    const opener = process.platform === "darwin" ? "open" : "xdg-open";
+    spawn(opener, [url], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    // Sem navegador nao e erro: a URL ja foi impressa no console.
+  }
+}
 
 function defaultDbPath(): string {
   const base = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
@@ -47,7 +68,37 @@ function readInstalledOrigin(): string | null {
   }
 }
 
+/**
+ * Chave de criptografia das credenciais de API.
+ *
+ * Prioridade: variável de ambiente (para quem quer controlar a chave) e, senão,
+ * um arquivo local na pasta de configuração — gerado na primeira execução e
+ * mostrado no painel de status. Sem chave, o serviço recusa gravar segredo em
+ * vez de cair para texto puro.
+ */
+function ensureApiKey(): string | null {
+  const fromEnv = process.env.LMA_API_SECRET_KEY?.trim();
+  if (fromEnv) return fromEnv;
+
+  const dir = configDir();
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "api-key.txt");
+  try {
+    const existing = readFileSync(file, "utf8").trim();
+    if (existing.length >= 32) return existing;
+  } catch {
+    /* ainda não existe: gera abaixo */
+  }
+  const generated = generateKeyBase64();
+  writeFileSync(file, generated, { encoding: "utf8", mode: 0o600 });
+  console.log(` chave:  gerada em ${file} (guarde: é ela que abre as credenciais de API)`);
+  return generated;
+}
+
 async function main(): Promise<void> {
+  const apiKey = ensureApiKey();
+  if (apiKey && !process.env.LMA_API_SECRET_KEY) process.env.LMA_API_SECRET_KEY = apiKey;
+
   const fromEnv = (process.env.LMA_EXTENSION_ORIGIN ?? "")
     .split(",")
     .map((s) => s.trim())
@@ -121,6 +172,9 @@ async function main(): Promise<void> {
       dbPath,
       origin: origins[0] ?? null,
       gemini: ctx.gemini.isConfigured(),
+      api: `${ctx.credentials.list().length} credencial(is) de API · ${
+        ctx.credentials.encryptionAvailable ? "criptografia ativa" : "sem chave"
+      }`,
       owner: ctx.ownerId,
     };
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -136,6 +190,10 @@ async function main(): Promise<void> {
  .ok{color:#3fb950}.off{color:#d29922}
  button{margin-top:28px;background:#2f81f7;color:#fff;border:0;padding:10px 18px;border-radius:6px;font-size:14px;cursor:pointer}
  #tok{margin-top:14px;font-family:ui-monospace,monospace;background:#161b22;padding:12px;border-radius:6px;word-break:break-all;font-size:13px;display:none}
+ .cta{display:block;margin-top:32px;padding:16px 18px;border:1px solid #2f81f7;background:#101a2b;border-radius:8px}
+ .cta h2{font-size:15px;margin:0 0 6px}
+ .cta p{color:#8b949e;font-size:13px;margin:0 0 12px;line-height:1.5}
+ .cta ol{color:#c9d1d9;font-size:13px;margin:0;padding-left:18px;line-height:1.7}
 </style></head><body><main>
 <h1>Lord Marketplaces Analytics</h1>
 <div class="sub">serviço local v${state.version} — só este computador</div>
@@ -145,9 +203,21 @@ async function main(): Promise<void> {
  <dt>Extensão</dt><dd class="${state.origin ? "ok" : "off"}">${state.origin ?? "não configurada"}</dd>
  <dt>Gemini</dt><dd class="${state.gemini ? "ok" : "off"}">${state.gemini ? "configurado" : "opcional, não configurado"}</dd>
  <dt>Proprietário</dt><dd>${state.owner}</dd>
+ <dt>API</dt><dd class="${state.api.includes("criptografia ativa") ? "ok" : "off"}">${state.api}</dd>
 </dl>
 <button onclick="novoToken()">Gerar novo token de pareamento</button>
 <div id="tok"></div>
+
+<div class="cta">
+  <h2>É aqui que se abre o painel</h2>
+  <p>Este serviço não tem tela própria: quem mostra os anúncios, os pedidos e as APIs é a extensão instalada no Chrome ou no Edge.</p>
+  <ol>
+    <li>No Chrome, abra <b>chrome://extensions</b> e confirme que "Lord Marketplaces Analytics" está na lista (ligada).</li>
+    <li>Clique no icone da extensao na barra do navegador.</li>
+    <li>Cole o token acima e clique em Parear.</li>
+    <li>O dashboard abre em aba inteira. Depois disso, ele fica no menu da extensão.</li>
+  </ol>
+</div>
 <script>
 async function novoToken(){
   const r = await fetch('/token', {method:'POST'});
@@ -160,7 +230,15 @@ async function novoToken(){
 </main></body></html>`);
   });
   statusServer.listen(statusPort, DEFAULT_HOST);
-  console.log(` status: http://127.0.0.1:${statusPort}  (ver estado e gerar novo token)`);
+  const statusUrl = `http://${DEFAULT_HOST}:${statusPort}/`;
+  console.log(` status: ${statusUrl}  (ver estado e gerar novo token)`);
+
+  // Abrir o navegador no painel não é enfeite: o atalho do instalador é o
+  // serviço, e uma janela preta sozinha não leva a lugar nenhum. O painel é a
+  // porta de entrada — dele sai o token e o botão para abrir o dashboard.
+  if (process.env.LMA_NO_BROWSER !== "1") {
+    openBrowser(statusUrl);
+  }
 
   const shutdown = async () => {
     console.log("\nEncerrando…");

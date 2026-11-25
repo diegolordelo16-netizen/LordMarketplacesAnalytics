@@ -49,6 +49,7 @@ export default defineConfig({
       : {
           input: {
             sidepanel: resolve(root, "sidepanel.html"),
+            dashboard: resolve(root, "dashboard.html"),
             background: resolve(root, "src/background/service-worker.ts"),
           },
           output: {

@@ -9,12 +9,23 @@ import { channel } from "../messaging/channel.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
+  // Na primeira instalação, abre o dashboard: é a tela principal do produto.
+  void chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
 });
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id !== undefined) {
     void chrome.sidePanel.open({ tabId: tab.id }).catch(() => undefined);
   }
+});
+
+// O dashboard em aba inteira pede para ser aberto (a partir do painel lateral).
+chrome.runtime.onMessage.addListener((message: { kind?: string }, _sender, sendResponse) => {
+  if (message.kind === "open.dashboard") {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  return undefined;
 });
 
 // Retoma o pareamento salvo quando o worker acorda.

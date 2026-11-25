@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const VERSION = "0.4.0";
+const VERSION = "0.6.0";
 const OUT = join(ROOT, "release");
 const APP = join(OUT, `LordMarketplacesAnalytics`);
 const NODE_BIN = join(ROOT, "tools", "node-v22.14.0-win-x64", "node.exe");
@@ -163,14 +163,22 @@ writeFileSync(
   join(APP, "start.cmd"),
   [
     "@echo off",
-    "setlocal",
+    "setlocal enableextensions enabledelayedexpansion",
     "title Lord Marketplaces Analytics",
     'set "HERE=%~dp0"',
     'set "LMA_DB_PATH=%LOCALAPPDATA%\\LordMarketplacesAnalytics\\data.db"',
+    "rem O instalador grava o ID calculado da extensao em extension.json. Ler o",
+    "rem arquivo em vez de pedir o ID ao usuario: o ID nao e secreto.",
+    'set "LMA_EXTENSION_ORIGIN="',
+    'if exist "%HERE%extension.json" (',
+    '  set "LINE="',
+    '  set /p LINE=<"%HERE%extension.json"',
+    '  for /f "tokens=1,2" %%A in ("!LINE!") do set "QUOTED=%%B"',
+    '  set ^"LMA_EXTENSION_ORIGIN=!QUOTED:~1,-2!^"',
+    ")",
     'if "%LMA_EXTENSION_ORIGIN%"=="" (',
     "  echo.",
-    "  echo  AVISO: defina LMA_EXTENSION_ORIGIN com o ID da extensao antes de conectar.",
-    "  echo  Exemplo:  set LMA_EXTENSION_ORIGIN=chrome-extension://SEU_ID",
+    '  echo  AVISO: nao encontrei extension.json. Rode o atalho "Instalar extensao no Chrome".',
     "  echo.",
     ")",
     'echo Iniciando o servico local...',

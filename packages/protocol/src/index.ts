@@ -32,6 +32,10 @@ export const Namespace = z.enum([
   "agent",
   "gemini",
   "improvement",
+  "api",
+  "competitor",
+  "edit",
+  "missions",
 ]);
 export type Namespace = z.infer<typeof Namespace>;
 
@@ -51,6 +55,8 @@ export const ErrorCode = z.enum([
   "CONFLICT_IN_PROGRESS",
   "GEMINI_QUOTA_WAITING",
   "IMPROVEMENT_NOT_APPROVED",
+  "ENCRYPTION_KEY_MISSING",
+  "CREDENTIAL_NOT_FOUND",
   "INTERNAL_ERROR",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
@@ -65,6 +71,12 @@ export const PAYLOAD_LIMITS: Record<Namespace, number> = {
   agent: 1024 * 1024,
   gemini: 1024 * 1024,
   improvement: 1024 * 1024,
+  api: 64 * 1024,
+  // Concorrentes: a coleta manda HTML de página, como capture.
+  competitor: 2 * 1024 * 1024,
+  // Edição: descrição inteira antes e depois — cabe no limite de agente.
+  edit: 1024 * 1024,
+  missions: 256 * 1024,
 };
 
 /** Envelope base: todo campo obrigatório, nada opcional na fronteira. */

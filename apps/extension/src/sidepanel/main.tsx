@@ -321,6 +321,14 @@ function App() {
         <StatusPill status={status} />
       </header>
 
+      <button
+        className="btn-dashboard"
+        type="button"
+        onClick={() => void chrome.runtime.sendMessage({ kind: "open.dashboard" })}
+      >
+        Abrir dashboard completo ↗
+      </button>
+
       {!paired && (
         <Card title="Conectar ao serviço local">
           <label className="field">
