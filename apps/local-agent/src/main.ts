@@ -226,6 +226,7 @@ async function main(): Promise<void> {
  dt{color:#8b949e}dd{margin:0;font-family:ui-monospace,monospace}
  .ok{color:#3fb950}.off{color:#d29922}
  button{margin-top:28px;background:#2f81f7;color:#fff;border:0;padding:10px 18px;border-radius:6px;font-size:14px;cursor:pointer}
+ input[type=text]{width:100%;margin-top:8px;font-family:ui-monospace,monospace;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:10px;font-size:13px}
  #tok{margin-top:14px;font-family:ui-monospace,monospace;background:#161b22;padding:12px;border-radius:6px;word-break:break-all;font-size:13px;display:none}
  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:28px}
  .actions button{margin-top:0}
@@ -255,6 +256,15 @@ async function main(): Promise<void> {
   <button onclick="novoToken()">Gerar novo token de pareamento</button>
 </div>
 <div id="tok"></div>
+<div id="manual" style="display:none;margin-top:14px">
+  <p class="sub" style="margin:0 0 8px">Se a página não abriu, copie o endereço e cole na barra do navegador:</p>
+  <input id="manualInput" type="text" readonly spellcheck="false">
+</div>
+<input id="tokInput" type="text" readonly spellcheck="false" placeholder="o token aparece aqui">
+<div class="actions">
+  <button onclick="copiarToken()">Copiar token</button>
+  <button onclick="abrirPainel()">Abrir painel da extensão</button>
+</div>
 
 <div class="cta">
   <h2>O painel é uma aba da extensão</h2>
@@ -277,20 +287,46 @@ const EXT_ID = ${JSON.stringify(installed ?? origins[0] ?? "")};
 // A página se conserta sozinha: se o ID gravado estiver faltando ou inválido,
 // ela recarrega em 3 s — o painel da extensão grava o ID certo assim que abre.
 function abrirDashboard(){
-  // Sem ID válido não existe aba para abrir: avisa em vez de navegar para um
-  // endereço quebrado.
   if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXT_ID)) {
     alert('A extensão ainda não foi registrada. Rode o instalador de novo e recarregue esta página.');
     return;
   }
-  location.href = EXT_ID + '/dashboard.html';
+  // Tenta navegar; se o navegador bloquear, o endereço fica à vista para colar.
+  const alvo = EXT_ID + '/dashboard.html';
+  location.href = alvo;
+  setTimeout(function(){
+    const box = document.getElementById('manual');
+    box.style.display = 'block';
+    document.getElementById('manualInput').value = alvo;
+    document.getElementById('manualInput').select();
+  }, 1200);
 }
+let TOKEN_ATUAL = '';
 async function novoToken(){
-  const r = await fetch('/token', {method:'POST'});
-  const d = await r.json();
-  const el = document.getElementById('tok');
-  el.style.display = 'block';
-  el.textContent = 'Cole no painel da extensão: ' + d.token;
+  try {
+    const r = await fetch('/token', {method:'POST'});
+    const d = await r.json();
+    TOKEN_ATUAL = d.token;
+    const el = document.getElementById('tok');
+    const input = document.getElementById('tokInput');
+    el.style.display = 'block';
+    el.textContent = 'Token gerado. Ele vale 10 minutos e serve uma vez.';
+    input.value = d.token;
+    input.select();
+  } catch (e) {
+    alert('Não foi possível gerar o token: ' + e);
+  }
+}
+async function copiarToken(){
+  if (!TOKEN_ATUAL) { alert('Gere um token primeiro.'); return; }
+  try { await navigator.clipboard.writeText(TOKEN_ATUAL); alert('Token copiado.'); }
+  catch { document.getElementById('tokInput').select(); document.execCommand('copy'); alert('Token copiado.'); }
+}
+function abrirPainel(){
+  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(EXT_ID)) { alert('A extensão ainda não foi registrada.'); return; }
+  // Página da extensão em aba nova: se o navegador bloquear, o usuário tem o
+  // endereço na mão para colar na barra.
+  window.open(EXT_ID + '/sidepanel.html', '_blank');
 }
 </script>
 </main></body></html>`);

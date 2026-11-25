@@ -70,6 +70,10 @@ Name: "{userdesktop}\Lord Marketplaces Analytics"; Filename: "{app}\start.cmd"; 
 Name: "{userstartup}\Lord Marketplaces Analytics"; Filename: "{app}\start.cmd"; WorkingDir: "{app}"; Tasks: startup
 
 [Run]
+; Depois de instalar: sobe o serviço e abre a página de status, onde ficam o
+; botão do painel, o token de pareamento e o caminho da extensão.
+; O navegador só carrega uma extensão de pasta com o Modo do desenvolvedor
+; ligado — isso o Windows não deixa um instalador fazer sozinho.
 Filename: "{app}\start.cmd"; Description: "Iniciar o serviço local e abrir o painel"; Flags: postinstall nowait skipifsilent shellexec
 Filename: "http://127.0.0.1:47822/"; Description: "Abrir o painel do serviço local"; Flags: postinstall shellexec nowait skipifsilent unchecked
 Filename: "{app}\tools\instalar-extensao.cmd"; Description: "Abrir a tela de extensões do navegador"; Flags: postinstall nowait skipifsilent shellexec unchecked
