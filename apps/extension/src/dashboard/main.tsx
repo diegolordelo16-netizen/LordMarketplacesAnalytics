@@ -35,6 +35,7 @@ import {
 } from "./data.js";
 import "./theme.css";
 import { AreaChart, BarChart, Donut, type Point } from "./charts.js";
+import { DiscoveryPage } from "./discovery.js";
 import { CompetitorsPage, DescriptionPage, FinancePage, KpiCard, MissionsPage, type CompetitorView, type MissionView } from "./pages.js";
 
 // ------------------------------------------------------------ formatação
@@ -117,6 +118,7 @@ type Tab =
   | "visao"
   | "missoes"
   | "concorrentes"
+  | "descoberta"
   | "descricao"
   | "financeiro"
   | "captura"
@@ -138,6 +140,7 @@ const TABS: { id: Tab; label: string; icon: string; group: string }[] = [
   { id: "visao", label: "Visão geral", icon: "◧", group: "operação" },
   { id: "missoes", label: "Missões do dia", icon: "✦", group: "operação" },
   { id: "concorrentes", label: "Concorrentes", icon: "◎", group: "inteligência" },
+  { id: "descoberta", label: "Descoberta IA", icon: "✧", group: "inteligência" },
   { id: "descricao", label: "Descrição & CRO", icon: "✎", group: "inteligência" },
   { id: "financeiro", label: "Margem & preço", icon: "◈", group: "inteligência" },
   { id: "captura", label: "Captura", icon: "⇩", group: "dados" },
@@ -494,6 +497,16 @@ export function Dashboard() {
         {paired && tab === "concorrentes" && (
           <CompetitorsPage
             listings={listings?.listings.map((l) => ({ entityRef: l.entityRef, title: l.title })) ?? []}
+            busy={busy}
+            setBusy={setBusy}
+            setNotice={setNotice}
+            onChanged={() => setReloadKey((k) => k + 1)}
+          />
+        )}
+
+        {paired && tab === "descoberta" && (
+          <DiscoveryPage
+            listings={listings?.listings.map((l) => ({ entityRef: l.entityRef, title: l.title, priceCents: l.priceCents })) ?? []}
             busy={busy}
             setBusy={setBusy}
             setNotice={setNotice}

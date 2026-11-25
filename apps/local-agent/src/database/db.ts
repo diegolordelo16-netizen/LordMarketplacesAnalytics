@@ -14,6 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { MIGRATION_INTELLIGENCE } from "./migration-intelligence.js";
+import { MIGRATION_DISCOVERY } from "./migration-discovery.js";
 
 export const QUALITY_STATUSES = [
   "ZERO",
@@ -29,6 +30,7 @@ export type QualityStatus = (typeof QUALITY_STATUSES)[number];
 /** Migrations aplicadas em ordem, cada uma transacional. Imutáveis depois. */
 const MIGRATIONS: { id: string; sql: string }[] = [
   { id: "0003_intelligence", sql: MIGRATION_INTELLIGENCE },
+  { id: "0004_discovery", sql: MIGRATION_DISCOVERY },
   {
     id: "0001_core",
     sql: `

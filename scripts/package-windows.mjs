@@ -22,7 +22,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const VERSION = "0.6.2";
+const VERSION = "0.7.0";
 const OUT = join(ROOT, "release");
 const APP = join(OUT, `LordMarketplacesAnalytics`);
 const NODE_BIN = join(ROOT, "tools", "node-v22.14.0-win-x64", "node.exe");

@@ -23,6 +23,7 @@ import { ImprovementService } from "./services/improvements.js";
 import { CompetitorService, MONITORED_PLATFORMS, parseListingLink, parseManualRef } from "./services/competitors.js";
 import { DescriptionEditor, TitleImmutableError, diffLines } from "./services/description-editor.js";
 import { FinanceService, MissionService } from "./services/finance.js";
+import { DiscoveryService, type Relation } from "./services/discovery.js";
 import { buildMissions } from "./services/missions.js";
 import { parseListingList } from "./adapters/mercadolivre/listings.js";
 import { ORDERS_ADAPTER_VERSION, parseOrderList } from "./adapters/orders.js";
@@ -38,7 +39,7 @@ import {
   parseShopeeProductList,
 } from "./adapters/shopee/listings.js";
 
-export const AGENT_VERSION = "0.6.2";
+export const AGENT_VERSION = "0.7.0";
 
 /** Forma comum que todo adapter de captura devolve. */
 interface CaptureShape {
@@ -68,6 +69,7 @@ export interface AgentContext {
   improvements: ImprovementService;
   credentials: ApiCredentialService;
   competitors: CompetitorService;
+  discovery: DiscoveryService;
   descriptionEditor: DescriptionEditor;
   finance: FinanceService;
   missions: MissionService;
@@ -102,6 +104,7 @@ export function createContext(dbPath: string, env: NodeJS.ProcessEnv = process.e
       audit,
     }),
     competitors: new CompetitorService(db.raw()),
+    discovery: new DiscoveryService(db, new CompetitorService(db.raw())),
     descriptionEditor: new DescriptionEditor(db.raw()),
     finance: new FinanceService(db.raw()),
     missions: new MissionService(db.raw()),
@@ -111,7 +114,7 @@ export function createContext(dbPath: string, env: NodeJS.ProcessEnv = process.e
 
 /** Registra todos os handlers do protocolo no servidor. */
 export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): void {
-  const { db, repo, analytics, audit, gemini, improvements, credentials, competitors, descriptionEditor, finance, missions } = ctx;
+  const { db, repo, analytics, audit, gemini, improvements, credentials, competitors, descriptionEditor, finance, missions, discovery } = ctx;
 
   // -------------------------------------------------------------- system
   server.handle("system.ping", () => ({ pong: true, serverVersion: AGENT_VERSION }));
@@ -501,6 +504,104 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
     audit.append("improvement_decided", { id: p.id, decision: result.status, actorId: p.actorId });
     return result;
   });
+
+
+  // ------------------------------------------------ descoberta assistida
+  // O produto próprio vira perfil; a busca lê a página que o usuário abriu;
+  // nada é aprovado sem decisão dele.
+  server.handle("discovery.saveProduct", (envelope) => {
+    const p = envelope.payload as Parameters<typeof discovery.saveProduct>[0];
+    try {
+      const product = discovery.saveProduct(p);
+      audit.append("product_profile_saved", { id: product.id, entityRef: product.entityRef });
+      return { product };
+    } catch (err) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", err instanceof Error ? err.message : "produto inválido");
+    }
+  });
+
+  server.handle("discovery.products", () => ({ products: discovery.products() }));
+
+  server.handle("discovery.search", (envelope) => {
+    const p = envelope.payload as {
+      productId?: string;
+      html?: string;
+      marketplace?: string;
+      pageUrl?: string;
+      minSimilarityBp?: number;
+    };
+    if (!p?.productId) throw new BusinessError("SCHEMA_VALIDATION_FAILED", "escolha o seu produto");
+    if (!p.html) throw new BusinessError("SCHEMA_VALIDATION_FAILED", "abre a página de busca do marketplace e clique em buscar desta aba");
+    try {
+      const result = discovery.discoverFromHtml(p.productId, p.html, {
+        marketplace: p.marketplace ?? "mercadolivre",
+        pageUrl: p.pageUrl ?? "",
+        minSimilarityBp: p.minSimilarityBp,
+      });
+      audit.append("discovery_search", { productId: p.productId, marketplace: p.marketplace, kept: result.kept });
+      return result;
+    } catch (err) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", err instanceof Error ? err.message : "busca falhou");
+    }
+  });
+
+  server.handle("discovery.candidates", (envelope) => {
+    const p = envelope.payload as { productId?: string; status?: string } | undefined;
+    return {
+      candidates: discovery.candidates({ productId: p?.productId, status: (p?.status ?? "TODOS") as never }),
+      stats: discovery.stats(),
+    };
+  });
+
+  server.handle("discovery.approve", (envelope) => {
+    const p = envelope.payload as { id?: string; linkedEntityRef?: string | null; relation?: string };
+    try {
+      const r = discovery.approve(p?.id ?? "", {
+        linkedEntityRef: p?.linkedEntityRef ?? null,
+        relation: (p?.relation as Relation) ?? undefined,
+      });
+      audit.append("candidate_approved", { id: p?.id, competitorId: r.competitor.id });
+      return r;
+    } catch (err) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", err instanceof Error ? err.message : "não foi possível aprovar");
+    }
+  });
+
+  server.handle("discovery.reject", (envelope) => {
+    const p = envelope.payload as { id?: string; reason?: string | null };
+    try {
+      const candidate = discovery.reject(p?.id ?? "", p?.reason ?? null);
+      audit.append("candidate_rejected", { id: p?.id, reason: p?.reason ?? null });
+      return { candidate };
+    } catch (err) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", err instanceof Error ? err.message : "não foi possível rejeitar");
+    }
+  });
+
+  server.handle("discovery.edit", (envelope) => {
+    const p = envelope.payload as { id?: string; relation?: string; reason?: string | null };
+    try {
+      return { candidate: discovery.editRelation(p?.id ?? "", (p?.relation as Relation) ?? "SIMILAR", p?.reason ?? null) };
+    } catch (err) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", err instanceof Error ? err.message : "não foi possível editar");
+    }
+  });
+
+  server.handle("discovery.reassign", (envelope) => {
+    const p = envelope.payload as { id?: string; productId?: string };
+    try {
+      return { candidate: discovery.reassign(p?.id ?? "", p?.productId ?? "") };
+    } catch (err) {
+      throw new BusinessError("SCHEMA_VALIDATION_FAILED", err instanceof Error ? err.message : "não foi possível alterar o produto");
+    }
+  });
+
+  server.handle("discovery.feedback", (envelope) => {
+    const p = envelope.payload as { limit?: number } | undefined;
+    return { items: discovery.feedback(p?.limit ?? 100), stats: discovery.stats() };
+  });
+
+  server.handle("discovery.stats", () => discovery.stats());
 
   // ------------------------------------------------------- concorrentes
   // Cadastro por link: o serviço identifica o marketplace sozinho e devolve o

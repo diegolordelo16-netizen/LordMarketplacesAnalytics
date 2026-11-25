@@ -34,6 +34,7 @@ export const Namespace = z.enum([
   "improvement",
   "api",
   "competitor",
+  "discovery",
   "edit",
   "missions",
 ]);
@@ -74,6 +75,7 @@ export const PAYLOAD_LIMITS: Record<Namespace, number> = {
   api: 64 * 1024,
   // Concorrentes: a coleta manda HTML de página, como capture.
   competitor: 2 * 1024 * 1024,
+  discovery: 4 * 1024 * 1024,
   // Edição: descrição inteira antes e depois — cabe no limite de agente.
   edit: 1024 * 1024,
   missions: 256 * 1024,

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lord Marketplaces Analytics",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Inteligência operacional de marketplaces — captura na sessão autenticada do próprio usuário, sem APIs oficiais.",
   "minimum_chrome_version": "114",
   "permissions": [
