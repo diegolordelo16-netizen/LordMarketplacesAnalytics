@@ -93,6 +93,35 @@ const ML_HOSTS = ["mercadolivre.com.br", "mercadolivre.com", "mercadolibre.com"]
 const SHOPEE_HOSTS = ["shopee.com.br"];
 
 /**
+ * Marketplaces que o usuário pode monitorar.
+ *
+ * `readable` diz a verdade sobre esta versão: só Mercado Livre e Shopee têm
+ * leitura de página testada. Nos outros o cadastro funciona, o link fica
+ * guardado e o snapshot é registrado como NOT_COLLECTED — nunca com número
+ * inventado. Fingir que lê seria pior do que dizer que ainda não lê.
+ */
+export const MONITORED_PLATFORMS: { id: string; label: string; hosts: string[]; readable: boolean }[] = [
+  { id: "mercadolivre", label: "Mercado Livre", hosts: ["mercadolivre.com.br", "mercadolivre.com", "mercadolibre.com"], readable: true },
+  { id: "shopee", label: "Shopee", hosts: ["shopee.com.br"], readable: true },
+  { id: "tiktokshop", label: "TikTok Shop", hosts: ["shop.tiktok.com", "tiktok.com"], readable: false },
+  { id: "temu", label: "Temu", hosts: ["temu.com"], readable: false },
+  { id: "shein", label: "Shein", hosts: ["shein.com", "shein.com.br"], readable: false },
+  { id: "netshoes", label: "Netshoes", hosts: ["netshoes.com.br"], readable: false },
+  { id: "amazon", label: "Amazon", hosts: ["amazon.com.br", "amazon.com"], readable: false },
+];
+
+export function platformById(id: string): { id: string; label: string; readable: boolean } | null {
+  const found = MONITORED_PLATFORMS.find((p) => p.id === id);
+  return found ? { id: found.id, label: found.label, readable: found.readable } : null;
+}
+
+/** Marketplace dono do host do link, se for um dos que monitoramos. */
+function platformByHost(host: string): { id: string; label: string; readable: boolean } | null {
+  const found = MONITORED_PLATFORMS.find((p) => p.hosts.some((h) => host === h || host.endsWith(`.${h}`)));
+  return found ? { id: found.id, label: found.label, readable: found.readable } : null;
+}
+
+/**
  * Identifica marketplace e referência a partir do link colado.
  *
  * Reconhece os formatos que o usuário realmente copia do navegador, inclusive
@@ -129,13 +158,35 @@ export function parseListingLink(rawUrl: string): ParsedLink {
     return { marketplace: "shopee", externalRef: `${shop}:${item}`, url: url.toString(), kind: "product" };
   }
 
-  // Outros marketplaces: guarda o link, mas diz honestamente que não sabe ler.
+  // Plataformas monitoradas sem leitor próprio: o link é guardado com o id
+  // estável do marketplace e a referência que o próprio link traz.
+  const platform = platformByHost(host);
+  if (platform) {
+    const ref =
+      url.searchParams.get("id") ??
+      url.searchParams.get("item_id") ??
+      path.match(/\/(?:dp|product|p|item)\/([A-Za-z0-9_-]{5,})/)?.[1] ??
+      `${host}${path}`;
+    return { marketplace: platform.id, externalRef: ref, url: url.toString(), kind: "unknown" };
+  }
+
+  // Fora da lista: guarda o link, mas diz honestamente que não sabe ler.
   return {
     marketplace: host.split(".").slice(-2).join("."),
     externalRef: `${host}${path}`,
     url: url.toString(),
     kind: "unknown",
   };
+}
+
+/** Cadastro sem link (a plataforma escolhida na tela). */
+export function parseManualRef(marketplace: string, ref: string): ParsedLink {
+  const platform = platformById(marketplace);
+  if (!platform) throw new CompetitorValidationError("escolha uma plataforma da lista");
+  const clean = (ref ?? "").trim();
+  if (clean.length < 2) throw new CompetitorValidationError("informe o código ou o link do anúncio");
+  if (/^https?:\/\//i.test(clean) || clean.includes(".")) return parseListingLink(clean);
+  return { marketplace: platform.id, externalRef: clean, url: "", kind: "unknown" };
 }
 
 // ------------------------------------------------------------- leitura de página
@@ -215,8 +266,17 @@ export class CompetitorService {
   }
 
   /** Cadastra a partir do link. Idempotente: o mesmo link não duplica. */
-  add(url: string, options: { notes?: string | null; linkedEntityRef?: string | null; title?: string | null } = {}): CompetitorRow {
-    const parsed = parseListingLink(url);
+  add(
+    url: string,
+    options: {
+      notes?: string | null;
+      linkedEntityRef?: string | null;
+      title?: string | null;
+      /** Já interpretado pela tela (plataforma escolhida + código). */
+      parsed?: ParsedLink;
+    } = {},
+  ): CompetitorRow {
+    const parsed = options.parsed ?? parseListingLink(url);
     const now = this.now().toISOString();
     const existing = this.db
       .prepare(`SELECT id FROM competitors WHERE marketplace = ? AND external_ref = ?`)

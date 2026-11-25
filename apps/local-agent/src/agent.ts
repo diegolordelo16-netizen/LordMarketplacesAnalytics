@@ -20,7 +20,7 @@ import { AnalyticsService, AuditService, computeAlerts } from "./services/analyt
 import { buildAuditPrompt, think } from "./services/brain.js";
 import { GeminiAuditor, configFromEnv } from "./services/gemini.js";
 import { ImprovementService } from "./services/improvements.js";
-import { CompetitorService, parseListingLink } from "./services/competitors.js";
+import { CompetitorService, MONITORED_PLATFORMS, parseListingLink, parseManualRef } from "./services/competitors.js";
 import { DescriptionEditor, TitleImmutableError, diffLines } from "./services/description-editor.js";
 import { FinanceService, MissionService } from "./services/finance.js";
 import { buildMissions } from "./services/missions.js";
@@ -38,7 +38,7 @@ import {
   parseShopeeProductList,
 } from "./adapters/shopee/listings.js";
 
-export const AGENT_VERSION = "0.6.0";
+export const AGENT_VERSION = "0.6.1";
 
 /** Forma comum que todo adapter de captura devolve. */
 interface CaptureShape {
@@ -514,12 +514,31 @@ export function registerHandlers(server: LocalAgentServer, ctx: AgentContext): v
     }
   });
 
+  // Lista de plataformas para a tela de concorrentes. `readable` é honesto:
+  // só quem tem leitor de página testado aparece com true.
+  server.handle("competitor.platforms", () => ({
+    platforms: MONITORED_PLATFORMS.map((p) => ({ id: p.id, label: p.label, readable: p.readable })),
+  }));
+
   server.handle("competitor.add", (envelope) => {
-    const p = envelope.payload as { url?: string; notes?: string; linkedEntityRef?: string };
+    const p = envelope.payload as {
+      url?: string;
+      notes?: string;
+      linkedEntityRef?: string;
+      marketplace?: string;
+      externalRef?: string;
+    };
     try {
-      const competitor = competitors.add(p?.url ?? "", {
+      // Duas portas de entrada: link colado (o serviço identifica a plataforma)
+      // ou plataforma escolhida na tela com o código do anúncio.
+      const target =
+        p?.url && p.url.trim()
+          ? parseListingLink(p.url)
+          : parseManualRef(p?.marketplace ?? "", p?.externalRef ?? "");
+      const competitor = competitors.add(target.url || `${target.marketplace}:${target.externalRef}`, {
         notes: p?.notes ?? null,
         linkedEntityRef: p?.linkedEntityRef ?? null,
+        parsed: target,
       });
       audit.append("competitor_added", { id: competitor.id, marketplace: competitor.marketplace });
       return { competitor };

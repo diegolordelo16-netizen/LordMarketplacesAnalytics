@@ -91,6 +91,9 @@ export function CompetitorsPage({
   const [events, setEvents] = useState<EventRow[]>([]);
   const [url, setUrl] = useState("");
   const [detected, setDetected] = useState<{ marketplace: string; externalRef: string } | null>(null);
+  const [platform, setPlatform] = useState("");
+  const [manualRef, setManualRef] = useState("");
+  const [platforms, setPlatforms] = useState<{ id: string; label: string; readable: boolean }[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [detailEvents, setDetailEvents] = useState<EventRow[]>([]);
@@ -111,7 +114,13 @@ export function CompetitorsPage({
 
   useEffect(() => {
     void reload();
+    void ask<{ platforms: { id: string; label: string; readable: boolean }[] }>("competitor", "competitor.platforms")
+      .then((r) => setPlatforms(r.platforms))
+      .catch(() => setPlatforms([]));
   }, [reload]);
+
+  /** Plataforma escolhida na tela; sem ela vale o que o link disser. */
+  const chosen = platforms.find((p) => p.id === platform) ?? null;
 
   async function parseLink(value: string) {
     setUrl(value);
@@ -130,10 +139,14 @@ export function CompetitorsPage({
     setNotice(null);
     try {
       const r = await ask<{ competitor: CompetitorView }>("competitor", "competitor.add", {
-        url,
+        url: url.trim() ? url : undefined,
+        marketplace: platform || undefined,
+        externalRef: manualRef.trim() || undefined,
         linkedEntityRef: linkTo || undefined,
       });
       setUrl("");
+      setManualRef("");
+      setPlatform("");
       setLinkTo("");
       setDetected(null);
       setSelected(r.competitor.id);
@@ -250,6 +263,22 @@ export function CompetitorsPage({
           </div>
         </header>
         <div className="link-row">
+          <select
+            value={platform}
+            onChange={(e) => {
+              setPlatform(e.target.value);
+              setDetected(null);
+            }}
+            aria-label="Plataforma do concorrente"
+          >
+            <option value="">Plataforma (pelo link)</option>
+            {platforms.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {p.readable ? "" : " — leitura ainda não"}
+              </option>
+            ))}
+          </select>
           <input
             value={url}
             onChange={(e) => void parseLink(e.target.value)}
@@ -264,10 +293,35 @@ export function CompetitorsPage({
               </option>
             ))}
           </select>
-          <button className="btn" onClick={() => void add()} disabled={busy || !detected} type="button">
+          <button
+            className="btn"
+            onClick={() => void add()}
+            disabled={busy || !(detected || (platform && manualRef.trim().length >= 2))}
+            type="button"
+          >
             Salvar para monitoramento
           </button>
         </div>
+        {platform && !url.trim() && (
+          <div className="link-row">
+            <input
+              value={manualRef}
+              onChange={(e) => setManualRef(e.target.value)}
+              placeholder={
+                chosen?.readable
+                  ? "código do anúncio (ex.: MLB1234567890)"
+                  : "código ou link do anúncio nessa plataforma"
+              }
+              spellCheck={false}
+            />
+          </div>
+        )}
+        {chosen && !chosen.readable && (
+          <p className="hint warn-text">
+            {chosen.label}: o cadastro e o histórico funcionam, mas esta versão ainda não tem leitor de página para essa
+            plataforma. A coleta vai registrar “não coletado” — nunca um número inventado.
+          </p>
+        )}
         {detected && (
           <p className="hint ok">
             Reconhecido: <b>{detected.marketplace}</b> · anúncio <code>{detected.externalRef}</code>

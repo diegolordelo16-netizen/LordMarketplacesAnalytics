@@ -7,22 +7,42 @@
  */
 import { channel } from "../messaging/channel.js";
 
+/**
+ * Abre o dashboard em aba inteira, reaproveitando uma aba já aberta.
+ *
+ * Reaproveitar evita encher o navegador de dashboards a cada clique, e faz o
+ * painel lateral e o serviço local levarem sempre para a MESMA tela.
+ */
+async function openDashboard(): Promise<void> {
+  const url = chrome.runtime.getURL("dashboard.html");
+  const tabs = await chrome.tabs.query({});
+  const existing = tabs.find((t) => t.url === url || t.url?.startsWith(url));
+  if (existing?.id !== undefined) {
+    await chrome.tabs.update(existing.id, { active: true });
+    if (existing.windowId !== undefined) await chrome.windows.update(existing.windowId, { focused: true });
+    return;
+  }
+  await chrome.tabs.create({ url });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
+  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => undefined);
   // Na primeira instalação, abre o dashboard: é a tela principal do produto.
-  void chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
+  void openDashboard();
 });
 
-chrome.action.onClicked.addListener((tab) => {
-  if (tab.id !== undefined) {
-    void chrome.sidePanel.open({ tabId: tab.id }).catch(() => undefined);
-  }
+// Rede de segurança: se o service worker acordar e o dashboard não existir,
+// nada quebra — o botão do painel sempre tem para onde ir.
+chrome.runtime.onStartup.addListener(() => {
+  void channel.resume();
 });
 
 // O dashboard em aba inteira pede para ser aberto (a partir do painel lateral).
 chrome.runtime.onMessage.addListener((message: { kind?: string }, _sender, sendResponse) => {
   if (message.kind === "open.dashboard") {
-    void chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }).then(() => sendResponse({ ok: true }));
+    void openDashboard()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err: unknown) => sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }));
     return true;
   }
   return undefined;

@@ -190,6 +190,10 @@ async function main(): Promise<void> {
  .ok{color:#3fb950}.off{color:#d29922}
  button{margin-top:28px;background:#2f81f7;color:#fff;border:0;padding:10px 18px;border-radius:6px;font-size:14px;cursor:pointer}
  #tok{margin-top:14px;font-family:ui-monospace,monospace;background:#161b22;padding:12px;border-radius:6px;word-break:break-all;font-size:13px;display:none}
+ .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:28px}
+ .actions button{margin-top:0}
+ .primary{background:#3fb950;color:#0f1115;font-weight:600}
+ .primary:hover{background:#4ac95f}
  .cta{display:block;margin-top:32px;padding:16px 18px;border:1px solid #2f81f7;background:#101a2b;border-radius:8px}
  .cta h2{font-size:15px;margin:0 0 6px}
  .cta p{color:#8b949e;font-size:13px;margin:0 0 12px;line-height:1.5}
@@ -205,20 +209,33 @@ async function main(): Promise<void> {
  <dt>Proprietário</dt><dd>${state.owner}</dd>
  <dt>API</dt><dd class="${state.api.includes("criptografia ativa") ? "ok" : "off"}">${state.api}</dd>
 </dl>
-<button onclick="novoToken()">Gerar novo token de pareamento</button>
+<div class="actions">
+  <button class="primary" onclick="abrirDashboard()">Abrir o dashboard</button>
+  <button onclick="novoToken()">Gerar novo token de pareamento</button>
+</div>
 <div id="tok"></div>
 
 <div class="cta">
-  <h2>É aqui que se abre o painel</h2>
-  <p>Este serviço não tem tela própria: quem mostra os anúncios, os pedidos e as APIs é a extensão instalada no Chrome ou no Edge.</p>
+  <h2>O painel é uma aba da extensão</h2>
+  <p>Este serviço não tem tela própria: quem mostra os anúncios, os pedidos e as APIs é a extensão instalada no Chrome ou no Edge. O botão acima leva direto para ela.</p>
   <ol>
-    <li>No Chrome, abra <b>chrome://extensions</b> e confirme que "Lord Marketplaces Analytics" está na lista (ligada).</li>
-    <li>Clique no icone da extensao na barra do navegador.</li>
-    <li>Cole o token acima e clique em Parear.</li>
-    <li>O dashboard abre em aba inteira. Depois disso, ele fica no menu da extensão.</li>
+    <li>Clique em <b>Abrir o dashboard</b>. Se a extensão não estiver instalada, o navegador não abre nada.</li>
+    <li>Na primeira vez, o painel pede o token: cole o que apareceu acima (ou gere um novo).</li>
+    <li>Se você acabou de instalar ou atualizar a extensão, recarregue-a em <b>chrome://extensions</b> para o botão funcionar.</li>
   </ol>
 </div>
 <script>
+// O dashboard é uma página da extensão (chrome-extension://<id>/dashboard.html).
+// Um site aberto em 127.0.0.1 não pode abrir esse endereço por link, mas pode
+// navegar até ele: por isso a navegação, não o window.open com URL de extensão.
+const EXT_ID = ${JSON.stringify(origins[0] ?? "")};
+function abrirDashboard(){
+  if (!EXT_ID) {
+    alert('A extensão ainda não foi registrada. Rode o instalador de novo ou abra o painel pelo ícone da extensão.');
+    return;
+  }
+  location.href = EXT_ID + '/dashboard.html';
+}
 async function novoToken(){
   const r = await fetch('/token', {method:'POST'});
   const d = await r.json();

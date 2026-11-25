@@ -133,8 +133,14 @@ button.ghost { background: #fff; color: var(--ink); border-color: var(--line); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-dashboard {
-  width: 100%; margin: 0; font: inherit; font-size: 12px; font-weight: 600;
-  padding: 8px 10px; border-radius: 7px; cursor: pointer;
-  border: 1px dashed var(--line); background: #fff; color: var(--accent);
+  width: 100%; margin: 0; font: inherit; font-size: 13px; font-weight: 700;
+  padding: 11px 12px; border-radius: 9px; cursor: pointer;
+  border: 0; background: var(--accent); color: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .12);
 }
-.btn-dashboard:hover { background: var(--accent-soft); border-style: solid; }
+.btn-dashboard:hover { background: #4338ca; }
+.btn-dashboard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* O painel também abre como popup no clique do ícone (e aí o body precisa de
+   largura e altura próprias; no Side Panel elas vêm do navegador). */
+.popup-body { width: 380px; max-height: 600px; overflow-y: auto; }

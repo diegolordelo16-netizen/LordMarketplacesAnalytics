@@ -17,8 +17,11 @@ import { tmpdir } from "node:os";
 import { LocalDatabase } from "../src/database/db.js";
 import {
   CompetitorService,
+  CompetitorValidationError,
+  MONITORED_PLATFORMS,
   parseListingLink,
   parseListingPage,
+  parseManualRef,
 } from "../src/services/competitors.js";
 import {
   DescriptionEditor,
@@ -51,9 +54,14 @@ test("identifica o produto da Shopee e recusa link sem código", () => {
 });
 
 test("marketplace desconhecido é registrado como desconhecido, sem inventar", () => {
-  const p = parseListingLink("https://www.amazon.com.br/dp/B0ABC123");
+  // Amazon passou a ser uma das plataformas monitoradas (0.6.1); o caso
+  // "desconhecido" agora é um site fora da lista.
+  const p = parseListingLink("https://www.lojaqualquer.com.br/produto/123");
   assert.equal(p.kind, "unknown");
   assert.equal(p.marketplace, "com.br");
+  const amazon = parseListingLink("https://www.amazon.com.br/dp/B0ABC123");
+  assert.equal(amazon.marketplace, "amazon");
+  assert.equal(amazon.kind, "unknown");
 });
 
 // ------------------------------------------------------------- leitura
@@ -278,4 +286,54 @@ test("custo é versionado: o vigente é o mais recente já em vigor", () => {
   const atual = fin.currentCost("SKU3");
   assert.equal(atual?.costCents, 2000);
   db.close();
+});
+
+// ------------------------------------------------- plataformas monitoradas
+// A tela oferece sete plataformas. O que importa aqui: o link de cada uma é
+// reconhecido com o id certo, e a plataforma sem leitor não vira leitura falsa.
+test("plataformas de monitoramento", async (t) => {
+  await t.test("reconhece o link de cada plataforma da lista", () => {
+    const cases: [string, string][] = [
+      ["https://www.mercadolivre.com.br/fone/p/MLB1234567", "mercadolivre"],
+      ["https://shopee.com.br/fone-i.123456.987654321", "shopee"],
+      ["https://shop.tiktok.com/view/product/1729384756", "tiktokshop"],
+      ["https://www.temu.com/goods.html?goods_id=601099512345678", "temu"],
+      ["https://br.shein.com/Camiseta-p-1234567.html", "shein"],
+      ["https://www.netshoes.com.br/tenis-runner/p/NQQ-1234-012", "netshoes"],
+      ["https://www.amazon.com.br/dp/B0ABCDEFGH", "amazon"],
+    ];
+    for (const [url, expected] of cases) {
+      assert.equal(parseListingLink(url).marketplace, expected, url);
+    }
+  });
+
+  await t.test("a lista diz a verdade sobre quem tem leitor de página", () => {
+    const readable = MONITORED_PLATFORMS.filter((p) => p.readable).map((p) => p.id);
+    assert.deepEqual(readable, ["mercadolivre", "shopee"]);
+    assert.equal(MONITORED_PLATFORMS.length, 7);
+  });
+
+  await t.test("cadastro manual pela plataforma escolhida", () => {
+    const parsed = parseManualRef("temu", "601099512345678");
+    assert.equal(parsed.marketplace, "temu");
+    assert.equal(parsed.externalRef, "601099512345678");
+    // Se o usuário colar o link no campo do código, o link manda.
+    assert.equal(parseManualRef("temu", "https://www.temu.com/goods.html?goods_id=999").marketplace, "temu");
+  });
+
+  await t.test("plataforma desconhecida não é aceita em silêncio", () => {
+    assert.throws(() => parseManualRef("aliexpress", "123"), CompetitorValidationError);
+    assert.throws(() => parseManualRef("temu", "x"), CompetitorValidationError);
+  });
+
+  await t.test("cadastro manual em plataforma sem leitor guarda o link e não inventa número", () => {
+    const db = freshDb();
+    const service = new CompetitorService(db.raw());
+    const target = parseManualRef("amazon", "B0ABCDEFGH");
+    const row = service.add("", { parsed: target });
+    assert.equal(row.marketplace, "amazon");
+    assert.equal(row.externalRef, "B0ABCDEFGH");
+    assert.equal(row.latest, null);
+    assert.equal(row.snapshots, 0);
+  });
 });

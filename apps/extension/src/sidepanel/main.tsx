@@ -321,12 +321,20 @@ function App() {
         <StatusPill status={status} />
       </header>
 
+      {/* O botão principal do painel: o dashboard é a tela de trabalho, o
+          painel lateral é o atalho. Ele tem de estar à vista, sólido, e
+          funcionar sempre — inclusive se a extensão tiver sido recarregada. */}
       <button
         className="btn-dashboard"
         type="button"
-        onClick={() => void chrome.runtime.sendMessage({ kind: "open.dashboard" })}
+        onClick={() => {
+          void chrome.runtime.sendMessage({ kind: "open.dashboard" }).catch(() => {
+            // Se o worker não responder, abre pela API de abas: a aba é nossa.
+            void chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
+          });
+        }}
       >
-        Abrir dashboard completo ↗
+        ⌂ Abrir dashboard
       </button>
 
       {!paired && (
@@ -505,6 +513,11 @@ function App() {
       </footer>
     </main>
   );
+}
+
+// Quando aberto como popup no clique do ícone, o corpo ganha tamanho próprio.
+if (new URLSearchParams(location.search).get("surface") === "popup") {
+  document.body.classList.add("popup-body");
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);
