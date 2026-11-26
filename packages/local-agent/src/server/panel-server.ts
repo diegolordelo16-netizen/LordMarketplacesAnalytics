@@ -31,17 +31,10 @@ export interface PanelServerOptions {
   logger?: { info: (m: string) => void; error: (m: string, e?: unknown) => void };
   /** Arquivo que guarda a preferência de abrir direto no painel. */
   startTargetFile?: string;
-  /**
-   * Gera um token de sessão novo (o anterior deixa de valer). A tela de
-   * Pré-Start usa isso no botão «Gerar novo token» da conexão manual.
-   * Devolve o token novo e uma função que o grava como token corrente.
-   */
-  rotateToken?: () => { token: string };
-  /**
-   * Cria uma sessão nova no serviço (login real). Preferida sobre `rotateToken`:
-   * trocar só o valor comparado pelo HTTP entregava um token que a API recusava.
-   */
+  /** Cria uma sessão real no serviço; rotação não aceita UUID sem sessão IPC. */
   issueToken?: () => Promise<string>;
+  /** Sincroniza o token de processo/launcher depois da rotação confirmada. */
+  onTokenRotated?: (token: string) => void;
   /**
    * Rotas extras, avaliadas antes dos estáticos. Usadas pela tela de pré-start
    * para diagnóstico do ambiente (navegador, host nativo, extensão, logs).
@@ -80,11 +73,31 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-function isLocalOrigin(origin: string | undefined, allowedExtensionIds: string[]): boolean {
-  if (!origin) return true; // chamadas nativas (curl, testes) não têm Origin
+function isLocalOrigin(origin: string | undefined, allowedExtensionIds: string[], panelPort: number): boolean {
+  // Não confiar em qualquer porta localhost: uma página maliciosa pode abrir
+  // um servidor local e tentar ler /api/token via CORS.
+  if (!origin) return true; // chamadas nativas não têm Origin; rotas de token validam Fetch Metadata.
   if (origin === 'null') return false;
   if (allowedExtensionIds.some((id) => origin === `chrome-extension://${id}`)) return true;
-  return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin);
+  return origin === `http://127.0.0.1:${panelPort}`;
+}
+
+function isLoopbackAddress(address: string): boolean {
+  return /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(address);
+}
+
+/**
+ * O token é entregue apenas ao painel da mesma origem ou à extensão aprovada.
+ * Para fetch same-origin (que pode não enviar Origin), exige Sec-Fetch-Site e
+ * Host do próprio painel. Chamadas curl/originless deixam de obter o segredo.
+ */
+function isTrustedTokenRequest(req: IncomingMessage, panelPort: number, allowedExtensionIds: string[]): boolean {
+  if (!isLoopbackAddress(req.socket.remoteAddress ?? '')) return false;
+  const origin = req.headers.origin;
+  if (origin) return isLocalOrigin(origin, allowedExtensionIds, panelPort);
+  const fetchSite = req.headers['sec-fetch-site'];
+  const host = req.headers.host;
+  return fetchSite === 'same-origin' && host === `127.0.0.1:${panelPort}`;
 }
 
 async function readJson(req: IncomingMessage, limit = 2 * 1024 * 1024): Promise<unknown> {
@@ -142,7 +155,7 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
 
       // Preflight CORS: só para origens locais conhecidas.
       if (req.method === 'OPTIONS') {
-        if (origin && isLocalOrigin(origin, allowed)) {
+        if (origin && isLocalOrigin(origin, allowed, actualPort)) {
           res.setHeader('access-control-allow-origin', origin);
           res.setHeader('vary', 'origin');
           res.setHeader('access-control-allow-headers', 'authorization, content-type');
@@ -154,7 +167,7 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
         return;
       }
 
-      if (!isLocalOrigin(origin, allowed)) {
+      if (!isLocalOrigin(origin, allowed, actualPort)) {
         send(res, 403, { ok: false, error: { code: 'ORIGIN', message: 'origem não autorizada' } });
         return;
       }
@@ -166,17 +179,17 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
       }
 
       /**
-       * Token de sessão para a tela aberta em 127.0.0.1.
-       *
-       * Sem ele o painel ficava inutilizável quando a URL perdia o «?token=»
-       * (favorito, histórico, limpeza de cache): todo botão respondia
-       * "token de sessão ausente ou inválido". Só alcançável de 127.0.0.1 e de
-       * origens locais, que é quem já vê o painel.
+       * Recuperação de token para o painel same-origin e a extensão aprovada.
+       * Fetch Metadata e CORS são verificados para impedir que uma página de
+       * outra porta localhost leia a sessão administrativa.
        */
       if (url.pathname === '/api/token') {
-        const remote = req.socket.remoteAddress ?? '';
-        if (!/^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(remote)) {
-          send(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'somente 127.0.0.1' } });
+        if (req.method !== 'GET') {
+          send(res, 405, { ok: false, error: { code: 'METHOD', message: 'use GET' } });
+          return;
+        }
+        if (!isTrustedTokenRequest(req, actualPort, allowed)) {
+          send(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'origem não autorizada para obter token' } });
           return;
         }
         send(res, 200, { ok: true, result: { token: currentToken, port: actualPort } });
@@ -184,30 +197,64 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
       }
 
       /**
-       * Novo token de sessão. Só de 127.0.0.1, como o anterior: quem já vê o
-       * painel nesta máquina pode trocar a credencial, e o token antigo é
-       * invalidado na hora (é o que «gerar novo token» significa).
+       * A rotação exige origem confiável e a sessão atual no cabeçalho. Só
+       * então emite uma sessão nova e substitui o token aceito pelo HTTP.
        */
-      if (url.pathname === '/api/token/rotate' && req.method === 'POST') {
-        const remote = req.socket.remoteAddress ?? '';
-        if (!/^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(remote)) {
-          send(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'somente 127.0.0.1' } });
+      if (url.pathname === '/api/token/rotate') {
+        if (req.method !== 'POST') {
+          send(res, 405, { ok: false, error: { code: 'METHOD', message: 'use POST' } });
           return;
         }
-        if (!options.issueToken && !options.rotateToken) {
-          send(res, 501, { ok: false, error: { code: 'UNSUPPORTED', message: 'rotação de token indisponível' } });
+        if (!isTrustedTokenRequest(req, actualPort, allowed)) {
+          send(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'origem não autorizada para renovar token' } });
           return;
         }
-        // Sessão nova no serviço primeiro; só depois o HTTP passa a exigir o
-        // token novo. Assim o token entregue à extensão é sempre válido na API.
-        const fresh = options.issueToken
-          ? await options.issueToken()
-          : (options.rotateToken as () => { token: string })().token;
+        const authHeader = req.headers.authorization ?? '';
+        const providedToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+        if (!providedToken || !safeEqual(providedToken, currentToken)) {
+          send(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'sessão necessária para renovar token' } });
+          return;
+        }
+        if (!options.issueToken) {
+          // Um token aleatório trocado apenas no HTTP não cria uma sessão IPC
+          // válida. A rotação precisa emitir uma sessão real pelo serviço.
+          send(res, 501, { ok: false, error: { code: 'UNSUPPORTED', message: 'rotação exige emissão de sessão autenticada' } });
+          return;
+        }
+        // Cria primeiro uma sessão válida, depois revoga a anterior no serviço.
+        // Assim o token velho deixa de funcionar também pelo Native Messaging,
+        // e não apenas pelo endpoint HTTP que compara currentToken.
+        const fresh = await options.issueToken();
         if (!fresh) {
           send(res, 500, { ok: false, error: { code: 'ROTATE', message: 'não foi possível criar a sessão' } });
           return;
         }
+        const revokeOld = await options.service({
+          id: 'panel-token-rotate-revoke-old',
+          protocolVersion: 1,
+          method: 'auth.logout',
+          token: providedToken,
+          payload: { token: providedToken },
+        });
+        const revokeResult = revokeOld.ok ? revokeOld.result as { ok?: boolean } | undefined : undefined;
+        if (!revokeOld.ok || revokeResult?.ok !== true) {
+          // Não deixar uma sessão extra ativa se a revogação antiga falhar.
+          await options.service({
+            id: 'panel-token-rotate-revoke-new',
+            protocolVersion: 1,
+            method: 'auth.logout',
+            token: fresh,
+            payload: { token: fresh },
+          });
+          send(res, 500, { ok: false, error: { code: 'ROTATE', message: 'não foi possível revogar a sessão anterior' } });
+          return;
+        }
         currentToken = fresh;
+        try {
+          options.onTokenRotated?.(fresh);
+        } catch (err) {
+          log.error('token rotacionado, mas não foi possível atualizar o launcher', err);
+        }
         send(res, 200, { ok: true, result: { token: currentToken, port: actualPort } });
         return;
       }

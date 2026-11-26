@@ -216,10 +216,91 @@ describe('extensão: classificação de página do Mercado Livre', () => {
     for (const [url, kind] of Object.entries(expected)) expect(detect(url), url).toBe(kind);
   });
 
+  it('páginas públicas e listas usam tipos aceitos pelo contrato de captura', () => {
+    expect(detect('https://www.mercadolivre.com.br/fone/p/MLB123456')).toBe('product_detail');
+    expect(detect('https://www.mercadolivre.com.br/items/MLB123456')).toBe('product_detail');
+    expect(detect('https://vendedores.mercadolivre.com.br/anuncios')).toBe('seller_listings');
+  });
+
+  it('captura os anúncios visíveis quando a página é seller_listings', () => {
+    let listener: ((message: unknown, sender: unknown, respond: (value: unknown) => void) => unknown) | undefined;
+    const row = {
+      innerHTML: 'MLB123456',
+      getAttribute: () => null,
+      querySelector: (selector: string) => selector.includes('andes-money-amount')
+        ? { textContent: '199' }
+        : { textContent: 'Fone Bluetooth' },
+    };
+    const window = {
+      MI_DOM: {
+        extractExternalId: (value: unknown) => String(value).match(/MLB\d+/)?.[0] ?? null,
+        parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
+        findValueByLabel: () => null,
+      },
+    };
+    const context = vm.createContext({
+      window,
+      location: { href: 'https://vendedores.mercadolivre.com.br/anuncios' },
+      document: { querySelectorAll: () => [row], querySelector: () => null, body: {} },
+      chrome: { runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } } },
+      String, Number, Math, RegExp,
+    });
+    vm.runInContext(code, context);
+    let response: any;
+    listener?.({ type: 'MI_CAPTURE_REQUEST' }, {}, (value) => { response = value; });
+    expect(response?.ok).toBe(true);
+    expect(response?.snapshot?.pageKind).toBe('seller_listings');
+    expect(response?.snapshot?.listings).toHaveLength(1);
+    expect(response?.snapshot?.listings?.[0]?.listingId).toBe('MLB123456');
+    expect(response?.snapshot?.listings?.[0]?.title).toBe('Fone Bluetooth');
+  });
+
   it('nenhum tipo devolvido fica fora do contrato de captura', () => {
-    // 'metrics' não existe no enum do serviço: era a causa de "não reconhecida".
     expect(code).not.toMatch(/return 'metrics'/);
     expect(detect('https://vendedores.mercadolivre.com.br/metricas')).toBe('seller_dashboard');
+  });
+});
+
+
+describe('extensão: classificação e diagnóstico da Shopee', () => {
+  const code = readFileSync(join(ext, 'content', 'shopee.js'), 'utf8');
+
+  function capturePage(url: string) {
+    let listener: ((message: unknown, sender: unknown, respond: (value: unknown) => void) => unknown) | undefined;
+    const window = {
+      MI_DOM: {
+        findValueByLabel: (_body: unknown, labels: string[]) =>
+          labels.some((label) => label === 'stock') ? { text: '12', label: 'Stock' } : null,
+        parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
+      },
+    };
+    const context = vm.createContext({
+      window,
+      location: { href: url },
+      document: { body: {}, querySelector: () => null },
+      chrome: { runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } } },
+      String, Number, Math, RegExp,
+    });
+    vm.runInContext(code, context);
+    let response: any;
+    listener?.({ type: 'MI_CAPTURE_REQUEST' }, {}, (value) => { response = value; });
+    return response?.snapshot;
+  }
+
+  it.each([
+    ['https://seller.shopee.com.br/portal/product/list', 'seller_listings'],
+    ['https://seller.shopee.com.br/datacenter', 'seller_dashboard'],
+    ['https://seller.shopee.com.br/order', 'seller_orders'],
+    ['https://seller.shopee.com.br/portal/marketing/ads', 'seller_ads'],
+    ['https://shopee.com.br/product/123/456', 'product_detail'],
+  ])('mapeia %s para o enum %s', (url, expected) => {
+    expect(capturePage(url).pageKind).toBe(expected);
+  });
+
+  it('missing usa as mesmas chaves dos campos capturados', () => {
+    const snapshot = capturePage('https://seller.shopee.com.br/portal/product/list');
+    expect(snapshot.missing).not.toContain('stockAvailable');
+    expect(snapshot.missing).toContain('visits');
   });
 });
 

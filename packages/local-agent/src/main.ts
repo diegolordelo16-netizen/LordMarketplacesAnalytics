@@ -9,7 +9,7 @@
  * Nenhuma credencial de marketplace é lida: o serviço trabalha apenas com o que a
  * extensão captura das páginas já autenticadas do usuário (§0.1).
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -289,14 +289,11 @@ export async function start(options: BootstrapOptions = {}): Promise<StartedApp>
     allowedExtensionIds: options.extensionIds ?? [readExtensionId(app.dataDir)].filter(Boolean),
     logger: createFileLogger(join(app.dataDir, 'logs'), 'service.log'),
     startTargetFile: join(app.dataDir, 'start-target.txt'),
-    /**
-     * «Gerar novo token» da conexão manual: abre uma sessão nova de verdade
-     * (era um UUID solto, e a extensão recebia «sessão inválida» ao usá-lo) e
-     * passa a usá-la. O token anterior deixa de valer, que é o que o botão
-     * promete. O novo token não vai para log nem para disco.
-     */
-    rotateToken: () => {
-      const fresh = randomUUID() + randomUUID();
+    /** Sessão nova de verdade para o «gerar novo token» (login real). */
+    issueToken: () => issuePanelSession(app, options.dataDir ?? app.dataDir),
+    /** Só atualiza o token compartilhado depois que a sessão anterior foi revogada. */
+    onTokenRotated: (fresh) => {
+      app.token = fresh;
       try {
         const port = panel.port || Number(readFileSync(join(app.dataDir, 'port.txt'), 'utf8').trim());
         writeFileSync(join(app.dataDir, 'panel-url.txt'), `http://127.0.0.1:${port}/?token=${fresh}`, {
@@ -304,14 +301,10 @@ export async function start(options: BootstrapOptions = {}): Promise<StartedApp>
           mode: 0o600,
         });
       } catch {
-        /* arquivo é conveniência do launcher: falhar aqui não invalida o token */
+        /* arquivo é conveniência do launcher: falhar aqui não invalida a sessão */
       }
       createFileLogger(join(app.dataDir, 'logs'), 'service.log').info('token de sessão do painel renovado');
-      app.token = fresh;
-      return { token: fresh };
     },
-    /** Sessão nova de verdade para o «gerar novo token» (assíncrono no servidor). */
-    issueToken: () => issuePanelSession(app, options.dataDir ?? app.dataDir),
     routes: [
       {
         // Diagnóstico da tela de Pré-Start. Somente leitura, exige token.

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalDatabase } from '../src/db/database';
 import { TaskScheduler } from '../src/scheduler/task-scheduler';
-import { SecretStore } from '../src/security/secrets';
+import { SecretStore, hashPassword } from '../src/security/secrets';
 import { GeminiClient } from '../src/ai/gemini-client';
 import { KnowledgeBase } from '../src/ai/knowledge-base';
 import { AutoUpgradeEngine } from '../src/ai/auto-upgrade';
@@ -107,12 +107,45 @@ describe('autenticação e perfis', () => {
     expect(['NOT_FOUND', 'VALIDATION_ERROR']).toContain(r.error?.code);
   });
 
-  it('visualizador não pode executar tarefa', async () => {
+  it('visualizador não pode executar tarefa nem chamar métodos de escrita sem permissão', async () => {
+    const { hash, salt } = hashPassword('senha-visualizador-123');
     db.db
       .prepare('INSERT INTO users (id, email, display_name, role, password_hash, password_salt, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)')
-      .run('u2', 'view@local.test', 'View', 'visualizador', 'h', 's', new Date().toISOString());
-    const login = await service.handle({ id: 'l', protocolVersion: 1, method: 'auth.login', payload: { email: 'view@local.test', password: 'qualquer' } });
-    expect((login.result as { ok: boolean }).ok).toBe(false);
+      .run('u2', 'view@local.test', 'View', 'visualizador', hash, salt, new Date().toISOString());
+    const login = await service.handle({ id: 'l', protocolVersion: 1, method: 'auth.login', payload: { email: 'view@local.test', password: 'senha-visualizador-123' } });
+    expect(login.ok).toBe(true);
+    const viewerToken = (login.result as { token: string }).token;
+    const viewerCall = (method: string, payload: unknown = {}) =>
+      service.handle({ id: 'viewer', protocolVersion: 1, method, payload, token: viewerToken });
+
+    const task = await viewerCall('task.runNow', { taskId: 'missing' });
+    expect(task.ok).toBe(false);
+    expect(task.error?.code).toBe('FORBIDDEN');
+
+    const cost = await viewerCall('finance.costs.upsert', { skuId: 'SKU1', unitCostCents: 1000 });
+    expect(cost.ok).toBe(false);
+    expect(cost.error?.code).toBe('FORBIDDEN');
+
+    const competitor = await viewerCall('competitor.approve', { relationId: 'missing' });
+    expect(competitor.ok).toBe(false);
+    expect(competitor.error?.code).toBe('FORBIDDEN');
+
+    const read = await viewerCall('competitor.list', { accountId: 'acc-test' });
+    expect(read.ok).toBe(true);
+  });
+
+  it('não permite que uma sessão encerre a sessão de outro usuário', async () => {
+    const { hash, salt } = hashPassword('senha-visualizador-456');
+    db.db
+      .prepare('INSERT INTO users (id, email, display_name, role, password_hash, password_salt, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)')
+      .run('u3', 'other@local.test', 'Other', 'visualizador', hash, salt, new Date().toISOString());
+    const login = await service.handle({ id: 'other-login', protocolVersion: 1, method: 'auth.login', payload: { email: 'other@local.test', password: 'senha-visualizador-456' } });
+    const otherToken = (login.result as { token: string }).token;
+    const attempt = await call('auth.logout', { token: otherToken });
+    expect(attempt.ok).toBe(true);
+    expect((attempt.result as { ok: boolean }).ok).toBe(false);
+    const stillValid = await service.handle({ id: 'other-session', protocolVersion: 1, method: 'auth.session', payload: { token: otherToken } });
+    expect((stillValid.result as { ok: boolean }).ok).toBe(true);
   });
 
   it('registra auditoria de login', async () => {
@@ -183,6 +216,38 @@ describe('captura e KPIs', () => {
       pillars: { conversion_cro: { cvr: number } };
     };
     expect((kpi.pillars.conversion_cro.cvr as unknown as { value: number }).value).toBeCloseTo(3, 5);
+
+    const dashboard = (await call('kpi.dashboard')).result as {
+      totals: { gmvCents: number; netRevenueCents: number | null; adSpendCents: number; orders: number };
+    };
+    expect(dashboard.totals.gmvCents).toBe(320000);
+    expect(dashboard.totals.netRevenueCents).toBeNull();
+    expect(dashboard.totals.adSpendCents).toBe(20000);
+    expect(dashboard.totals.orders).toBe(30);
+  });
+
+  it('não apresenta subtotal como total da conta quando há anúncio sem captura', async () => {
+    await call('account.upsert', {
+      marketplace: 'mercado_livre',
+      accountId: 'ml:conta1',
+      displayName: 'Loja Teste',
+      confidence: 0.9,
+      verifiedByUser: true,
+    });
+    await call('capture.ingest', payload);
+    const now = new Date().toISOString();
+    db.db.prepare(
+      `INSERT INTO listings (id, account_id, marketplace, external_id, title, status, url, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)`,
+    ).run('listing-without-snapshot', 'ml:conta1', 'mercado_livre', 'MLB999', 'Sem snapshot', payload.url, now, now);
+
+    const dashboard = (await call('kpi.dashboard')).result as {
+      coverage: { totalListings: number; capturedListings: number; uncapturedListings: number };
+      totals: { gmvCents: number | null; orders: number | null };
+    };
+    expect(dashboard.coverage).toEqual({ totalListings: 2, capturedListings: 1, uncapturedListings: 1 });
+    expect(dashboard.totals.gmvCents).toBeNull();
+    expect(dashboard.totals.orders).toBeNull();
   });
 
   it('não sobrescreve histórico ao capturar de novo', async () => {

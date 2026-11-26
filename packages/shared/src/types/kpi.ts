@@ -55,6 +55,8 @@ export interface ListingPeriodInput {
   // Receita
   gmv?: number;
   grossRevenue?: number;
+  /** Receita líquida observada/calculada com componentes financeiros confiáveis. */
+  netRevenue?: number;
   discounts?: number;
   cancellations?: number;
   cancellationValue?: number;

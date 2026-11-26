@@ -46,6 +46,7 @@ const REQUIRED_INPUTS: Array<keyof ListingPeriodInput> = [
   'orders',
   'units',
   'grossRevenue',
+  'netRevenue',
   'adSpend',
   'organicImpressions',
   'paidImpressions',
@@ -129,7 +130,8 @@ export function computeListingKpis(input: ListingPeriodInput): ListingKpis {
     },
     revenue_profit: {
       gmv: n(input.gmv),
-      netRevenue: n(grossRevenue),
+      // Receita líquida é uma métrica distinta; sem fonte explícita permanece indisponível.
+      netRevenue: n(input.netRevenue),
       avgTicket: R(grossRevenue, input.orders, KPI_FORMULAS.avgTicket),
       dailyTurnover: R(input.units, days, KPI_FORMULAS.dailyTurnover),
       returnRate: P(input.returnsCount, input.orders, KPI_FORMULAS.returnRate),

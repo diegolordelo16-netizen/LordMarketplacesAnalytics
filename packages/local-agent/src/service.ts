@@ -47,31 +47,89 @@ export interface AuthContext {
 
 type Handler = (payload: unknown, auth: AuthContext | null) => unknown | Promise<unknown>;
 
-const METHOD_PERMISSION: Partial<Record<string, Permission>> = {
+/**
+ * Todo método protegido precisa declarar uma permissão. Ausência de regra não
+ * significa acesso livre: o dispatcher nega por padrão.
+ */
+const METHOD_PERMISSION: Record<string, Permission> = {
+  'settings.get': 'view_reports',
   'settings.set': 'manage_financial_limits',
   'gemini.setKey': 'manage_gemini_key',
   'gemini.testKey': 'manage_gemini_key',
+  'account.upsert': 'manage_accounts',
+  'account.list': 'view_reports',
+  'capture.ingest': 'execute_task',
+  'capture.snapshot': 'view_reports',
+  'kpi.listing': 'view_reports',
+  'kpi.dashboard': 'view_reports',
+  'missions.today': 'view_reports',
+  'finance.simulate': 'view_reports',
+  'finance.costs.upsert': 'manage_financial_limits',
   'task.create': 'execute_task',
-  'task.runNow': 'execute_task',
+  'task.list': 'view_reports',
   'task.pause': 'execute_task',
   'task.resume': 'execute_task',
   'task.cancel': 'execute_task',
   'task.skipItem': 'execute_task',
-  'capture.ingest': 'execute_task',
+  'task.runNow': 'execute_task',
   'guard.evaluate': 'execute_task',
+  'audit.list': 'manage_backups',
   'audit.rollback': 'manage_backups',
-  'backup.create': 'manage_backups',
+  'adapter.diagnostics': 'view_reports',
+  'keyword.upsert': 'manage_market_intelligence',
+  'keyword.list': 'view_reports',
+  'keyword.gap': 'view_reports',
+  'rank.record': 'manage_market_intelligence',
+  'rank.history': 'view_reports',
+  'competitor.upsert': 'manage_competitors',
+  'competitor.list': 'view_reports',
+  'competitor.timeline': 'view_reports',
+  'competitor.alerts': 'view_reports',
+  'competitor.ownProduct.upsert': 'manage_competitors',
+  'competitor.ownProduct.list': 'view_reports',
+  'competitor.search': 'manage_competitors',
+  'competitor.relations': 'view_reports',
+  'competitor.approve': 'manage_competitors',
+  'competitor.reject': 'manage_competitors',
+  'competitor.edit': 'manage_competitors',
+  'competitor.changeCandidate': 'manage_competitors',
+  'competitor.reanalyze': 'manage_competitors',
+  'competitor.monitoring.set': 'manage_competitors',
+  'competitor.monitoring.record': 'manage_competitors',
+  'competitor.monitoring.history': 'view_reports',
+  'competitor.stats': 'view_reports',
+  'market.categorySnapshot': 'manage_market_intelligence',
+  'market.opportunities': 'view_reports',
+  'voc.ingest': 'manage_market_intelligence',
+  'voc.topics': 'view_reports',
+  'growth.initiatives': 'view_reports',
+  'growth.metricTree': 'view_reports',
+  'experiment.create': 'manage_experiments',
+  'experiment.list': 'view_reports',
+  'experiment.result': 'view_reports',
   'agent.run': 'use_gemini_workspace',
+  'agent.runs': 'view_reports',
   'agent.debate': 'use_gemini_workspace',
+  'agent.memory': 'use_gemini_workspace',
+  'agent.budget': 'view_reports',
   'autoupgrade.propose': 'approve_auto_upgrade',
+  'autoupgrade.list': 'view_reports',
   'autoupgrade.apply': 'approve_auto_upgrade',
   'autoupgrade.rollback': 'approve_auto_upgrade',
+  'connector.registry': 'view_reports',
   'connector.import': 'manage_connectors',
+  'forecast.run': 'execute_task',
+  'alerts.list': 'view_reports',
+  'alerts.ack': 'manage_alerts',
   'report.export': 'view_reports',
+  'backup.create': 'manage_backups',
+  'backup.list': 'manage_backups',
 };
 
 /** Métodos liberados sem sessão (apenas os necessários para o primeiro acesso). */
 const PUBLIC_METHODS = new Set(['ping', 'auth.login', 'auth.bootstrap', 'auth.session']);
+/** Logout exige sessão válida, mas não uma permissão de negócio específica. */
+const SESSION_ONLY_METHODS = new Set(['auth.logout']);
 
 export class LocalService {
   private readonly handlers = new Map<string, Handler>();
@@ -162,10 +220,17 @@ export class LocalService {
     });
 
     this.register('auth.logout', (payload, auth) => {
-      const schema = z.object({ token: z.string() });
+      const schema = z.object({ token: z.string().min(1).max(4096) });
       const input = schema.parse(payload);
+      const session = db.row<{ user_id: string }>(
+        'SELECT user_id FROM auth_sessions WHERE token_hash = ?',
+        sha256(input.token),
+      );
+      if (!session || !auth || session.user_id !== auth.userId) {
+        return { ok: false, error: 'a sessão não pertence ao usuário autenticado' };
+      }
       db.db.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE token_hash = ?').run(new Date().toISOString(), sha256(input.token));
-      this.audit(auth, 'LOGOUT', 'user', auth?.userId ?? null, 'OK');
+      this.audit(auth, 'LOGOUT', 'user', auth.userId, 'OK');
       return { ok: true };
     });
 
@@ -265,18 +330,55 @@ export class LocalService {
       const perListing = listings
         .map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, 30) }))
         .filter((l) => l.kpis !== null);
-      const totals = perListing.reduce(
-        (acc, l) => {
-          const m = l.kpis!.pillars;
-          acc.gmv += m.revenue_profit.gmv ?? 0;
-          acc.visits += m.conversion_cro.visits ?? 0;
-          acc.orders += m.conversion_cro.orders ?? 0;
-          acc.adSpend += m.acquisition_ads.adSpend ?? 0;
-          return acc;
+      const sumKnown = (select: (pillars: NonNullable<(typeof perListing)[number]['kpis']>['pillars']) => number | null): number | null => {
+        // Não apresentar como total da conta um subtotal quando há anúncios
+        // sem snapshot recente. Ausência de captura não significa valor zero.
+        if (perListing.length === 0 || perListing.length !== listings.length) return null;
+        const values = perListing.map((l) => select(l.kpis!.pillars));
+        if (values.some((value) => value === null || !Number.isFinite(value))) return null;
+        return (values as number[]).reduce((sum, value) => sum + value, 0);
+      };
+      const toCents = (value: number | null): number | null => value === null ? null : Math.round(value * 100);
+      const grossRevenue = sumKnown((m) => m.revenue_profit.gmv);
+      const netRevenue = sumKnown((m) => m.revenue_profit.netRevenue);
+      const visits = sumKnown((m) => m.conversion_cro.visits);
+      const orders = sumKnown((m) => m.conversion_cro.orders);
+      const adSpend = sumKnown((m) => m.acquisition_ads.adSpend);
+      const adRevenue = sumKnown((m) => m.acquisition_ads.adAttributedRevenue);
+      const units = sumKnown((m) => m.conversion_cro.units);
+      const stock = sumKnown((m) => m.operational_health.stockAvailable);
+      const returnCount = sumKnown((m) => m.post_purchase_retention.returnsCount);
+      const dailySales = sumKnown((m) => m.operational_health.dailySalesAvg.value);
+      const acosPct = adSpend !== null && adRevenue !== null && adRevenue > 0 ? (adSpend / adRevenue) * 100 : null;
+      const roas = adSpend !== null && adSpend > 0 && adRevenue !== null ? adRevenue / adSpend : null;
+      const totals = {
+        gmvCents: toCents(grossRevenue),
+        netRevenueCents: toCents(netRevenue),
+        // O custo dos produtos/comissões ainda não está ligado a todos os snapshots;
+        // não inventar contribuição ou margem quando a base financeira está incompleta.
+        contributionCents: null,
+        contributionMarginPct: null,
+        visits,
+        orders,
+        units,
+        adSpendCents: toCents(adSpend),
+        cvr: visits !== null && visits > 0 && orders !== null ? (orders / visits) * 100 : null,
+        aovCents: grossRevenue !== null && orders !== null && orders > 0 ? Math.round((grossRevenue * 100) / orders) : null,
+        acosPct,
+        roas,
+        returnRatePct: returnCount !== null && orders !== null && orders > 0 ? (returnCount / orders) * 100 : null,
+        stockCoverageDays: stock !== null && dailySales !== null && dailySales > 0 ? stock / dailySales : null,
+      };
+      return {
+        accounts,
+        listings: perListing,
+        coverage: {
+          totalListings: listings.length,
+          capturedListings: perListing.length,
+          uncapturedListings: Math.max(0, listings.length - perListing.length),
         },
-        { gmv: 0, visits: 0, orders: 0, adSpend: 0 },
-      );
-      return { accounts, listings: perListing, totals };
+        totals,
+      };
     });
 
     this.register('missions.today', () => {
@@ -935,10 +1037,16 @@ export class LocalService {
       if (!auth) {
         return { id: req.id, ok: false, protocolVersion: 1, error: { code: 'UNAUTHORIZED', message: 'sessão necessária' } };
       }
-      const perm = METHOD_PERMISSION[req.method];
-      if (perm && !roleHasPermission(auth.role, perm)) {
-        this.audit(auth, 'PERMISSION_DENIED', 'ipc', req.method, 'DENIED', `perfil ${auth.role} sem ${perm}`);
-        return { id: req.id, ok: false, protocolVersion: 1, error: { code: 'FORBIDDEN', message: `perfil ${auth.role} não possui ${perm}` } };
+      if (!SESSION_ONLY_METHODS.has(req.method)) {
+        const perm = METHOD_PERMISSION[req.method];
+        if (!perm) {
+          this.audit(auth, 'PERMISSION_DENIED', 'ipc', req.method, 'DENIED', 'método sem política de autorização');
+          return { id: req.id, ok: false, protocolVersion: 1, error: { code: 'FORBIDDEN', message: `método ${req.method} sem política de autorização` } };
+        }
+        if (!roleHasPermission(auth.role, perm)) {
+          this.audit(auth, 'PERMISSION_DENIED', 'ipc', req.method, 'DENIED', `perfil ${auth.role} sem ${perm}`);
+          return { id: req.id, ok: false, protocolVersion: 1, error: { code: 'FORBIDDEN', message: `perfil ${auth.role} não possui ${perm}` } };
+        }
       }
     }
 

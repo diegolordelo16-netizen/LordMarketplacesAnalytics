@@ -213,7 +213,7 @@ describe('token quando a URL perde o ?token=', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'mi-token-'));
     const started = await start({ dataDir, migrationsDir: MIGRATIONS, port: 0 });
     try {
-      const res = await fetch(`${started.url}api/token`);
+      const res = await fetch(`${started.url}api/token`, { headers: { 'sec-fetch-site': 'same-origin' } });
       expect(res.status).toBe(200);
       const body = (await res.json()) as { result: { token: string } };
       expect(body.result.token).toBe(started.token);
@@ -222,6 +222,37 @@ describe('token quando a URL perde o ?token=', () => {
         headers: { authorization: `Bearer ${body.result.token}` },
       });
       expect(check.status).toBe(200);
+    } finally {
+      await started.panel?.close();
+      await started.close();
+    }
+  });
+
+  it('entrega token apenas à extensão cujo ID está autorizado', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'mi-token-ext-'));
+    const extensionId = 'abcdefghijklmnopabcdefghijklmnop';
+    const started = await start({ dataDir, migrationsDir: MIGRATIONS, port: 0, extensionIds: [extensionId] });
+    try {
+      const res = await fetch(`${started.url}api/token`, { headers: { origin: `chrome-extension://${extensionId}` } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('access-control-allow-origin')).toBe(`chrome-extension://${extensionId}`);
+    } finally {
+      await started.panel?.close();
+      await started.close();
+    }
+  });
+
+  it('não entrega token a requisição sem metadados same-origin nem a outra porta localhost', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'mi-token-origin-'));
+    const started = await start({ dataDir, migrationsDir: MIGRATIONS, port: 0 });
+    try {
+      const bare = await fetch(`${started.url}api/token`);
+      expect(bare.status).toBe(403);
+
+      const attackerOrigin = `http://127.0.0.1:${Number(new URL(started.url!).port) + 1}`;
+      const attacker = await fetch(`${started.url}api/token`, { headers: { origin: attackerOrigin } });
+      expect(attacker.status).toBe(403);
+      expect(await attacker.text()).not.toContain(started.token);
     } finally {
       await started.panel?.close();
       await started.close();
@@ -237,15 +268,31 @@ describe('conexão manual da extensão', () => {
     try {
       // A tela lê as credenciais que o usuário vai colar na extensão.
       type Cred = { ok: boolean; result: { token: string; port: number } };
-      const read = (await fetch(`${base}api/token`).then((r) => r.json())) as Cred;
+      const panelOrigin = new URL(base).origin;
+      const read = (await fetch(`${base}api/token`, { headers: { 'sec-fetch-site': 'same-origin' } }).then((r) => r.json())) as Cred;
       expect(read.ok).toBe(true);
       expect(typeof read.result.token).toBe('string');
       expect(read.result.port).toBeGreaterThan(0);
 
       // Token novo invalida o anterior: é o que o botão promete.
-      const rotated = (await fetch(`${base}api/token/rotate`, { method: 'POST' }).then((r) => r.json())) as Cred;
+      const rotated = (await fetch(`${base}api/token/rotate`, {
+        method: 'POST',
+        headers: { origin: panelOrigin, authorization: `Bearer ${read.result.token}` },
+      }).then((r) => r.json())) as Cred;
       expect(rotated.ok).toBe(true);
       expect(rotated.result.token).not.toBe(read.result.token);
+
+      // Também precisa revogar a sessão no serviço, pois a extensão pode usar
+      // Native Messaging e não passar pelo bearer HTTP.
+      const oldNativeSession = await started.service.handle({
+        id: 'old-native-session', protocolVersion: 1, method: 'task.list', payload: {}, token: read.result.token,
+      });
+      expect(oldNativeSession.ok).toBe(false);
+      expect(oldNativeSession.error?.code).toBe('UNAUTHORIZED');
+      const newNativeSession = await started.service.handle({
+        id: 'new-native-session', protocolVersion: 1, method: 'task.list', payload: {}, token: rotated.result.token,
+      });
+      expect(newNativeSession.ok).toBe(true);
 
       // O token antigo deixa de autenticar (o IPC responde erro de sessão, não
       // um resultado); o novo autentica.
@@ -280,7 +327,7 @@ describe('conexão manual da extensão', () => {
       const newBody = (await newAuth.json()) as IpcBody;
       expect(newBody.ok).toBe(true);
       // E a tela passa a mostrar o token novo, que é o que o usuário cola.
-      const again = (await fetch(`${base}api/token`).then((r) => r.json())) as Cred;
+      const again = (await fetch(`${base}api/token`, { headers: { 'sec-fetch-site': 'same-origin' } }).then((r) => r.json())) as Cred;
       expect(again.result.token).toBe(rotated.result.token);
     } finally {
       started.panel?.close();

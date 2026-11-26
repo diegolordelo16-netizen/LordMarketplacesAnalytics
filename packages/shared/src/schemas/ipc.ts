@@ -61,6 +61,8 @@ export const capturedListingMetricsSchema = z.object({
   orders: z.number().finite().nonnegative().optional(),
   units: z.number().finite().nonnegative().optional(),
   gmv: z.number().finite().nonnegative().optional(),
+  /** Não inferir a partir de GMV; só aceitar quando houver fonte explícita. */
+  netRevenue: z.number().finite().nonnegative().optional(),
   organicImpressions: z.number().finite().nonnegative().optional(),
   paidImpressions: z.number().finite().nonnegative().optional(),
   adSpend: z.number().finite().nonnegative().optional(),

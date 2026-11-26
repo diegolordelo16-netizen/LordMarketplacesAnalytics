@@ -143,25 +143,43 @@ export function simulateScenario(input: ScenarioInput): ScenarioResult {
   const operatingMargin = ratio(operatingProfitCents, revenueAfterDiscountCents).value;
 
   // Piso de preço: menor preço por unidade em que a contribuição unitária cobre a margem mínima.
-  const variablePerUnit =
+  const baseVariablePerUnit =
     input.costs.unitCostCents +
     input.costs.packagingCents +
     input.costs.shippingCents +
     input.costs.otherVariableCents +
     (input.couponCents ?? 0);
+  const returnFraction = (input.returnRatePct ?? 0) / 100;
+  const cancellationFraction = (input.cancellationRatePct ?? 0) / 100;
+  const returnLossPerUnit = returnFraction * (
+    input.costs.unitCostCents + input.costs.packagingCents + input.costs.shippingCents + (input.reverseLogisticsCents ?? 0)
+  );
+  const cancellationLossPerUnit = cancellationFraction * (
+    (input.costs.unitCostCents + input.costs.packagingCents + input.costs.shippingCents) * 0.5
+  );
+  const variablePerUnit = baseVariablePerUnit + returnLossPerUnit + cancellationLossPerUnit;
   const feePctFraction =
     (input.fee.commissionPct + (input.fee.installmentPct ?? 0) + input.costs.taxPct) / 100;
-  const denominator = 1 - feePctFraction - input.costs.minMarginPct / 100;
+  const discountMultiplier = 1 - (input.discountPct ?? 0) / 100;
+  // O ponto de equilíbrio não inclui lucro; o piso acrescenta a margem mínima.
+  // Ambos consideram desconto médio, taxas, custos e perdas esperadas por unidade.
+  const breakEvenDenominator = discountMultiplier * (1 - feePctFraction);
+  const minMarginDenominator = discountMultiplier * (1 - feePctFraction - input.costs.minMarginPct / 100);
+  const breakEvenPriceCents =
+    breakEvenDenominator > 0
+      ? Math.ceil((variablePerUnit + input.fee.fixedFeeCents) / breakEvenDenominator)
+      : null;
   const minPriceForMarginCents =
-    denominator > 0
-      ? Math.ceil((variablePerUnit + input.fee.fixedFeeCents) / denominator)
+    minMarginDenominator > 0
+      ? Math.ceil((variablePerUnit + input.fee.fixedFeeCents) / minMarginDenominator)
       : null;
 
   const unitContributionCents = q > 0 ? Math.round(contributionCents / q) : 0;
-  const breakEvenPriceCents =
-    denominator > 0 ? Math.ceil((variablePerUnit + input.fee.fixedFeeCents) / denominator) : null;
+  const effectiveUnitPrice = input.priceCents * (1 - (input.discountPct ?? 0) / 100);
   const unitMarginPct =
-    input.priceCents > 0 ? ((input.priceCents * (1 - feePctFraction) - variablePerUnit) / input.priceCents) * 100 : null;
+    effectiveUnitPrice > 0
+      ? ((effectiveUnitPrice * (1 - feePctFraction) - input.fee.fixedFeeCents - variablePerUnit) / effectiveUnitPrice) * 100
+      : null;
 
   return {
     grossRevenueCents,
@@ -193,7 +211,8 @@ export function simulateScenario(input: ScenarioInput): ScenarioResult {
       'Receita líquida = receita após descontos − comissão − parcelamento − taxa fixa − impostos',
       'Contribuição = receita líquida − produto − embalagem − frete − outros variáveis − cupom − perdas de devolução/cancelamento',
       'Lucro operacional = contribuição − Ads − custos fixos alocados',
-      'Piso de preço = (variáveis + taxa fixa) / (1 − taxas% − margem mínima%)',
+      'Ponto de equilíbrio = (custos variáveis + taxa fixa) / (1 − taxas%)',
+      'Piso de margem = (custos variáveis + taxa fixa) / (1 − taxas% − margem mínima%)',
     ],
   };
 }
@@ -241,23 +260,30 @@ export function priceCorridor(params: {
   const marketTarget = targetIdx >= 0 ? (sorted[targetIdx] as Cents) : null;
 
   let recommended: Cents | null = null;
-  if (marketTarget !== null) recommended = marketTarget;
-  if (recommended !== null && floorCents !== null && recommended < floorCents) {
-    recommended = floorCents;
-    blockedBy.push('preço competitivo abaixo do piso de margem: mantido o piso');
-  }
-  if (recommended === null && floorCents !== null) recommended = floorCents;
+  const maxReductionPct = Math.min(100, Math.max(0, Number.isFinite(params.maxReductionPct) ? params.maxReductionPct : 0));
+  const maxIncreasePct = Math.max(0, Number.isFinite(params.maxIncreasePct) ? params.maxIncreasePct : 0);
+  const minAllowed = Math.round(params.currentPriceCents * (1 - maxReductionPct / 100));
+  const maxAllowed = Math.round(params.currentPriceCents * (1 + maxIncreasePct / 100));
 
-  if (recommended !== null) {
-    const minAllowed = Math.round(params.currentPriceCents * (1 - params.maxReductionPct / 100));
-    const maxAllowed = Math.round(params.currentPriceCents * (1 + params.maxIncreasePct / 100));
+  if (floorCents === null) {
+    blockedBy.push('piso de margem indisponível: recomendação de preço bloqueada');
+  } else if (maxAllowed < floorCents) {
+    blockedBy.push('piso de margem acima do limite máximo autorizado: recomendação bloqueada');
+  } else {
+    recommended = marketTarget ?? floorCents;
+    if (recommended < floorCents) {
+      recommended = floorCents;
+      blockedBy.push('preço competitivo abaixo do piso de margem: mantido o piso');
+    }
     if (recommended < minAllowed) {
-      recommended = minAllowed;
-      blockedBy.push(`redução limitada a ${params.maxReductionPct}% pelo usuário`);
+      recommended = Math.max(minAllowed, floorCents);
+      blockedBy.push(`redução limitada a ${maxReductionPct}% pelo usuário`);
     }
     if (recommended > maxAllowed) {
-      recommended = maxAllowed;
-      blockedBy.push(`aumento limitado a ${params.maxIncreasePct}% pelo usuário`);
+      // maxAllowed só pode ficar abaixo do piso caso os limites sejam incoerentes;
+      // a condição anterior já bloqueia esse cenário.
+      recommended = Math.max(floorCents, maxAllowed);
+      blockedBy.push(`aumento limitado a ${maxIncreasePct}% pelo usuário`);
     }
   }
 

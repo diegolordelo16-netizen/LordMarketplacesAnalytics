@@ -22,23 +22,27 @@
   /**
    * Classifica a página pelas áreas REAIS do painel do vendedor.
    *
-   * As páginas de vendedor usam os nomes do serviço (`seller_*`): o tipo `metrics`
-   * não existe no contrato de captura, então a tela «Resumo» do vendedor caía em
-   * «não reconhecida» e não gerava dado nenhum.
+   * As páginas enviam apenas valores do enum compartilhado (`product_detail`,
+   * `seller_dashboard`, `seller_listings`, etc.); qualquer outro valor seria
+   * rejeitado pelo schema de captura.
    */
   function detectPageKind(url) {
-    if (/\/(anuncios|publicaciones|listing)\//i.test(url) || /\/ML[A-Z]-?\d+/i.test(url)) return 'listing_public';
+    // Rotas editoriais do vendedor precedem o ID do anúncio. URLs públicas
+    // /items/MLB... continuam sendo detalhe de produto, não lista do vendedor.
+    if (/\/(moderador|mis-publicaciones)(\/|$)/i.test(url)) return 'seller_listings';
+    if (/\/ML[A-Z]-?\d+/i.test(url)) return 'product_detail';
+    if (/\/(itens|items)(\/|$)/i.test(url)) return 'seller_listings';
     // Painel do vendedor (vendedores./central de vendas).
     if (/\/(resumo|summary|dashboard|home)(\/|$|\?|#)/i.test(url)) return 'seller_dashboard';
     if (/\/(vendas|ventas|orders|pedidos)\b/i.test(url)) return 'seller_orders';
     if (/\/(metricas|métricas|stats|performance)\b/i.test(url)) return 'seller_dashboard';
-    if (/\/(moderador|anuncios|publicaciones|mis-publicaciones|itens)\b/i.test(url)) return 'seller_listings';
+    if (/\/(anuncios|publicaciones)(\/|$)/i.test(url) && /vendedores\.|seller/i.test(url)) return 'seller_listings';
     if (/\/(publicidade|product_ads|ads|promocoes|promociones)\b/i.test(url)) return 'seller_ads';
     if (/\/(perguntas|preguntas|questions)\b/i.test(url)) return 'seller_questions';
     if (/\/(reputacao|reputación|reputation)\b/i.test(url)) return 'seller_reputation';
     if (/\/(devolucoes|devoluciones|returns)\b/i.test(url)) return 'seller_returns';
     if (/\/(estoque|inventario|inventory|stock)\b/i.test(url)) return 'seller_inventory';
-    if (/\/(produtos|productos|items)\b/i.test(url)) return 'listing_list';
+    if (/\/(produtos|productos)\b/i.test(url)) return 'seller_listings';
     if (/\/(login|sesion)\b/i.test(url)) return 'login';
     return 'unknown';
   }
@@ -116,7 +120,8 @@
       url: typeof location !== 'undefined' ? location.href : '',
       listings: Object.keys(listing).length > 1 ? [listing] : [],
       evidence,
-      missing: Object.keys(LABELS).filter((k) => evidence[k] === undefined),
+      missing: ['visits', 'orders', 'units', 'gmv', 'stockAvailable', 'questionsPending', 'reviewRating', 'reviewCount', 'organicImpressions', 'paidImpressions']
+        .filter((field) => evidence[field] === undefined),
     };
   }
 
@@ -141,7 +146,7 @@
     }
     return {
       marketplace: 'mercado_livre',
-      pageKind: 'listing_list',
+      pageKind: 'seller_listings',
       url: typeof location !== 'undefined' ? location.href : '',
       listings: rows,
       evidence: { rows: String(rows.length) },
@@ -150,7 +155,7 @@
   }
 
   function snapshot() {
-    if (pageKind === 'listing_list') return captureListingList();
+    if (pageKind === 'seller_listings') return captureListingList();
     return captureCurrentPage();
   }
 

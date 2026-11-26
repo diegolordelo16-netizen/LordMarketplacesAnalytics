@@ -318,11 +318,11 @@ Acesso e sessao
     ping
         (sem dados)
     auth.bootstrap
-        email (texto) | password (texto) | displayName (texto)
+        (sem dados)
     auth.login
-        email (texto) | password (texto)
+        (sem dados)
     auth.session
-        token (texto)
+        (sem dados)
     auth.logout
         (sem dados)
 
@@ -330,17 +330,17 @@ Configuracoes
 -------------
 
     settings.get
-        key (texto)
+        (sem parâmetros)
     settings.set
-        key (texto) | value (qualquer)
+        (sem dados)
 
 Chave de IA
 -----------
 
     gemini.setKey
-        apiKey (texto)
-    gemini.testKey
         (sem dados)
+    gemini.testKey
+        (sem parâmetros — usa a chave gravada)
 
 Contas
 ------
@@ -348,25 +348,25 @@ Contas
     account.upsert
         marketplace (texto) | accountId (texto) | displayName (texto) | handle (texto) | confidence (numero) | verifiedByUser (booleano)
     account.list
-        (sem dados)
+        (sem parâmetros)
 
 Captura
 -------
 
     capture.ingest
-        marketplace | accountId | pageKind (opcao) | url | sourceClass | referenceAt | collectedAt | method | listings (lista) | evidence (registro)
+        (sem dados)
     capture.snapshot
-        listingId (texto) | days (numero)
+        (sem dados)
 
 Indicadores e missoes
 ---------------------
 
     kpi.listing
-        listingId (texto) | days (numero)
+        (sem dados)
     kpi.dashboard
-        (sem dados)
+        (sem parâmetros)
     missions.today
-        (sem dados)
+        (sem parâmetros)
 
 Financeiro
 ----------
@@ -374,139 +374,139 @@ Financeiro
     finance.simulate
         priceCents (numero) | quantity (numero) | commissionPct (numero) | fixedFeeCents (numero) | installmentPct (numero) | unitCostCents (numero) | packagingCents (numero) | shippingCents (numero) | taxPct (numero) | otherVariableCents (numero) | minMarginPct (numero) | discountPct (numero) | couponCents (numero) | adSpendCents (numero) | returnRatePct (numero) | cancellationRatePct (numero) | reverseLogisticsCents (numero)
     finance.costs.upsert
-        skuId | unitCostCents | packagingCents | shippingCents | otherVariableCents | taxPct | minMarginPct
+        skuId (texto) | unitCostCents (numero) | packagingCents (numero) | shippingCents (numero) | otherVariableCents (numero) | taxPct (numero) | minMarginPct (numero)
 
 Tarefas
 -------
 
     task.create
-        name | kind (opcao) | accountId | mode (opcao DRAFT|PUBLISH) | scheduleAt | recurrence | typing (objeto) | items (lista)
+        name (texto) | kind (texto) | accountId (texto) | mode (opcao) | scheduleAt (texto) | recurrence (texto) | typing (objeto) | items (lista) | listingId (texto) | marketplace (texto) | accountId (texto) | copies (numero) | title (texto) | descriptionAdditions (texto) | coverImageId (texto)
     task.list
         (sem dados)
     task.pause
-        taskId (texto)
+        (sem dados)
     task.resume
-        taskId (texto)
+        (sem dados)
     task.cancel
-        taskId (texto)
+        (sem dados)
     task.skipItem
-        itemId (texto)
+        (sem dados)
     task.runNow
-        taskId (texto)
+        (sem dados)
 
 Guard e auditoria
 -----------------
 
     guard.evaluate
-        action (opcao) | actorRole (opcao) | marketplace (objeto) | account | listing | currentState | financialLimits | requiredData | platformRules | authorization | conflicts
+        action (opcao) | actorRole (opcao) | marketplace (objeto) | account (objeto) | listing (objeto) | currentState (registro) | financialLimits (registro) | requiredData (objeto) | platformRules (objeto) | authorization (objeto) | conflicts (lista)
     audit.list
-        limit (numero) | changeSetId (texto)
+        (sem dados)
     audit.rollback
-        changeSetId (texto)
+        (sem dados)
 
 Adaptadores
 -----------
 
     adapter.diagnostics
-        marketplace (texto) | observed (registro)
+        (sem dados)
 
 Palavras-chave e ranking
 ------------------------
 
     keyword.upsert
-        term (texto) | marketplace (texto) | intent (texto) | language (texto)
+        term | marketplace | intent | language
     keyword.list
-        marketplace (texto) | limit (numero)
+        (sem dados)
     keyword.gap
-        accountId (texto)
+        (sem dados)
     rank.record
-        listingId (texto) | keywordId (texto) | position (numero) | isSponsored (booleano) | context (registro)
+        listingId | keywordId | position | isSponsored | context
     rank.history
-        listingId (texto) | limit (numero)
+        (sem dados)
 
 Concorrentes por vendedor
 -------------------------
 
     competitor.upsert
-        accountId | marketplace | name | handle | groupKind (opcao)
+        accountId | marketplace | name | handle | groupKind
     competitor.list
-        accountId (texto) | competitorId (texto) | limit (numero)
+        (sem dados)
     competitor.timeline
-        competitorId (texto) | limit (numero)
+        (sem dados)
     competitor.alerts
-        accountId (texto)
+        (sem dados)
 
 Concorrentes por produto
 ------------------------
 
     competitor.ownProduct.upsert
-        accountId (texto) | marketplace | title | atributos do produto
+        accountId | marketplace | title | brand | model | category | priceCents
     competitor.ownProduct.list
-        accountId (texto)
+        (sem dados)
     competitor.search
-        ownProductId | marketplaces (lista) | candidates (lista) | discoveryMethod (opcao) | sourceClass (opcao)
+        ownProductId | marketplaces | candidates[] | discoveryMethod | sourceClass
     competitor.relations
-        ownProductId (texto) | accountId (texto) | status (opcao)
+        ownProductId | accountId | status
     competitor.approve
-        relationId (texto) | actorRole (opcao)
+        relationId | actorRole
     competitor.reject
-        relationId (texto) | reason (texto)
+        relationId | actorRole | reason
     competitor.edit
-        relationId (texto) | campos editaveis
+        relationId | actorRole | patch
     competitor.changeCandidate
-        relationId (texto) | candidateId (texto)
+        relationId | actorRole | candidate
     competitor.reanalyze
-        relationId (texto)
+        relationId
     competitor.monitoring.set
-        relationId (texto) | state (opcao) | actorRole (opcao)
+        relationId | enabled | intervalHours
     competitor.monitoring.record
-        relationId (texto) | medicao
+        relationId | observed
     competitor.monitoring.history
-        relationId (texto) | limit (numero)
+        (sem dados)
     competitor.stats
-        accountId (texto) | ownProductId (texto) | marketplace (texto) | category (texto)
+        (sem dados)
 
 Mercado
 -------
 
     market.categorySnapshot
-        marketplace (texto) | category (texto)
-    market.opportunities
         (sem dados)
+    market.opportunities
+        accountId?
 
 Voz do cliente
 --------------
 
     voc.ingest
-        accountId (texto) | listingId (texto) | kind (opcao) | text (texto) | rating (numero)
+        accountId | listingId | kind | text | rating
     voc.topics
-        accountId (texto)
+        (sem dados)
 
 Growth e experimentos
 ---------------------
 
     growth.initiatives
-        (sem dados)
+        accountId?
     growth.metricTree
         (sem dados)
     experiment.create
-        accountId (texto) | title (texto) | design (texto) | variable (texto) | primaryMetric (texto) | guardrailMetrics (lista) | baselineRate (numero) | mde (numero) | plannedDays (numero)
+        accountId | title | design | variable | primaryMetric | guardrailMetrics | baselineRate | mde | plannedDays
     experiment.list
         (sem dados)
     experiment.result
-        experimentId (texto)
+        (sem dados)
 
 Agentes de IA
 -------------
 
     agent.run
-        agents (lista de chaves) | context (objeto AgentContext)
+        agents (lista) | context (registro)
     agent.runs
         (sem dados)
     agent.debate
-        topic (texto) | context (texto) | accountId (texto)
+        (sem dados)
     agent.memory
-        query (texto) | scope (texto)
+        (sem dados)
     agent.budget
         (sem dados)
 
@@ -514,13 +514,13 @@ Auto-upgrade
 ------------
 
     autoupgrade.propose
-        module (texto) | symptoms (texto) | currentCode (texto) | testCommand (texto)
+        (sem dados)
     autoupgrade.list
         (sem dados)
     autoupgrade.apply
-        proposalId (texto) | approved (booleano) | approverRole (opcao) | superAdminApproved (booleano)
+        (sem dados)
     autoupgrade.rollback
-        proposalId (texto) | files (lista)
+        (sem dados)
 
 Conectores e importacao
 -----------------------
@@ -528,7 +528,7 @@ Conectores e importacao
     connector.registry
         (sem dados)
     connector.import
-        fileName (texto) | rows (lista de registros)
+        (sem dados)
 
 Previsao, alertas, relatorios e backup
 --------------------------------------
@@ -538,11 +538,11 @@ Previsao, alertas, relatorios e backup
     alerts.list
         (sem dados)
     alerts.ack
-        alertId (texto) | falsePositive (booleano)
+        (sem dados)
     report.export
-        type (opcao: EXECUTIVO|KPIS|CONCORRENCIA|FINANCEIRO|EXPERIMENTOS|AUDITORIA) | format (opcao: csv|json)
+        type | format
     backup.create
-        note (texto)
+        (sem dados)
     backup.list
         (sem dados)
 
@@ -1248,7 +1248,32 @@ Previsao, alertas, relatorios e backup
   10. Growth iniciativas e somente leitura no servico: o botao agora avisa
       em vez de fingir que gravou.
 
-  Resultado: 177 de 177 testes aprovados, tsc limpo, pacote reinstalado e
+  Segunda rodada (correcoes recebidas em 26/11/2026 e aplicadas aqui):
+
+  11. Autorizacao de cada chamada interna: cada metodo tem uma permissao
+      propria e o servico nega por padrao. Dos 77 metodos, 72 exigem
+      permissao, 4 sao publicos (ping, auth.login, auth.bootstrap,
+      auth.session) e auth.logout exige apenas sessao valida. Metodo sem
+      politica e recusado, e a recusa vai para a auditoria.
+  12. Encerrar sessao (auth.logout) so encerra a sessao do proprio
+      usuario autenticado; antes aceitava encerrar a sessao de qualquer um.
+  13. Entrega do token em /api/token restrita ao painel da mesma origem e
+      ao ID autorizado da extensao; outra porta localhost nao recebe. A
+      rotacao de token exige origem confiavel, a sessao atual no cabecalho,
+      cria uma sessao nova de verdade e revoga a anterior nos dois canais
+      (HTTP e Native Messaging).
+  14. Receita liquida nunca e inferida do faturamento bruto: quando a
+      pagina nao informa, o KPI fica ausente e a lacuna e declarada.
+  15. Financeiro: ponto de equilibrio separado do piso minimo de margem, e
+      os dois descontam devolucoes e cancelamentos esperados; a margem
+      unitaria considera a taxa fixa do marketplace.
+  16. Classificacao de pagina publica corrigida: URL de anuncio publico
+      (/items/MLB...) e detalhe de produto, nao lista do vendedor.
+  17. Um teste antigo comparava dois valores nulos (receita liquida contra
+      GMV) e passava sem provar nada; agora ele prova que o bruto nao e
+      copiado para o liquido.
+
+  Resultado: 191 de 191 testes aprovados, tsc limpo, pacote reinstalado e
   verificado ponta a ponta (captura, guard, relatorio, tarefa, voz do
   cliente, financeiro).
 

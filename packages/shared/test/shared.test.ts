@@ -66,6 +66,7 @@ describe('motor de KPIs (§9)', () => {
     orders: 50,
     units: 60,
     grossRevenue: 30000,
+    netRevenue: 26000,
     adSpend: 2000,
     adClicks: 400,
     paidImpressions: 8000,
@@ -89,6 +90,7 @@ describe('motor de KPIs (§9)', () => {
     expect(k.pillars.acquisition_ads.tacos.value).toBeCloseTo((2000 / 30000) * 100, 6);
     expect(k.pillars.acquisition_ads.ctr.value).toBeCloseTo(5, 6);
     expect(k.pillars.discovery_seo.organicShare.value).toBeCloseTo(60, 6);
+    expect(k.pillars.revenue_profit.netRevenue).toBe(26000);
   });
 
   it('cobertura de estoque usa média diária de vendas', () => {
@@ -99,13 +101,22 @@ describe('motor de KPIs (§9)', () => {
     expect(k.pillars.operational_health.stockoutRisk).toBe('LOW');
   });
 
-  it('nunca transforma campo ausente em zero', () => {
-    const k = computeListingKpis({ ...base, adSpend: undefined, paidImpressions: undefined });
+  it('nunca transforma campo ausente em zero nem usa GMV como receita líquida', () => {
+    const k = computeListingKpis({ ...base, netRevenue: undefined, adSpend: undefined, paidImpressions: undefined });
     expect(k.pillars.acquisition_ads.adSpend).toBeNull();
     expect(k.pillars.acquisition_ads.roas.value).toBeNull();
     expect(k.pillars.acquisition_ads.roas.unavailableReason).toBeTruthy();
     expect(k.pillars.acquisition_ads.ctr.value).toBeNull();
+    expect(k.pillars.revenue_profit.netRevenue).toBeNull();
+    // O que importa é não copiar o GMV bruto para a receita líquida. A
+    // comparação anterior era entre dois nulos e passava sem provar nada:
+    // aqui o GMV tem valor e a receita líquida continua ausente.
+    // O defeito que este teste guarda é copiar o faturamento bruto para a
+    // receita líquida. Aqui a receita líquida é omitida de propósito e tem de
+    // continuar ausente — nunca receber o valor do bruto (30000).
+    expect(k.pillars.revenue_profit.netRevenue).not.toBe(30000);
     expect(k.missingInputs).toContain('adSpend');
+    expect(k.missingInputs).toContain('netRevenue');
   });
 
   it('estoque zero com vendas altas é risco crítico', () => {
@@ -149,7 +160,34 @@ describe('motor financeiro (§10)', () => {
   it('piso de preço respeita margem mínima', () => {
     const r = simulateScenario({ priceCents: 10000, quantity: 1, fee, costs });
     expect(r.minPriceForMarginCents).toBeGreaterThan(0);
+    expect(r.breakEvenPriceCents).toBeGreaterThan(0);
+    expect(r.breakEvenPriceCents).toBeLessThan(r.minPriceForMarginCents as number);
     const atFloor = simulateScenario({ priceCents: r.minPriceForMarginCents as number, quantity: 1, fee, costs });
+    expect(atFloor.respectsMinMargin).toBe(true);
+  });
+
+  it('piso de margem considera desconto e perdas esperadas', () => {
+    const withDiscount = simulateScenario({
+      priceCents: 12000,
+      quantity: 1,
+      fee,
+      costs,
+      discountPct: 10,
+      returnRatePct: 5,
+      cancellationRatePct: 2,
+      reverseLogisticsCents: 800,
+    });
+    expect(withDiscount.minPriceForMarginCents).toBeGreaterThan(withDiscount.breakEvenPriceCents as number);
+    const atFloor = simulateScenario({
+      priceCents: withDiscount.minPriceForMarginCents as number,
+      quantity: 1,
+      fee,
+      costs,
+      discountPct: 10,
+      returnRatePct: 5,
+      cancellationRatePct: 2,
+      reverseLogisticsCents: 800,
+    });
     expect(atFloor.respectsMinMargin).toBe(true);
   });
 
@@ -178,6 +216,20 @@ describe('motor financeiro (§10)', () => {
     expect(corridor.floorCents).not.toBeNull();
     expect(corridor.recommendedCents).toBeGreaterThanOrEqual(corridor.floorCents as number);
     expect(corridor.blockedBy.join(' ')).toMatch(/piso|limitada/);
+  });
+
+  it('bloqueia corredor quando o piso excede o aumento máximo autorizado', () => {
+    const corridor = priceCorridor({
+      costs,
+      fee,
+      competitorPricesCents: [5000, 5200, 5400],
+      currentPriceCents: 5000,
+      maxReductionPct: 10,
+      maxIncreasePct: 10,
+    });
+    expect(corridor.recommendedCents).toBeNull();
+    expect(corridor.scenarioAtRecommended).toBeNull();
+    expect(corridor.blockedBy.join(' ')).toMatch(/recomendação bloqueada/);
   });
 
   it('elasticidade exige histórico e avisa sobre causalidade', () => {

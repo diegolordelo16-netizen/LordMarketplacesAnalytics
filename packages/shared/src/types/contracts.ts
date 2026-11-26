@@ -27,6 +27,11 @@ export const ROLE_PERMISSIONS: Record<AccessRole, readonly Permission[]> = {
     'use_gemini_workspace',
     'view_reports',
     'manage_connectors',
+    'manage_accounts',
+    'manage_competitors',
+    'manage_market_intelligence',
+    'manage_experiments',
+    'manage_alerts',
   ],
   operador: ['execute_task', 'edit_listing', 'use_gemini_workspace', 'view_reports'],
   visualizador: ['view_reports'],
@@ -42,7 +47,12 @@ export type Permission =
   | 'edit_listing'
   | 'use_gemini_workspace'
   | 'view_reports'
-  | 'manage_connectors';
+  | 'manage_connectors'
+  | 'manage_accounts'
+  | 'manage_competitors'
+  | 'manage_market_intelligence'
+  | 'manage_experiments'
+  | 'manage_alerts';
 
 export function roleHasPermission(role: AccessRole, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);

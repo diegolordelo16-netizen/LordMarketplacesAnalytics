@@ -8,11 +8,11 @@
   'use strict';
 
   function detectPageKind(url) {
-    if (/\/product\//i.test(url)) return 'listing_public';
-    if (/\/portal\/product\/(list|manage)/i.test(url)) return 'listing_list';
-    if (/\/datacenter|\/business-insights/i.test(url)) return 'metrics';
-    if (/\/order/i.test(url)) return 'orders';
-    if (/\/marketing\/ads|\/ads\//i.test(url)) return 'ads';
+    if (/\/portal\/product\/(list|manage)/i.test(url)) return 'seller_listings';
+    if (/\/product\//i.test(url)) return 'product_detail';
+    if (/\/datacenter|\/business-insights/i.test(url)) return 'seller_dashboard';
+    if (/\/order/i.test(url)) return 'seller_orders';
+    if (/\/marketing\/ads|\/ads\//i.test(url)) return 'seller_ads';
     return 'unknown';
   }
 
@@ -24,7 +24,7 @@
     stock: ['estoque', 'stock'],
     rating: ['avaliação', 'rating'],
     reviews: ['avaliações', 'reviews'],
-    organic: ['impressões', 'impressions'],
+    organic: ['impressões orgânicas', 'organic impressions'],
     adSpend: ['gasto com anúncios', 'ad spend'],
     adClicks: ['cliques', 'clicks'],
   };
@@ -72,7 +72,8 @@
       url: location.href,
       listings: Object.keys(listing).length > 1 ? [listing] : [],
       evidence,
-      missing: Object.keys(LABELS).filter((k) => evidence[k] === undefined),
+      missing: ['visits', 'orders', 'units', 'gmv', 'stockAvailable', 'reviewRating', 'reviewCount', 'organicImpressions', 'adSpend', 'adClicks']
+        .filter((field) => evidence[field] === undefined),
     };
   }
 
