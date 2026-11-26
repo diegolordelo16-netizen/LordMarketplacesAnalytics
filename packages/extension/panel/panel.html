@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Marketplace Intelligence</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="dot" id="status-dot" aria-hidden="true"></span>
+        <strong>Marketplace Intelligence</strong>
+      </div>
+      <span class="version" id="version">v3.2.0</span>
+    </header>
+
+    <section class="card">
+      <h2>Página atual</h2>
+      <dl class="kv">
+        <dt>Marketplace</dt><dd id="mp">—</dd>
+        <dt>Tipo de página</dt><dd id="kind">—</dd>
+        <dt>Dados visíveis</dt><dd id="fields">—</dd>
+        <dt>Ausentes</dt><dd id="missing">—</dd>
+      </dl>
+      <div class="actions">
+        <button id="capture" class="primary">Capturar esta página</button>
+        <button id="flush">Enviar fila</button>
+      </div>
+      <p class="hint" id="hint">A captura lê apenas o que está visível na sua sessão. Nada de cookies, tokens ou endpoints privados.</p>
+    </section>
+
+    <section class="card">
+      <h2>Serviço local</h2>
+      <p class="state" id="service-state">verificando…</p>
+      <ul class="svc" id="svc-list">
+        <li><span class="dot idle" id="dot-worker"></span><span class="svc-name">Extensão</span><span class="svc-note" id="note-worker">—</span></li>
+        <li><span class="dot idle" id="dot-http"></span><span class="svc-name">Serviço HTTP</span><span class="svc-note" id="note-http">—</span></li>
+        <li><span class="dot idle" id="dot-native"></span><span class="svc-name">Host nativo</span><span class="svc-note" id="note-native">—</span></li>
+        <li><span class="dot idle" id="dot-token"></span><span class="svc-name">Token de sessão</span><span class="svc-note" id="note-token">—</span></li>
+      </ul>
+      <button id="ping">Testar conexão</button>
+      <p class="hint">Verde = funciona, amarelo = responde com erro, vermelho = fora do ar. O host nativo é preferido; sem ele o painel usa 127.0.0.1 com token de sessão.</p>
+    </section>
+
+    <section class="card">
+      <h2>Conexão manual</h2>
+      <p class="hint">
+        Se a descoberta automática não achar o serviço, cole aqui a porta e o token
+        que a tela de Pré-Start gera. Eles ficam só neste navegador.
+      </p>
+      <label class="field-label" for="manual-port">Porta</label>
+      <input id="manual-port" type="number" min="1" max="65535" placeholder="47811" />
+      <label class="field-label" for="manual-token">Token de sessão</label>
+      <input id="manual-token" type="text" placeholder="cole o token aqui" spellcheck="false" />
+      <button id="manual-save">Usar estas credenciais</button>
+      <p class="hint" id="manual-out"></p>
+    </section>
+
+    <section class="card">
+      <h2>Regra de honestidade</h2>
+      <ul class="rules">
+        <li>Ausente ≠ zero: o que não foi lido aparece como <em>não coletado</em>.</li>
+        <li>Estimativa nunca é apresentada como dado real.</li>
+        <li>Toda ação sensível exige aprovação e fica no log de auditoria.</li>
+      </ul>
+    </section>
+
+    <script src="panel.js" type="module"></script>
+  </body>
+</html>

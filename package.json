@@ -1,21 +1,30 @@
 {
-  "name": "lord-marketplaces-analytics",
-  "version": "0.1.0",
+  "name": "marketplace-intelligence",
   "private": true,
-  "description": "Lord Marketplaces Analytics — inteligência operacional de marketplaces (Local First)",
-  "scripts": {
-    "dev:agent": "pnpm --filter @lma/local-agent dev",
-    "dev:ext": "pnpm --filter @lma/extension dev",
-    "build": "pnpm -r build",
-    "test": "pnpm -r test"
-  },
+  "version": "0.1.0",
+  "description": "Marketplace Intelligence & Autonomous Operations - monorepo",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "engines": {
-    "node": ">=22.14.0"
+    "node": ">=20"
   },
-  "packageManager": "pnpm@9.15.9",
-  "pnpm": {
-    "overrides": {
-      "undici": "^6.21.0"
-    }
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "agent:build": "node scripts/build-local-agent.mjs",
+    "host:build": "node scripts/build-native-host.mjs",
+    "ext:build": "node scripts/build-extension.mjs",
+    "db:generate": "node scripts/db-generate.mjs",
+    "package:win": "node scripts/package-windows.mjs",
+    "start:serve": "node dist/local-agent/main.js --serve"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
   }
 }

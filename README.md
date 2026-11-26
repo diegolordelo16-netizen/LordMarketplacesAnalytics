@@ -1,120 +1,52 @@
-# Lord Marketplaces Analytics
+# Marketplace Intelligence & Autonomous Operations
 
-Inteligência operacional de marketplaces, **Local First**: roda no seu computador,
-usa a sessão que você já tem aberta no navegador, e guarda tudo em um banco SQLite
-local. Sem servidor, sem nuvem obrigatória, sem API oficial de marketplace.
+Plataforma Local First de inteligência e operações autônomas para marketplaces.
+Funciona no navegador autenticado do vendedor: **sem APIs oficiais**, sem cookies,
+sem tokens, sem endpoints privados.
 
-## O que ele faz hoje
+## Estado verificado
 
-- **Reconhece** a página do marketplace aberta (Mercado Livre e Shopee)
-- **Captura** a lista de anúncios/produtos do painel do vendedor nos dois — lendo o
-  DOM que a página já mostra, nunca endpoint privado
-- **Grava com proveniência**: fonte, marketplace, conta, URL, data de referência,
-  data de coleta, método e versão do adapter em cada observação
-- **Calcula** alertas (estoque zerado, estoque baixo, variação de preço)
-- **Planeja**: a IA interna gera recomendações priorizadas, determinísticas e
-  auditáveis, e declara o que não consegue concluir
-- **Audita** o plano com o Gemini, opcional, com cota diária local
-- **Central de Melhorias**: só o proprietário aprova mudanças permanentes
+| Componente | Estado | Prova |
+|---|---|---|
+| `packages/shared` | TESTADO | 67 testes (KPI, finanças, guard, preservação, similaridade competitiva) |
+| `packages/local-agent` | TESTADO | 55 testes (SQLite, captura, guard, Gemini, agentes, concorrentes) |
+| `packages/native-host` | TESTADO | 14 testes + smoke real de framing |
+| `packages/extension` | PARCIAL | 14 testes estáticos; falta teste em navegador real |
+| Instalador Windows | GERADO | `installer/output/MarketplaceIntelligence-Setup.exe` compilado e instalado/desinstalado em teste |
 
-## Regra de integridade
+## Instalar (usuário final)
 
-Todo dado carrega um status, e ele nunca é inventado:
+1. Execute `MarketplaceIntelligence-Setup.exe`.
+2. Abra **Marketplace Intelligence — Painel local** no menu Iniciar.
+3. Abra **Instalar extensão no navegador** e carregue a pasta `extension` em
+   `chrome://extensions` (modo do desenvolvedor).
 
-| Status | Significado |
-|---|---|
-| `VERIFIED` | lido da página e legível |
-| `ZERO` | zero confirmado na tela — não é ausência |
-| `UNKNOWN` | apareceu mas não foi possível interpretar |
-| `NOT_COLLECTED` | o campo não estava na página |
-| `UNAVAILABLE` | existe mas o marketplace não expõe |
-| `ESTIMATED` | derivado de suposição (marcado como tal) |
-| `CALCULATED` | resultado de cálculo sobre dados verificados |
+## Desenvolvimento
 
-**Estoque que não apareceu não é estoque zero.** Confundir os dois faria o sistema
-recomendar reposição de um produto cheio. Por isso o banco rejeita observação sem
-proveniência completa.
-
-## Estrutura
-
-```
-packages/protocol      contrato de mensagens (envelope, namespaces, erros)
-apps/local-agent       serviço local: banco, adapters, IA, Gemini, melhorias
-apps/extension         extensão MV3: Side Panel + service worker + content script
-tests/                 integração extensão ↔ serviço local
-scripts/               empacotador Windows
-docs/                  arquitetura e guia de uso
+```bash
+npm ci
+npx tsc --noEmit -p tsconfig.json     # tipos
+npx vitest run                        # suíte completa
+node scripts/build-local-agent.mjs    # serviço local
+node scripts/build-native-host.mjs    # host nativo + registrador
+node scripts/build-extension.mjs      # extensão MV3
+node scripts/package-windows.mjs      # instalador (requer Inno Setup 6)
 ```
 
-## Instalação
+## Inteligência competitiva assistida
 
-**Opção 1 — instalador (recomendado)**
+1. Cadastre o produto próprio (catálogo ou link).
+2. Escolha os marketplaces e rode a busca.
+3. As sugestões entram em **PENDENTE DE REVISÃO** — nunca aprovadas sozinhas.
+4. Aprove, rejeite (com motivo), edite, recategorize ou peça nova análise.
+5. Aprovados entram em monitoramento contínuo; rejeitados alimentam o aprendizado.
+6. As regras aprendidas (`competitor_learning_rules`) são aplicadas nas próximas buscas,
+   com suporte e evidência — não é "modelo treinado", é regra explícita e auditável.
 
-Execute `release/installer/Setup-LordMarketplacesAnalytics-0.4.0.exe`.
-Instala por usuário (sem UAC, sem admin) em `%LOCALAPPDATA%\LordMarketplacesAnalytics`.
-Não é preciso ter Node, Python, Git ou npm na máquina: o runtime vai embutido.
+## Regras invioláveis
 
-Depois de instalar, abra **"Instalar extensão no navegador"** no menu Iniciar e
-carregue a pasta `extension` com "Carregar sem compactação". O ID da extensão
-é calculado na instalação e gravado em `extension.json` — o serviço local já
-aceita exatamente aquela origem, sem copiar ID nem editar nada.
-
-Painel do serviço: <http://127.0.0.1:47822/> (estado, banco, e gerar novo
-token de pareamento quando o anterior expirar).
-
-**Opção 2 — portátil**
-
-Extraia `LordMarketplacesAnalytics-0.4.0.zip` e rode `start.cmd`. Nesse caso
-defina `LMA_EXTENSION_ORIGIN=chrome-extension://<ID>` antes de conectar.
-
----
-## Como rodar (desenvolvimento) (desenvolvimento)
-
-Requisitos: Node 22+, pnpm 9+.
-
-```sh
-pnpm install
-pnpm -r test          # 126 testes
-pnpm --filter @lma/local-agent dev    # imprime o token de pareamento
-pnpm --filter @lma/extension build    # gera apps/extension/dist
-```
-
-Depois carregue `apps/extension/dist` em `chrome://extensions` (modo desenvolvedor),
-copie o ID da extensão e reinicie o serviço com:
-
-```sh
-LMA_EXTENSION_ORIGIN="chrome-extension://SEU_ID" pnpm --filter @lma/local-agent dev
-```
-
-## Como gerar o pacote Windows
-
-```sh
-node scripts/package-windows.mjs
-```
-
-Produz em `release/`:
-
-- `LordMarketplacesAnalytics/` — pasta portátil com `runtime/node.exe` embutido
-- `LordMarketplacesAnalytics-0.1.0.zip` — o mesmo, compactado (~35 MB)
-
-O usuário final **não instala Node, Python, Git nem npm**: abre `start.cmd`.
-
-## Segurança
-
-- O serviço escuta **apenas** em `127.0.0.1`
-- Origem validada contra allowlist explícita (`chrome-extension://<id>`), sem curinga
-- Token de pareamento de uso único, com expiração e comparação em tempo constante
-- Payload limitado por namespace; envelope validado campo a campo
-- Trilha de auditoria com encadeamento de hash (adulteração é detectável)
-- Nenhuma senha, cookie ou token de marketplace é lido ou transmitido
-
-## Estado
-
-Versão `0.3.0` — prova de conceito completa: captura real, persistência com
-proveniência, alertas, plano do cérebro, Gemini opcional, central de melhorias,
-pacote Windows portátil e 126 testes verdes.
-
-Ainda não implementado: captura de publicidade,
-instalador `Setup.exe` assinado, Native Messaging (depende de extensão publicada).
-
-Detalhes em [`docs/`](docs/).
+- Ausente ≠ zero: campo não lido fica `NOT_COLLECTED`/`UNKNOWN`.
+- Estimativa nunca é apresentada como dado real.
+- Descrição de anúncio só é alterada por acréscimo, com diff auditável.
+- Chave Gemini fica cifrada no serviço local, nunca no frontend.
+- Ação sensível exige aprovação e entra no `audit_log`.

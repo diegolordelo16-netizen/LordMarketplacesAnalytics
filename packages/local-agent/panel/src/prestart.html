@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Marketplace Intelligence — Pré-Start e Diagnóstico</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body class="prestart-body">
+  <main class="prestart">
+    <header class="prestart-head">
+      <div>
+        <div class="prestart-eyebrow">Marketplace Intelligence &amp; Autonomous Operations</div>
+        <h1>Pré-Start &amp; Diagnóstico</h1>
+        <p class="prestart-sub">
+          Tudo aqui é local. A tela confere o serviço, o banco, o host nativo e a extensão
+          antes de você entrar no painel.
+        </p>
+      </div>
+      <div class="prestart-version" id="ps-version">—</div>
+    </header>
+
+    <section class="ps-grid">
+      <!-- 1. Checklist -->
+      <div class="ps-card ps-span2">
+        <div class="ps-card-head">
+          <h2>Checklist do ambiente</h2>
+          <button class="btn btn-ghost" id="ps-refresh">Atualizar</button>
+        </div>
+        <div id="ps-checks" class="ps-checks">
+          <div class="note">Verificando…</div>
+        </div>
+      </div>
+
+      <!-- 2. Extensão -->
+      <div class="ps-card ps-span2">
+        <div class="ps-card-head">
+          <h2>Instalar a extensão no navegador</h2>
+          <span class="badge" id="ps-ext-badge">aguardando</span>
+        </div>
+        <p class="ps-help">
+          O instalador já registrou o host nativo. Falta só carregar a pasta da extensão
+          no navegador — três passos, uma vez só.
+        </p>
+        <div class="ps-path">
+          <code id="ps-ext-path">—</code>
+          <button class="btn" id="ps-copy">Copiar caminho</button>
+        </div>
+        <div class="ps-steps">
+          <div class="ps-step"><span>1</span> Abra a página de extensões do navegador.</div>
+          <div class="ps-step"><span>2</span> Ative o <strong>Modo do desenvolvedor</strong>.</div>
+          <div class="ps-step"><span>3</span> Clique em <strong>Carregar sem compactação</strong> e cole o caminho (Ctrl+V).</div>
+        </div>
+        <div class="ps-actions">
+          <button class="btn" id="ps-open-chrome">Abrir extensões no Chrome</button>
+          <button class="btn btn-ghost" id="ps-open-edge">Abrir extensões no Edge</button>
+        </div>
+        <p class="ps-help">
+          O ID da extensão deve ser <code id="ps-ext-id">—</code>.
+          Assim que ela estiver carregada, o selo acima muda sozinho para
+          <strong>Extensão conectada</strong>.
+        </p>
+      </div>
+
+      <!-- 3. Credenciais para colar na extensão -->
+      <div class="ps-card ps-span2">
+        <div class="ps-card-head">
+          <h2>Conexão manual da extensão</h2>
+          <button class="btn btn-ghost" id="ps-token-refresh">Gerar novo token</button>
+        </div>
+        <p class="ps-help">
+          Use quando a extensão não encontrar o serviço sozinha. Copie a porta e o
+          token abaixo e cole no painel da extensão, em
+          <strong>Conexão manual</strong>. O token vale só nesta máquina e só
+          enquanto este serviço estiver rodando; um token novo invalida o antigo.
+        </p>
+        <div class="ps-path">
+          <span class="ps-cred-label">Porta</span>
+          <code id="ps-cred-port">—</code>
+          <button class="btn btn-ghost" id="ps-copy-port">Copiar porta</button>
+        </div>
+        <div class="ps-path">
+          <span class="ps-cred-label">Token</span>
+          <code id="ps-cred-token">—</code>
+          <button class="btn btn-ghost" id="ps-copy-token">Copiar token</button>
+        </div>
+        <div class="ps-actions">
+          <button class="btn btn-ghost" id="ps-copy-both">Copiar os dois</button>
+        </div>
+        <div id="ps-cred-out" class="ps-result"></div>
+      </div>
+
+      <!-- 4. Testes -->
+      <div class="ps-card">
+        <div class="ps-card-head"><h2>Testar comunicação</h2></div>
+        <p class="ps-help">Serviço local ↔ host nativo ↔ extensão.</p>
+        <button class="btn btn-primary" id="ps-ping">Testar comunicação</button>
+        <div id="ps-ping-out" class="ps-result"></div>
+      </div>
+
+      <div class="ps-card">
+        <div class="ps-card-head"><h2>Testar leitura da aba</h2></div>
+        <p class="ps-help">Verifica se há aba de marketplace aberta e se a extensão responde.</p>
+        <button class="btn btn-primary" id="ps-tabtest">Testar leitura na aba</button>
+        <div id="ps-tab-out" class="ps-result"></div>
+      </div>
+
+      <!-- 5. Logs -->
+      <div class="ps-card ps-span2">
+        <div class="ps-card-head">
+          <h2>Logs ao vivo</h2>
+          <div class="ps-log-controls">
+            <select id="ps-log-file" class="input"></select>
+            <select id="ps-log-level" class="input">
+              <option value="">Todos os níveis</option>
+              <option value="INFO">INFO</option>
+              <option value="WARN">WARN</option>
+              <option value="ERROR">ERROR</option>
+            </select>
+            <button class="btn btn-ghost" id="ps-log-copy">Copiar log</button>
+            <button class="btn btn-ghost" id="ps-log-download">Exportar</button>
+          </div>
+        </div>
+        <pre id="ps-log" class="ps-log">carregando…</pre>
+      </div>
+    </section>
+
+    <footer class="ps-footer">
+      <label class="ps-check-inline">
+        <input type="checkbox" id="ps-always" />
+        Sempre abrir direto no Dashboard nas próximas vezes
+      </label>
+      <button class="btn btn-primary btn-lg" id="ps-go">Ir para o Dashboard Principal →</button>
+    </footer>
+
+    <!-- Barra fixa: o avanço para o painel está sempre visível, mesmo com a
+         página rolada, e repete o estado da extensão no topo da tela. -->
+    <div class="ps-dock">
+      <span class="badge" id="ps-dock-badge">aguardando conexão</span>
+      <span class="ps-dock-note">A extensão é opcional: o painel abre agora, com ou sem ela.</span>
+      <button class="btn btn-primary" id="ps-dock-go">Ir para o Dashboard Principal →</button>
+    </div>
+  </main>
+  <div id="toasts"></div>
+  <script src="prestart.js"></script>
+</body>
+</html>

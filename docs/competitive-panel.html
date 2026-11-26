@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketplace Intelligence — Inteligência Competitiva</title>
+<style>
+  :root {
+    --bg:#0b0f16; --panel:#141a24; --panel2:#1a2230; --line:#26303f; --text:#e8eef6; --muted:#8b98ab;
+    --accent:#2f81f7; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --dev:#58a6ff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 "Segoe UI",system-ui,sans-serif; }
+  .wrap { max-width:1200px; margin:0 auto; padding:24px 18px 60px; }
+  header { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
+  h1 { font-size:19px; margin:0; }
+  .sub { color:var(--muted); font-size:12.5px; }
+  .status { display:flex; align-items:center; gap:8px; font-size:12px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:18px; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .kpi .n { font-size:23px; font-weight:700; }
+  .kpi .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .kpi.pend .n { color:var(--warn); } .kpi.apr .n { color:var(--ok); } .kpi.rej .n { color:var(--bad); }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  select, input, button { font:inherit; color:var(--text); background:#1f2632; border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.ghost { background:transparent; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; border-bottom:1px solid var(--line); }
+  .tab { padding:9px 14px; border:none; background:transparent; color:var(--muted); border-bottom:2px solid transparent; border-radius:0; }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:10px; }
+  .card h3 { margin:0 0 4px; font-size:14.5px; }
+  .meta { color:var(--muted); font-size:12px; }
+  .score { font-weight:700; font-size:15px; }
+  .score.hi { color:var(--ok); } .score.mid { color:var(--warn); } .score.lo { color:var(--muted); }
+  .badge { display:inline-block; padding:2px 7px; border-radius:5px; font-size:11px; font-weight:700; }
+  .badge.DIRETO { background:#1f3a2a; color:#56d364; }
+  .badge.SIMILAR { background:#3a3118; color:#e3b341; }
+  .badge.INDIRETO { background:#2a2f3a; color:#9aa7b8; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .actions button { font-size:12px; padding:5px 9px; }
+  .rationale { margin:8px 0 0; font-size:12.5px; color:#c3cedd; }
+  .rationale ul { margin:6px 0 0; padding-left:18px; color:var(--muted); }
+  .empty { color:var(--muted); padding:22px; text-align:center; border:1px dashed var(--line); border-radius:12px; }
+  .note { border-left:3px solid var(--accent); background:#111926; padding:10px 12px; border-radius:8px; font-size:12.5px; color:#c8d3e1; margin-bottom:14px; }
+  .note.warn { border-left-color:var(--warn); }
+  footer { color:var(--muted); font-size:11.5px; border-top:1px solid var(--line); padding-top:12px; margin-top:20px; }
+  .row { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Inteligência Competitiva — revisão assistida</h1>
+      <div class="sub">A IA sugere, você decide. Nada entra em monitoramento sem aprovação humana.</div>
+    </div>
+    <div class="status"><span class="dot" id="dot"></span><span id="conn">verificando serviço local…</span></div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi pend"><div class="n" id="k-pend">—</div><div class="l">pendentes de revisão</div></div>
+    <div class="kpi apr"><div class="n" id="k-apr">—</div><div class="l">aprovados</div></div>
+    <div class="kpi rej"><div class="n" id="k-rej">—</div><div class="l">rejeitados</div></div>
+    <div class="kpi"><div class="n" id="k-prec">—</div><div class="l">precisão das sugestões</div></div>
+    <div class="kpi"><div class="n" id="k-mon">—</div><div class="l">em monitoramento</div></div>
+    <div class="kpi"><div class="n" id="k-rules">—</div><div class="l">regras aprendidas</div></div>
+  </div>
+
+  <div class="toolbar">
+    <select id="own-select"><option value="">Carregando produtos…</option></select>
+    <button id="btn-load" class="ghost">Atualizar</button>
+    <button id="btn-search" class="primary">Buscar concorrentes</button>
+  </div>
+
+  <div class="note" id="prec-note">A precisão é calculada só sobre decisões humanas reais; sem revisões, fica em branco.</div>
+
+  <div class="tabs">
+    <button class="tab active" data-status="PENDENTE">Pendentes de revisão</button>
+    <button class="tab" data-status="APROVADO">Aprovados</button>
+    <button class="tab" data-status="REJEITADO">Rejeitados</button>
+  </div>
+
+  <div id="list"></div>
+
+  <footer>
+    Fonte dos dados: páginas autenticadas do vendedor (captura pela extensão). Sem cookies, sem tokens, sem endpoints privados.
+    Toda decisão é registrada e alimenta as regras de aprendizado.
+  </footer>
+</div>
+<script>
+const PORT = 47811;
+let token = new URLSearchParams(location.search).get('token') || sessionStorage.getItem('mi.token') || '';
+if (token) sessionStorage.setItem('mi.token', token);
+let status = 'PENDENTE';
+let ownProductId = '';
+
+const $ = (id) => document.getElementById(id);
+
+async function api(method, payload = {}) {
+  const res = await fetch(`http://127.0.0.1:${PORT}/api/ipc`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ id: `p-${Date.now()}`, method, protocolVersion: 1, payload }),
+  });
+  if (res.status === 401) throw new Error('token de sessão inválido ou ausente');
+  const body = await res.json();
+  if (!body.ok) throw new Error(body.error?.message ?? 'falha');
+  return body.result;
+}
+
+function conn(ok, msg) {
+  $('dot').className = `dot ${ok ? 'ok' : 'bad'}`;
+  $('conn').textContent = msg;
+}
+
+function scoreClass(p) { return p >= 70 ? 'hi' : p >= 45 ? 'mid' : 'lo'; }
+
+function renderList(rows) {
+  const list = $('list');
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">Nenhum item em ${status === 'PENDENTE' ? 'pendentes' : status === 'APROVADO' ? 'aprovados' : 'rejeitados'}.</div>`;
+    return;
+  }
+  list.innerHTML = rows.map((r) => {
+    const rationale = (() => { try { return JSON.parse(r.rationale_json); } catch { return { summary: '', factors: [] }; } })();
+    const factors = (rationale.factors ?? []).slice(0, 6).map((f) => `<li>${f.detail}${f.points ? ` <b>(${f.points > 0 ? '+' : ''}${f.points})</b>` : ''}</li>`).join('');
+    const acoes = status === 'PENDENTE'
+      ? `<button data-act="approve" data-id="${r.id}" class="primary">Aprovar</button>
+         <button data-act="reject" data-id="${r.id}">Rejeitar</button>
+         <button data-act="edit" data-id="${r.id}">Editar</button>
+         <button data-act="reanalyze" data-id="${r.id}">Nova análise</button>`
+      : status === 'APROVADO'
+        ? `<button data-act="pause" data-id="${r.id}">${r.monitoring_state === 'ATIVO' ? 'Pausar' : 'Retomar'}</button>
+           <button data-act="history" data-id="${r.id}">Histórico</button>
+           <button data-act="reanalyze" data-id="${r.id}">Nova análise</button>`
+        : `<button data-act="reanalyze" data-id="${r.id}">Reconsiderar</button>`;
+    return `<div class="card">
+      <div class="row">
+        <div>
+          <h3>${escapeHtml(r.candidate_title)}</h3>
+          <div class="meta">${escapeHtml(r.marketplace)} · ${r.seller ? escapeHtml(r.seller) : 'vendedor não informado'} · ${r.price_cents != null ? `R$ ${(r.price_cents / 100).toFixed(2)}` : 'preço não coletado'}</div>
+          <div class="meta">Meu produto: ${escapeHtml(r.own_title)}${r.own_price_cents != null ? ` · R$ ${(r.own_price_cents / 100).toFixed(2)}` : ''}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="score ${scoreClass(r.similarity_pct)}">${Math.round(r.similarity_pct)}%</div>
+          <span class="badge ${r.relation_kind}">${r.relation_kind}</span>
+        </div>
+      </div>
+      <div class="rationale">${escapeHtml(rationale.summary || 'sem justificativa registrada')}<ul>${factors}</ul></div>
+      ${r.rejection_reason ? `<div class="meta">Motivo da rejeição: ${escapeHtml(r.rejection_reason)}</div>` : ''}
+      ${r.url ? `<div class="meta"><a href="${escapeHtml(r.url)}" target="_blank" rel="noopener" style="color:var(--dev)">abrir anúncio</a></div>` : ''}
+      <div class="actions">${acoes}</div>
+    </div>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function loadStats() {
+  const s = await api('competitor.stats', ownProductId ? { ownProductId } : {});
+  $('k-pend').textContent = s.pending;
+  $('k-apr').textContent = s.approved;
+  $('k-rej').textContent = s.rejected;
+  $('k-prec').textContent = s.precisionPct === null ? '—' : `${s.precisionPct}%`;
+  $('k-mon').textContent = s.monitoringActive;
+  $('k-rules').textContent = (s.learningRules ?? []).length;
+  $('prec-note').textContent = s.precisionNote;
+}
+
+async function loadRelations() {
+  const rows = await api('competitor.relations', ownProductId ? { ownProductId, status } : { status });
+  renderList(rows);
+}
+
+async function refresh() {
+  try {
+    await api('ping');
+    conn(true, 'serviço local conectado');
+  } catch (err) {
+    conn(false, err.message.includes('token') ? 'token de sessão ausente: abra pelo atalho do painel' : 'serviço local indisponível');
+    return;
+  }
+  await loadStats();
+  await loadRelations();
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (btn) {
+    const id = btn.dataset.id;
+    const act = btn.dataset.act;
+    try {
+      if (act === 'approve') await api('competitor.approve', { relationId: id });
+      if (act === 'reject') {
+        const reason = prompt('Motivo da rejeição (opcional, ajuda o aprendizado):') ?? '';
+        await api('competitor.reject', { relationId: id, reason });
+      }
+      if (act === 'edit') {
+        const title = prompt('Título correto do anúncio:');
+        if (!title) return;
+        const kind = prompt('Classificação: DIRETO, SIMILAR ou INDIRETO', 'SIMILAR');
+        await api('competitor.edit', { relationId: id, title, relationKind: kind || undefined });
+      }
+      if (act === 'reanalyze') await api('competitor.reanalyze', { relationId: id });
+      if (act === 'pause') {
+        const r = (await api('competitor.relations', { status: 'APROVADO' })).find((x) => x.id === id);
+        await api('competitor.monitoring.set', { relationId: id, state: r?.monitoring_state === 'ATIVO' ? 'PAUSADO' : 'ATIVO' });
+      }
+      if (act === 'history') {
+        const h = await api('competitor.monitoring.history', { relationId: id });
+        alert(`Histórico: ${h.points.length} ponto(s)\nPreço atual: ${h.competitorPriceCents ?? 'não coletado'}\nMeu preço: ${h.ownPriceCents ?? 'não coletado'}${h.note ? `\n${h.note}` : ''}`);
+      }
+      await refresh();
+    } catch (err) {
+      alert(`Falha: ${err.message}`);
+    }
+    return;
+  }
+
+  const tab = e.target.closest('.tab');
+  if (tab) {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+    status = tab.dataset.status;
+    await loadRelations().catch((err) => alert(err.message));
+  }
+});
+
+$('own-select').addEventListener('change', async (e) => {
+  ownProductId = e.target.value;
+  await refresh().catch((err) => alert(err.message));
+});
+
+$('btn-load').addEventListener('click', () => refresh().catch((err) => alert(err.message)));
+
+$('btn-search').addEventListener('click', async () => {
+  try {
+    if (!ownProductId) return alert('Selecione o produto próprio primeiro.');
+    // A busca usa os candidatos capturados pela extensão nas páginas autenticadas.
+    const r = await api('competitor.search', { ownProductId, marketplaces: ['mercado_livre', 'shopee'], candidates: [] });
+    alert(`Busca registrada.\nCandidatos: ${r.candidatesFound}\nSugestões novas: ${r.suggestionsCreated}\n${r.notes.join('\n')}`);
+    await refresh();
+  } catch (err) {
+    alert(`Falha: ${err.message}`);
+  }
+});
+
+(async () => {
+  try {
+    const products = await api('competitor.ownProduct.list', { accountId: 'local:default' });
+    const sel = $('own-select');
+    if (products.length) {
+      sel.innerHTML = products.map((p) => `<option value="${p.id}">${escapeHtml(p.title)} (${escapeHtml(p.marketplace)})</option>`).join('');
+      ownProductId = products[0].id;
+    } else {
+      sel.innerHTML = '<option value="">Nenhum produto próprio cadastrado</option>';
+    }
+  } catch {
+    /* sem sessão ainda */
+  }
+  await refresh().catch((err) => conn(false, err.message));
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketplace Intelligence</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">MI</div>
+      <div>
+        <div class="brand-name">Marketplace Intelligence</div>
+        <div class="brand-sub">Growth &amp; operações autônomas</div>
+      </div>
+    </div>
+    <nav id="nav" class="nav"></nav>
+    <div class="sidebar-foot">
+      <div class="conn"><span id="dot" class="dot"></span><span id="health">conectando…</span></div>
+      <div class="tiny muted">Local First · dados na sua máquina</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <h1 id="view-title">Visão executiva</h1>
+      <div class="topbar-right">
+        <label class="account">
+          <span class="tiny muted">Conta</span>
+          <select id="account"><option value="">carregando…</option></select>
+        </label>
+      </div>
+    </header>
+    <div id="view" class="view"><div class="loading">Carregando…</div></div>
+  </main>
+</div>
+<div id="toasts" class="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>

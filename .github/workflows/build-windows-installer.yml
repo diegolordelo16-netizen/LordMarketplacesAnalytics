@@ -1,0 +1,65 @@
+# Gera o instalador Windows (MarketplaceIntelligence-Setup.exe) em máquina limpa.
+# Artefato publicado na release e anexado ao run.
+name: Build Windows Installer
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      extension_id:
+        description: 'ID da extensão autorizada (32 letras a-p)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar tipos
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Testes
+        run: npx vitest run
+
+      - name: Compilar serviço local, host nativo e extensão
+        run: |
+          node scripts/build-local-agent.mjs
+          node scripts/build-native-host.mjs
+          node scripts/build-extension.mjs
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Embarcar node.exe
+        run: |
+          New-Item -ItemType Directory -Force -Path tools | Out-Null
+          Copy-Item (Get-Command node).Source tools\node.exe
+
+      - name: Gerar instalador
+        env:
+          MI_EXTENSION_ID: ${{ github.event.inputs.extension_id }}
+          ISCC_PATH: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
+        run: node scripts/package-windows.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MarketplaceIntelligence-Setup
+          path: installer/output/MarketplaceIntelligence-Setup.exe
+          if-no-files-found: error
+
+      - name: Anexar à release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/output/MarketplaceIntelligence-Setup.exe

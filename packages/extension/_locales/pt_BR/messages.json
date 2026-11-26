@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "Marketplace Intelligence",
+    "description": "Nome da extensão"
+  },
+  "extDescription": {
+    "message": "Inteligência e operações autônomas para marketplaces, direto no seu navegador autenticado.",
+    "description": "Descrição da extensão"
+  }
+}

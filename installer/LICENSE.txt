@@ -1,0 +1,13 @@
+Marketplace Intelligence — Licença de uso
+
+Este software opera exclusivamente com dados que o usuário já acessa em sua
+própria sessão autenticada nos marketplaces. Não lê cookies, tokens ou senhas,
+não contorna autenticação, CAPTCHA, anti-bot ou barreiras de acesso, e não
+chama endpoints privados das plataformas.
+
+O software é fornecido "como está", sem garantia de adequação a um propósito
+específico. O usuário é responsável por respeitar os termos de uso de cada
+marketplace e a legislação aplicável.
+
+Todas as decisões sensíveis exigem revisão humana explícita e ficam registradas
+em log de auditoria local.

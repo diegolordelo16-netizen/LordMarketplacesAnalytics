@@ -1,13 +1,33 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "lib": ["ES2023"],
     "module": "ESNext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "Bundler",
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    "composite": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
     "types": ["node"],
-    "noEmit": true
+    "paths": {
+      "@mi/shared": ["./packages/shared/src/index.ts"],
+      "@mi/data-intelligence": ["./packages/data-intelligence/src/index.ts"],
+      "@mi/search-intelligence": ["./packages/search-intelligence/src/index.ts"],
+      "@mi/market-intelligence": ["./packages/market-intelligence/src/index.ts"],
+      "@mi/growth-engine": ["./packages/growth-engine/src/index.ts"],
+      "@mi/voice-of-customer": ["./packages/voice-of-customer/src/index.ts"],
+      "@mi/connectors": ["./packages/connectors/src/index.ts"],
+      "@mi/forecasting": ["./packages/forecasting/src/index.ts"],
+      "@mi/native-host": ["./packages/native-host/src/index.ts"],
+      "@mi/local-agent": ["./packages/local-agent/src/index.ts"]
+    }
   }
 }

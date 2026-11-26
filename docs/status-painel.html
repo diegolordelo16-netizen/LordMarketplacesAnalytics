@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketplace Intelligence — Status da Construção</title>
+<style>
+  :root {
+    --bg:#0b0f16; --panel:#141a24; --panel2:#1a2230; --line:#26303f;
+    --text:#e8eef6; --muted:#8b98ab; --accent:#2f81f7;
+    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --planned:#6e7681; --dev:#58a6ff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 "Segoe UI",system-ui,sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 20px 60px; }
+  header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; flex-wrap:wrap; margin-bottom:22px; }
+  h1 { font-size:22px; margin:0 0 6px; letter-spacing:-0.01em; }
+  .sub { color:var(--muted); font-size:13px; }
+  .badge { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:600; letter-spacing:.04em; border:1px solid var(--line); }
+  .badge.v { color:var(--dev); border-color:#1f3a5f; background:#0d1a2b; }
+  .grid { display:grid; gap:12px; }
+  .kpis { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-bottom:22px; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .kpi .n { font-size:26px; font-weight:700; letter-spacing:-0.02em; }
+  .kpi .l { color:var(--muted); font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; margin-top:2px; }
+  .kpi.ok .n { color:var(--ok); } .kpi.warn .n { color:var(--warn); } .kpi.bad .n { color:var(--bad); }
+  section { margin-bottom:26px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 10px; font-weight:600; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
+  th { background:var(--panel2); color:var(--muted); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; }
+  tr:last-child td { border-bottom:none; }
+  td code, .mono { font-family:"Cascadia Mono",Consolas,monospace; font-size:12px; color:#c9d6e6; }
+  .st { font-size:11px; font-weight:700; letter-spacing:.04em; padding:2px 7px; border-radius:5px; white-space:nowrap; }
+  .st.TESTADO { color:#03170a; background:var(--ok); }
+  .st.IMPLEMENTADO { color:#03170a; background:#56d364; }
+  .st.EM_DESENVOLVIMENTO { color:#04121f; background:var(--dev); }
+  .st.PLANEJADO { color:#d7dde5; background:var(--planned); }
+  .st.PARCIAL { color:#1d1400; background:var(--warn); }
+  .st.BLOQUEADO { color:#fff; background:var(--bad); }
+  .note { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; padding:12px 14px; color:#c8d3e1; font-size:13px; }
+  .note.warn { border-left-color:var(--warn); }
+  .note.bad { border-left-color:var(--bad); }
+  ul.rules { list-style:none; padding:0; margin:0; display:grid; gap:8px; }
+  ul.rules li { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-size:13px; }
+  ul.rules li b { color:var(--ok); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:820px){ .two { grid-template-columns:1fr; } }
+  footer { color:var(--muted); font-size:12px; border-top:1px solid var(--line); padding-top:14px; }
+  .bar { height:6px; background:#0a0e14; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bar > span { display:block; height:100%; background:linear-gradient(90deg,var(--accent),#56d364); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>Marketplace Intelligence &amp; Autonomous Operations</h1>
+      <div class="sub">Local First · Browser Automation · Agente Local · IA multi-provedor (Gemini) · pt-BR</div>
+    </div>
+    <div style="text-align:right">
+      <span class="badge v">v3.1 · EM CONSTRUÇÃO</span>
+      <div class="sub" style="margin-top:6px">relatório gerado do estado real do código</div>
+    </div>
+  </header>
+
+  <div class="grid kpis">
+    <div class="kpi ok"><div class="n">124</div><div class="l">testes passando</div></div>
+    <div class="kpi ok"><div class="n">0</div><div class="l">testes falhando</div></div>
+    <div class="kpi ok"><div class="n">0</div><div class="l">erros de tipo (tsc)</div></div>
+    <div class="kpi"><div class="n">3</div><div class="l">artefatos compilados</div></div>
+    <div class="kpi warn"><div class="n">0</div><div class="l">.exe gerado aqui</div></div>
+  </div>
+
+  <section>
+    <h2>O que já funciona de verdade (executado, não prometido)</h2>
+    <table>
+      <tr><th>Componente</th><th>Estado</th><th>Evidência de execução</th></tr>
+      <tr>
+        <td><b>packages/shared</b><br><span class="sub">tipos, contratos IPC (~60 métodos), KPI, finanças, guard, preservação de texto, schemas Zod</span></td>
+        <td><span class="st TESTADO">TESTADO</span></td>
+        <td class="mono">52 testes</td>
+      </tr>
+      <tr>
+        <td><b>packages/local-agent</b><br><span class="sub">SQLite (80 tabelas, migrações versionadas), captura com proveniência, KPIs, guard de 10 verificações, Gemini com orçamento, 14 agentes, auto-upgrade, auditoria, backup</span></td>
+        <td><span class="st TESTADO">TESTADO</span></td>
+        <td class="mono">36 testes + typecheck limpo</td>
+      </tr>
+      <tr>
+        <td><b>packages/native-host</b><br><span class="sub">framing 4 bytes LE, limite de 4 MB, validação Zod, origem da extensão, manifesto + registro HKCU (Chrome e Edge)</span></td>
+        <td><span class="st TESTADO">TESTADO</span></td>
+        <td class="mono">14 testes + smoke real: frame enviado → resposta <code>{"ok":true}</code></td>
+      </tr>
+      <tr>
+        <td><b>Serviço local (main.ts)</b><br><span class="sub">bootstrap, painel HTTP só em 127.0.0.1, token de sessão por início, backup no encerramento</span></td>
+        <td><span class="st TESTADO">TESTADO</span></td>
+        <td class="mono">8 testes + <code>/api/health</code> respondendo em execução real</td>
+      </tr>
+      <tr>
+        <td><b>packages/extension</b><br><span class="sub">MV3, service worker, painel lateral, content scripts ML e Shopee, fallback HTTP, fila local</span></td>
+        <td><span class="st PARCIAL">PARCIAL</span></td>
+        <td class="mono">14 testes de manifest/DOM; falta teste em navegador real</td>
+      </tr>
+    </table>
+    <div class="bar"><span style="width:46%"></span></div>
+    <div class="sub" style="margin-top:6px">progresso por módulo da especificação: 8 de 36 seções com implementação verificada</div>
+  </section>
+
+  <section>
+    <h2>Build reprodutível</h2>
+    <table>
+      <tr><th>Script</th><th>Saída</th><th>Situação</th></tr>
+      <tr><td class="mono">npm run agent:build</td><td class="mono">dist/local-agent/main.js (283 KB) + migrations/</td><td><span class="st IMPLEMENTADO">OK</span></td></tr>
+      <tr><td class="mono">npm run host:build</td><td class="mono">dist/native-host/native-host.js (289 KB)</td><td><span class="st IMPLEMENTADO">OK</span></td></tr>
+      <tr><td class="mono">npm run ext:build</td><td class="mono">dist/extension/ (manifest + 5 ícones PNG)</td><td><span class="st IMPLEMENTADO">OK</span></td></tr>
+      <tr><td class="mono">npm test</td><td class="mono">5 arquivos · 124 testes</td><td><span class="st TESTADO">124/124</span></td></tr>
+    </table>
+  </section>
+
+  <div class="two">
+    <section>
+      <h2>Adaptadores de marketplace</h2>
+      <table>
+        <tr><th>Marketplace</th><th>Estado</th></tr>
+        <tr><td>Mercado Livre</td><td><span class="st PARCIAL">PARCIAL</span> <span class="sub">captura por DOM; edição não automatizada</span></td></tr>
+        <tr><td>Shopee</td><td><span class="st PARCIAL">PARCIAL</span> <span class="sub">captura por DOM; edição não automatizada</span></td></tr>
+        <tr><td>Amazon</td><td><span class="st PLANEJADO">PLANEJADO</span></td></tr>
+        <tr><td>TikTok Shop</td><td><span class="st PLANEJADO">PLANEJADO</span></td></tr>
+        <tr><td>Shein</td><td><span class="st PLANEJADO">PLANEJADO</span></td></tr>
+        <tr><td>Netshoes</td><td><span class="st PLANEJADO">PLANEJADO</span></td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Bloqueios reais deste ambiente</h2>
+      <div class="note bad" style="margin-bottom:10px">
+        <b>Instalador .exe não foi gerado.</b> Não há Inno Setup, NSIS nem Visual Studio Build Tools nesta máquina.
+        A regra da especificação (§0.3) é atendida por: código-fonte completo + scripts de empacotamento + workflow de CI —
+        <b>ainda pendentes nesta rodada</b>.
+      </div>
+      <div class="note warn">
+        <b>Extensão não foi carregada em navegador real.</b> Só há Edge nesta máquina e nenhuma sessão de marketplace autenticada
+        foi usada. Os content scripts são validados por teste estático e de parsing, não por execução no DOM real.
+      </div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Próximos passos da cadeia (na ordem)</h2>
+    <table>
+      <tr><th>#</th><th>Passo</th><th>Estado</th></tr>
+      <tr><td>1</td><td>Destravar e verificar a suíte do agente local</td><td><span class="st TESTADO">FEITO</span></td></tr>
+      <tr><td>2</td><td>Host nativo com framing, validação e registro no Windows</td><td><span class="st TESTADO">FEITO</span></td></tr>
+      <tr><td>3</td><td>Entry point + painel HTTP local + token de sessão</td><td><span class="st TESTADO">FEITO</span></td></tr>
+      <tr><td>4</td><td>Scripts de build e verificação de artefatos</td><td><span class="st TESTADO">FEITO</span></td></tr>
+      <tr><td>5</td><td>Extensão MV3 + painel lateral + captura ML/Shopee</td><td><span class="st PARCIAL">PARCIAL</span></td></tr>
+      <tr><td>6</td><td>Pacotes de inteligência (busca, mercado, growth, VoC, previsão, conectores)</td><td><span class="st PLANEJADO">PRÓXIMO</span></td></tr>
+      <tr><td>7</td><td>Instalador Windows (Inno Setup/NSIS) + GitHub Actions</td><td><span class="st PLANEJADO">PENDENTE</span></td></tr>
+      <tr><td>8</td><td>Documentação e relatório final por módulo</td><td><span class="st PLANEJADO">PENDENTE</span></td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Regras invioláveis que o código já aplica</h2>
+    <ul class="rules">
+      <li><b>Sem APIs oficiais</b> — nenhum endpoint privado, nenhuma leitura de cookie/token, nenhuma chamada em nome do usuário fora da página dele.</li>
+      <li><b>Ausente ≠ zero</b> — todo campo não lido fica <span class="mono">NOT_COLLECTED</span>/<span class="mono">UNKNOWN</span>; estimativa nunca aparece como dado real.</li>
+      <li><b>Descrição preservada</b> — alteração só por acréscimo, com diff auditável antes e depois de salvar.</li>
+      <li><b>Chave Gemini fora do frontend</b> — cifrada no serviço local; a extensão nunca a recebe.</li>
+      <li><b>Ação sensível exige aprovação</b> — guard de 10 verificações + autorização explícita + registro em audit_log.</li>
+      <li><b>Auto-upgrade governado</b> — aprovação de super_admin, testes, backup e rollback em um clique.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Este painel lê o estado real: números de teste vêm de <span class="mono">npx vitest run</span>, tipos de <span class="mono">tsc --noEmit</span>,
+    artefatos de <span class="mono">dist/</span>. Nada aqui é projeção.
+  </footer>
+</div>
+</body>
+</html>

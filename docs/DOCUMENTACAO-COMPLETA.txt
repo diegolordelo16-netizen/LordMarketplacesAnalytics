@@ -1,0 +1,1275 @@
+================================================================================
+ MARKETPLACE INTELLIGENCE & AUTONOMOUS OPERATIONS
+ DOCUMENTACAO COMPLETA DO SOFTWARE
+ Versao 0.1.0 (painel e servico) / 3.2.0 (extensao)  -  Windows x64  -  Pt-BR
+================================================================================
+
+Documento gerado a partir do codigo-fonte real do projeto por
+scripts/gerar-documentacao-txt.mjs. Os numeros abaixo nao foram escritos a
+mao: sao lidos dos arquivos a cada geracao (metodos da API, tabelas do banco,
+agentes, areas do painel, verificacoes do guard, itens do checklist). Onde
+algo NAO esta pronto, esta escrito explicitamente.
+
+Gerado em: 2026-11-26
+
+INDICE
+  PARTE 0  - Visao geral e arquitetura
+  PARTE 1  - Como instalar
+  PARTE 2  - Primeiro acesso e credenciais
+  PARTE 3  - O painel: as 14 areas, tela por tela
+  PARTE 4  - Inteligencia competitiva (fluxo completo)
+  PARTE 5  - Os 77 metodos da API local (referencia)
+  PARTE 6  - Motor de similaridade e aprendizado
+  PARTE 7  - KPIs, financas, prioridade, experimentos
+  PARTE 8  - IA: Gemini, 14 agentes e auto-upgrade
+  PARTE 9  - Guard de automacao (9 verificacoes)
+  PARTE 10 - Tarefas, scheduler e perfis de digitacao
+  PARTE 11 - Preservacao de descricao
+  PARTE 12 - Qualidade e honestidade de dados
+  PARTE 13 - Seguranca: papeis, sessoes, segredos
+  PARTE 14 - Banco de dados (89 tabelas)
+  PARTE 15 - Extensao de navegador
+  PARTE 16 - Native Messaging host
+  PARTE 17 - Instalador, arquivos e desinstalacao
+  PARTE 18 - Checklist: o que esta pronto, parcial e planejado
+  PARTE 19 - Limitacoes conhecidas e proibicoes
+  PARTE 20 - Solucao de problemas
+  PARTE 21 - Desenvolvimento, build e testes
+  PARTE 22 - O que mudou nesta versao (26/11/2026)
+  GLOSSARIO
+
+================================================================================
+ PARTE 0 — VISAO GERAL E ARQUITETURA
+================================================================================
+
+O Marketplace Intelligence e uma plataforma de inteligencia e operacao para
+vendedores de marketplace. Funciona 100% na maquina do usuario ("local
+first"): nao ha servidor na nuvem, nao ha conta online, e nenhum dado sai do
+computador sem o usuario mandar.
+
+0.1 As quatro pecas
+-------------------
+
+  (1) PAINEL LOCAL (interface)
+      Aplicacao web servida pelo servico Node.js em 127.0.0.1. Tem 14 areas,
+      indicadores, revisao de concorrentes, tarefas, IA e administracao.
+
+  (2) SERVICO LOCAL (motor)
+      Node.js embarcado no instalador. Guarda o banco SQLite, aplica as regras,
+      calcula KPIs, fala com o Gemini, executa tarefas e mantem auditoria.
+      Expoe uma API interna com 77 metodos em 127.0.0.1.
+
+  (3) EXTENSAO DE NAVEGADOR (captura)
+      Extensao MV3 para Chrome e Edge. Le a tela do marketplace na sessao ja
+      autenticada do usuario e envia os dados ao servico local. Nunca extrai
+      cookie, nunca reproduz requisicao interna, nunca resolve CAPTCHA.
+
+  (4) HOST DE MENSAGENS NATIVO (ponte)
+      Programa pequeno registrado no navegador que liga a extensao ao servico
+      local por stdio, sem porta exposta para fora da maquina.
+
+0.2 Fluxo de um dado
+--------------------
+
+  Tela do marketplace -> content script le o DOM -> worker monta o snapshot
+  -> (host nativo ou HTTP em 127.0.0.1) -> servico valida, grava e marca a
+  origem -> painel calcula KPIs e mostra, com o motivo quando falta dado.
+
+0.3 Principios nao negociaveis
+------------------------------
+
+  - Sem API oficial? Usa a sessao autenticada do navegador. Sempre.
+  - Proibido: endpoint privado, replay de requisicao, extracao de cookie ou
+    token do marketplace, burlar autenticacao, CAPTCHA ou anti-bot, simular
+    comportamento humano para enganar a plataforma.
+  - Dado sem fonte nao vira numero: recebe estado ZERO, UNKNOWN,
+    NOT_COLLECTED, UNAVAILABLE, ESTIMATED, CALCULATED ou VERIFIED.
+  - O Gemini e consultor e auditor; nunca fonte de verdade.
+  - Nenhum relacionamento de concorrente entra aprovado automaticamente.
+
+================================================================================
+ PARTE 1 — COMO INSTALAR
+================================================================================
+
+1.1 Requisitos
+
+  - Windows 10 ou 11, 64 bits.
+  - Chrome ou Edge atualizado (o mesmo navegador onde voce ja usa o
+    marketplace).
+  - Nao precisa de Node.js, Python nem nenhuma ferramenta: tudo vai dentro do
+    instalador.
+
+1.2 Instalacao
+
+  1. Execute MarketplaceIntelligence-Setup.exe (21.8 MB).
+  2. Siga o assistente em portugues (proximo, proximo, instalar).
+  3. Ao terminar, abra o atalho "Marketplace Intelligence" na area de trabalho.
+  4. A tela "Pre-Start & Diagnostico" abre e mostra o estado de cada peca.
+
+1.3 Instalacao silenciosa (para quem administra varias maquinas)
+
+  MarketplaceIntelligence-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES \
+      /NORESTART /LOG="C:\caminho\instalacao.log"
+
+1.4 Instalar a extensao
+
+  A tela de Pre-Start tem o botao que abre a pasta da extensao e o botao que
+  abre a pagina de extensoes do navegador. O caminho e sempre:
+
+    1. Abrir chrome://extensions (ou edge://extensions).
+    2. Ligar "Modo do desenvolvedor".
+    3. "Carregar sem compactacao" e escolher a pasta extension.
+    4. Voltar ao Pre-Start e clicar em "Testar conexao".
+
+  O identificador da extensao e fixo (iindgpgiecidhmfapdlfinpplndiiajf),
+  entao o servico local ja reconhece a origem sem configuracao extra.
+
+1.5 Onde ficam as coisas
+
+  Programa:  %LOCALAPPDATA%\Programs\Marketplace Intelligence\
+  Dados:     %LOCALAPPDATA%\MarketplaceIntelligence\
+             (banco, segredos cifrados, backups, logs, porta, token,
+              credenciais do administrador)
+
+================================================================================
+ PARTE 2 — PRIMEIRO ACESSO E CREDENCIAIS
+================================================================================
+
+  2.1 O primeiro inicio cria o usuario administrador
+
+  E-mail: admin@marketplaceintelligence.local
+  Senha:  gerada aleatoriamente e gravada em
+          %LOCALAPPDATA%\MarketplaceIntelligence\admin-credentials.txt
+
+  Troque a senha depois do primeiro acesso. O arquivo e criado apenas uma
+  vez; se ele for apagado, o acesso continua valido com a senha que voce
+  anotou.
+
+  2.2 Sessao do painel
+
+  O atalho abre o painel com o token da sessao na URL (somente 127.0.0.1). O
+  painel guarda o token em sessionStorage e limpa a barra de enderecos. Por
+  isso: abra sempre pelo atalho, nao digitando a URL.
+
+  2.3 Perfis
+
+  super_admin   - tudo, inclusive usuarios, limites financeiros e
+                  auto-upgrade.
+  operador      - opera tarefas e capturas dentro dos limites.
+  visualizador  - somente leitura.
+
+================================================================================
+ PARTE 3 — O PAINEL: AS 14 AREAS, TELA POR TELA
+================================================================================
+
+3.1 VISÃO EXECUTIVA
+-------------------
+
+  - Cartoes de KPI: CTR, ROAS, ACoS, TACoS, CVR, cobertura de estoque, share
+    organico, devolucao, cancelamento, ticket medio, giro diario e
+    participacao de Ads. Cada cartao mostra valor, formula e, quando o dado
+    nao existe, o motivo (nunca um zero falso).
+  - Missoes do dia: de 3 a 5 prioridades em CRITICAL_ALERT, QUICK_WIN,
+    ZOMBIE ou NORMAL, com impacto, esforco e urgencia.
+  - Alertas: reconhecer e marcar falso positivo.
+
+3.2 PRÉ-START & DIAGNÓSTICO
+---------------------------
+
+  - Estado de cada peca com semaforo: verde (respondeu), amarelo (respondeu
+    e recusou), vermelho (fora do ar), cinza (nao testado).
+  - Botao "Testar conexao" faz o caminho completo: porta, token, sessao.
+  - Token da extensao: mostrar, copiar e renovar.
+  - Abre a pasta da extensao e a pagina de extensoes do navegador.
+  - Logs do servico e teste de aba do navegador.
+
+3.3 ANÚNCIOS & CAPTURA
+----------------------
+
+  - Lista de anuncios capturados com conta, marketplace, status e qualidade
+    do dado.
+  - Detalhe por anuncio: KPIs do periodo e historico de snapshots.
+  - Captura manual quando a extensao nao estiver ativa.
+
+3.4 FINANCEIRO
+--------------
+
+  - Simulador de cenario com 17 entradas (preco, quantidade, comissao, taxa
+    fixa, parcelamento, custo, embalagem, frete, imposto, outros variaveis,
+    margem minima, desconto, cupom, Ads, devolucao, cancelamento, logistica
+    reversa). Devolve margem de contribuicao, lucro, ponto de equilibrio e
+    alerta quando a margem fica negativa.
+  - Custos por SKU: base de todos os calculos.
+
+3.5 SEO & KEYWORDS
+------------------
+
+  - Banco de palavras-chave com intencao, idioma e marketplace.
+  - Pontuacao de demanda e prioridade por peso.
+  - Lacunas (keyword gap): termos em que o concorrente aparece e voce nao.
+  - Rank tracker: posicao por palavra-chave e historico por anuncio.
+
+3.6 RADAR DE MERCADO
+--------------------
+
+  - Snapshot por categoria: demanda, concorrencia e faixa de preco.
+  - Oportunidades ranqueadas com pontuacao e justificativa.
+
+3.7 CONCORRÊNCIA
+----------------
+
+  - Produtos proprios, busca de candidatos, relacoes com pontuacao de
+    similaridade e status (PENDENTE por padrao).
+  - Aprovar, rejeitar, editar, trocar candidato e reanalisar.
+  - Monitoramento: pontos de coleta, historico e estatisticas.
+  - Fluxo completo na PARTE 4.
+
+3.8 PREÇO & OFERTAS
+-------------------
+
+  - Corredor de preco a partir das observacoes coletadas.
+  - Cenarios de preco e regras.
+  - Toda mudanca de preco passa pelo Guard.
+
+3.9 VOZ DO CLIENTE
+------------------
+
+  - Entrada de avaliacoes, perguntas, reclamacoes e motivos de devolucao.
+  - Agrupamento em temas com sentimento e frequencia.
+
+3.10 GROWTH LAB
+---------------
+
+  - Metricas em arvore (metric tree) para achar a causa raiz.
+  - Iniciativas de crescimento (somente leitura nesta versao).
+  - Experimentos: criacao, listagem e resultado com teste estatistico.
+
+3.11 AGENTES DE IA
+------------------
+
+  - Os 14 agentes, executados sobre um contexto com janela, metricas,
+    confianca e dados ausentes declarados.
+  - Debate entre agentes sobre um tema.
+  - Memoria, historico de execucoes e orcamento de IA.
+
+3.12 TAREFAS
+------------
+
+  - Criar tarefa com tipo, marketplace, anuncio, modo (rascunho ou
+    publicacao), recorrencia, horario e perfil de digitacao.
+  - Pausar, retomar, cancelar, pular item e executar agora.
+
+3.13 CONECTORES
+---------------
+
+  - Registro de conectores (o que existe, o que esta conectado, custo).
+  - Importacao de CSV como rascunho para validacao.
+
+3.14 ADMINISTRAÇÃO
+------------------
+
+  - Configuracoes, auditoria, backups e auto-upgrade.
+  - Diagnostico de adaptadores.
+  - Chave do Gemini (cifrada no servico local, nunca na extensao).
+
+================================================================================
+ PARTE 4 — INTELIGENCIA COMPETITIVA (FLUXO COMPLETO)
+================================================================================
+
+  1. Cadastre o produto proprio (competitor.ownProduct.upsert) com titulo,
+     marca, modelo, categoria, atributos e preco.
+  2. Colete candidatos: pela extensao (tela de busca do marketplace) ou
+     colando um JSON de candidatos. Cada candidato tem marketplace, titulo e,
+     quando houver, marca, modelo, preco e URL.
+  3. Rode a busca (competitor.search). Ela pontua cada candidato e cria
+     relacoes com status PENDENTE.
+  4. Revise uma por uma: aprovar, rejeitar com motivo, trocar o candidato ou
+     reanalisar. Nada e aprovado automaticamente.
+  5. O aprendizado registra o que o usuario preferiu e evita (minimo de 2
+     amostras, 75% para PREFERIR, 25% para EVITAR).
+  6. Monitoramento coleta pontos ao longo do tempo; estatisticas mostram
+     quantos concorrentes por status e por marketplace.
+
+  Pontuacao: DIRETO quando similaridade >= 70 e modelo >= 14; SIMILAR entre
+  45 e 69; INDIRETO abaixo de 45.
+
+  Honestidade: as regras de aprendizado sao regras explicitas e auditaveis,
+  nao um modelo treinado. O documento diz isso ao usuario.
+
+================================================================================
+ PARTE 5 — OS 77 METODOS DA API LOCAL
+================================================================================
+
+  Todos os metodos sao chamados em POST http://127.0.0.1:<porta>/api/ipc com
+  cabecalho "authorization: Bearer <token>" e corpo:
+
+    { "id": "...", "token": "...", "protocolVersion": 1,
+      "method": "nome.do.metodo", "payload": { ... } }
+
+  Resposta: { "ok": true, "result": ... } ou
+            { "ok": false, "error": { "code": "...", "message": "..." } }
+
+  Metodos publicos (nao exigem token): ping, auth.login, auth.bootstrap,
+  auth.session. Os demais exigem token valido e respeitam o perfil do usuario.
+
+Acesso e sessao
+---------------
+
+    ping
+        (sem dados)
+    auth.bootstrap
+        email (texto) | password (texto) | displayName (texto)
+    auth.login
+        email (texto) | password (texto)
+    auth.session
+        token (texto)
+    auth.logout
+        (sem dados)
+
+Configuracoes
+-------------
+
+    settings.get
+        key (texto)
+    settings.set
+        key (texto) | value (qualquer)
+
+Chave de IA
+-----------
+
+    gemini.setKey
+        apiKey (texto)
+    gemini.testKey
+        (sem dados)
+
+Contas
+------
+
+    account.upsert
+        marketplace (texto) | accountId (texto) | displayName (texto) | handle (texto) | confidence (numero) | verifiedByUser (booleano)
+    account.list
+        (sem dados)
+
+Captura
+-------
+
+    capture.ingest
+        marketplace | accountId | pageKind (opcao) | url | sourceClass | referenceAt | collectedAt | method | listings (lista) | evidence (registro)
+    capture.snapshot
+        listingId (texto) | days (numero)
+
+Indicadores e missoes
+---------------------
+
+    kpi.listing
+        listingId (texto) | days (numero)
+    kpi.dashboard
+        (sem dados)
+    missions.today
+        (sem dados)
+
+Financeiro
+----------
+
+    finance.simulate
+        priceCents (numero) | quantity (numero) | commissionPct (numero) | fixedFeeCents (numero) | installmentPct (numero) | unitCostCents (numero) | packagingCents (numero) | shippingCents (numero) | taxPct (numero) | otherVariableCents (numero) | minMarginPct (numero) | discountPct (numero) | couponCents (numero) | adSpendCents (numero) | returnRatePct (numero) | cancellationRatePct (numero) | reverseLogisticsCents (numero)
+    finance.costs.upsert
+        skuId | unitCostCents | packagingCents | shippingCents | otherVariableCents | taxPct | minMarginPct
+
+Tarefas
+-------
+
+    task.create
+        name | kind (opcao) | accountId | mode (opcao DRAFT|PUBLISH) | scheduleAt | recurrence | typing (objeto) | items (lista)
+    task.list
+        (sem dados)
+    task.pause
+        taskId (texto)
+    task.resume
+        taskId (texto)
+    task.cancel
+        taskId (texto)
+    task.skipItem
+        itemId (texto)
+    task.runNow
+        taskId (texto)
+
+Guard e auditoria
+-----------------
+
+    guard.evaluate
+        action (opcao) | actorRole (opcao) | marketplace (objeto) | account | listing | currentState | financialLimits | requiredData | platformRules | authorization | conflicts
+    audit.list
+        limit (numero) | changeSetId (texto)
+    audit.rollback
+        changeSetId (texto)
+
+Adaptadores
+-----------
+
+    adapter.diagnostics
+        marketplace (texto) | observed (registro)
+
+Palavras-chave e ranking
+------------------------
+
+    keyword.upsert
+        term (texto) | marketplace (texto) | intent (texto) | language (texto)
+    keyword.list
+        marketplace (texto) | limit (numero)
+    keyword.gap
+        accountId (texto)
+    rank.record
+        listingId (texto) | keywordId (texto) | position (numero) | isSponsored (booleano) | context (registro)
+    rank.history
+        listingId (texto) | limit (numero)
+
+Concorrentes por vendedor
+-------------------------
+
+    competitor.upsert
+        accountId | marketplace | name | handle | groupKind (opcao)
+    competitor.list
+        accountId (texto) | competitorId (texto) | limit (numero)
+    competitor.timeline
+        competitorId (texto) | limit (numero)
+    competitor.alerts
+        accountId (texto)
+
+Concorrentes por produto
+------------------------
+
+    competitor.ownProduct.upsert
+        accountId (texto) | marketplace | title | atributos do produto
+    competitor.ownProduct.list
+        accountId (texto)
+    competitor.search
+        ownProductId | marketplaces (lista) | candidates (lista) | discoveryMethod (opcao) | sourceClass (opcao)
+    competitor.relations
+        ownProductId (texto) | accountId (texto) | status (opcao)
+    competitor.approve
+        relationId (texto) | actorRole (opcao)
+    competitor.reject
+        relationId (texto) | reason (texto)
+    competitor.edit
+        relationId (texto) | campos editaveis
+    competitor.changeCandidate
+        relationId (texto) | candidateId (texto)
+    competitor.reanalyze
+        relationId (texto)
+    competitor.monitoring.set
+        relationId (texto) | state (opcao) | actorRole (opcao)
+    competitor.monitoring.record
+        relationId (texto) | medicao
+    competitor.monitoring.history
+        relationId (texto) | limit (numero)
+    competitor.stats
+        accountId (texto) | ownProductId (texto) | marketplace (texto) | category (texto)
+
+Mercado
+-------
+
+    market.categorySnapshot
+        marketplace (texto) | category (texto)
+    market.opportunities
+        (sem dados)
+
+Voz do cliente
+--------------
+
+    voc.ingest
+        accountId (texto) | listingId (texto) | kind (opcao) | text (texto) | rating (numero)
+    voc.topics
+        accountId (texto)
+
+Growth e experimentos
+---------------------
+
+    growth.initiatives
+        (sem dados)
+    growth.metricTree
+        (sem dados)
+    experiment.create
+        accountId (texto) | title (texto) | design (texto) | variable (texto) | primaryMetric (texto) | guardrailMetrics (lista) | baselineRate (numero) | mde (numero) | plannedDays (numero)
+    experiment.list
+        (sem dados)
+    experiment.result
+        experimentId (texto)
+
+Agentes de IA
+-------------
+
+    agent.run
+        agents (lista de chaves) | context (objeto AgentContext)
+    agent.runs
+        (sem dados)
+    agent.debate
+        topic (texto) | context (texto) | accountId (texto)
+    agent.memory
+        query (texto) | scope (texto)
+    agent.budget
+        (sem dados)
+
+Auto-upgrade
+------------
+
+    autoupgrade.propose
+        module (texto) | symptoms (texto) | currentCode (texto) | testCommand (texto)
+    autoupgrade.list
+        (sem dados)
+    autoupgrade.apply
+        proposalId (texto) | approved (booleano) | approverRole (opcao) | superAdminApproved (booleano)
+    autoupgrade.rollback
+        proposalId (texto) | files (lista)
+
+Conectores e importacao
+-----------------------
+
+    connector.registry
+        (sem dados)
+    connector.import
+        fileName (texto) | rows (lista de registros)
+
+Previsao, alertas, relatorios e backup
+--------------------------------------
+
+    forecast.run
+        (sem dados)
+    alerts.list
+        (sem dados)
+    alerts.ack
+        alertId (texto) | falsePositive (booleano)
+    report.export
+        type (opcao: EXECUTIVO|KPIS|CONCORRENCIA|FINANCEIRO|EXPERIMENTOS|AUDITORIA) | format (opcao: csv|json)
+    backup.create
+        note (texto)
+    backup.list
+        (sem dados)
+
+================================================================================
+ PARTE 6 — MOTOR DE SIMILARIDADE E APRENDIZADO
+================================================================================
+
+  Entrada: titulo, marca, modelo, categoria, atributos e preco do candidato,
+  comparados com o produto proprio.
+  Saida: pontuacao 0-100 e classificacao DIRETO / SIMILAR / INDIRETO.
+
+  Regra de decisao:
+    DIRETO   similaridade >= 70 E modelo >= 14
+    SIMILAR  45 a 69
+    INDIRETO < 45
+
+  Aprendizado com o feedback humano:
+    minimo de 2 amostras; >= 75% de aprovacoes vira PREFERIR;
+    <= 25% vira EVITAR. Regras sao explicitas e auditaveis — nao ha modelo
+    treinado nem caixa-preta.
+
+================================================================================
+ PARTE 7 — KPIS, FINANCAS, PRIORIDADE, EXPERIMENTOS
+================================================================================
+
+  7.1 Convencoes
+
+    - Dinheiro sempre em centavos inteiros (10000 = R$ 100,00).
+    - Percentuais como numero na escala 0-100 (0.5% = 0.5).
+    - Taxas de conversao e cliques idem.
+
+  7.2 KPIs calculados
+
+    CTR   = cliques / impressoes * 100
+    CVR   = pedidos / visitas * 100
+    ROAS  = faturamento atribuido a Ads / investimento em Ads
+    ACoS  = investimento / faturamento total * 100
+    TACoS = investimento / faturamento total * 100 (inclui organico)
+    CPC   = investimento / cliques
+    Custo por venda = investimento / vendas atribuidas
+    Participacao de Ads = faturamento de Ads / faturamento total * 100
+
+  7.3 Financeiro
+
+    Margem de contribuicao = preco - comissao - taxa fixa - frete - custo -
+    embalagem - imposto - outros variaveis - custo de Ads - devolucao -
+    cancelamento - logistica reversa.
+    Ponto de equilibrio = custos fixos / margem unitaria.
+    Se a margem fica negativa, a recomendacao de aumentar trafego e
+    bloqueada (prevalencia financeira do diretor de IA).
+
+  7.4 Prioridade das missoes
+
+    Pontuacao = impacto x esforco invertido x urgencia, com classes
+    CRITICAL_ALERT, QUICK_WIN, ZOMBIE e NORMAL.
+
+  7.5 Experimentos
+
+    Desenho AB com aleatorizacao, metrica primaria, metricas de guarda
+    (margem e devolucao), taxa base, MDE e dias planejados. O resultado
+    aplica teste estatistico e alerta de SRM (alpha padrao 0.0001).
+
+================================================================================
+ PARTE 8 — IA: GEMINI, 14 AGENTES E AUTO-UPGRADE
+================================================================================
+
+8.1 Chave e limites
+-------------------
+
+  A chave do Gemini e cifrada e guardada no servico local. Ela NUNCA vai para
+  a extensao nem para o navegador. Sem chave, o produto continua funcionando
+  (a IA e opcional e nunca e fonte de verdade).
+
+  Modelos: gemini-2.5-flash, gemini-2.5-pro, gemini-2.5-flash-lite.
+  Orcamento: 60 mil tokens de entrada e 4096 de saida por chamada, teto de
+  US$ 3 por dia. Codigos de erro: NO_KEY, BUDGET_EXCEEDED, QUOTA,
+  RATE_LIMIT, HTTP_ERROR, EMPTY_RESPONSE, NETWORK.
+
+8.2 Os 14 agentes
+-----------------
+
+    - seo_demand
+    - ads
+    - competition
+    - conversion_cro
+    - finance
+    - inventory
+    - content_postpurchase
+    - pricing_offer
+    - performance_experiments
+    - market_category
+    - keyword_rank
+    - voice_of_customer
+    - forecast_planning
+    - growth_strategy
+
+  Todos recebem o mesmo AgentContext: conta, marketplace, anuncio, janela de
+  datas, metricas, confianca do dado e lista do que falta. Agente que
+  depende de metrica ausente declara o dado ausente em vez de estimar.
+
+8.3 Auto-upgrade
+----------------
+
+  Propoe alteracao de codigo a partir de sintomas, exige aprovacao de
+  super_admin, exige testes passando, faz backup antes e permite rollback.
+  Toda etapa fica na auditoria.
+
+================================================================================
+ PARTE 9 — GUARD DE AUTOMACAO (9 VERIFICACOES)
+================================================================================
+
+  Acoes protegidas (6): edit_title, edit_description, upload_image, change_price, duplicate_listing, toggle_ads.
+
+  Verificacoes, na ordem em que rodam:
+
+     1. marketplace        marketplace valido e habilitado
+     2. account            conta correta e autenticada
+     3. listing            anuncio existe e pertence a conta
+     4. current_state      estado atual capturado
+     5. user_permission    perfil do usuario tem a permissao
+     6. required_data      dados obrigatorios presentes
+     7. platform_rules     sem violacao conhecida das regras da plataforma
+     8. authorization      autorizacao explicita registrada
+     9. no_conflict        sem conflito com outra acao pendente
+
+  Qualquer verificacao que falhe bloqueia a acao e o motivo volta escrito.
+  Pedido sem contexto e recusado com a lista do que falta (antes isso
+  derrubava a chamada com erro de leitura de undefined).
+
+================================================================================
+ PARTE 10 — TAREFAS, SCHEDULER E PERFIS DE DIGITACAO
+================================================================================
+
+  Estados: PENDING, SCHEDULED, WAITING_BROWSER, RUNNING, PAUSED, COMPLETED,
+  FAILED, CANCELLED.
+
+  Tipos: edit_title, edit_description, upload_image, change_price,
+  duplicate_listing, toggle_ads.
+
+  Modos: DRAFT (prepara e revisa) e PUBLISH (aplica, com verificacao depois).
+
+  Perfil de digitacao: modo, atraso por caractere, atraso de acomodacao e
+  verificacao posterior. O objetivo e estabilidade da interface, nunca
+  simular humano para enganar deteccao.
+
+  Tarefa com o navegador fechado fica em WAITING_BROWSER e retoma sozinha
+  quando a extensao reconecta.
+
+================================================================================
+ PARTE 11 — PRESERVACAO DE DESCRICAO
+================================================================================
+
+  Regra absoluta: a descricao original nunca e reescrita. Novos blocos sao
+  acrescentados no fim, e antes de publicar o sistema compara:
+
+    - todos os trechos originais continuam presentes;
+    - o texto normalizado do resultado contem o texto normalizado original.
+
+  Se a comparacao falhar, a publicacao e bloqueada e a diferenca fica na
+  auditoria. Isso protege o historico do anuncio e o SEO ja conquistado.
+
+================================================================================
+ PARTE 12 — QUALIDADE E HONESTIDADE DE DADOS
+================================================================================
+
+  Classes de origem:
+    A_PRIMARY_UI      lido da tela autenticada do marketplace
+    B_PLATFORM_EXPORT arquivo exportado pela propria plataforma
+    C_USER_INPUT      informado pelo usuario
+    D_CALCULATED      derivado de outros dados
+    E_ESTIMATED       estimativa declarada
+    F_EXTERNAL        fonte externa
+    G_UNAVAILABLE     nao disponivel
+
+  Estados de um valor: ZERO, UNKNOWN, NOT_COLLECTED, UNAVAILABLE,
+  ESTIMATED, CALCULATED, VERIFIED.
+
+  Regra: zero e zero, ausente e ausente. O painel mostra o motivo em vez de
+  um numero inventado. Tela que nao consegue salvar diz isso ao usuario —
+  nunca finge que salvou.
+
+================================================================================
+ PARTE 13 — SEGURANCA: PAPEIS, SESSOES, SEGREDOS
+================================================================================
+
+  - Senhas com hash e salt; sessoes com expiracao e revogacao.
+  - Token do painel rotativo: cada inicio do servico gera um novo, e a
+    rotacao cria uma sessao real (nao um identificador solto).
+  - O servico escuta apenas em 127.0.0.1 e valida a origem das chamadas
+    (CORS com lista de identificadores de extensao permitidos).
+  - Segredos cifrados em disco; a chave do Gemini nunca chega ao navegador.
+  - Isolamento entre contas por account_id em todas as consultas.
+  - Auditoria de cada acao sensivel, com autor, antes e depois.
+  - Protecao contra prompt injection: todo texto vindo de marketplace e
+    tratado como dado nao confiavel antes de entrar em prompt.
+  - Backup automatico antes de alteracao critica e verificacao posterior.
+
+================================================================================
+ PARTE 14 — BANCO DE DADOS (89 TABELAS)
+================================================================================
+
+  SQLite embarcado (node:sqlite), arquivo unico em
+  %LOCALAPPDATA%\MarketplaceIntelligence\. Migracoes versionadas:
+  001_init.sql e 002_competitive_intelligence.sql.
+
+    users                             auth_sessions                     audit_log                         data_sources                      
+    data_source_runs                  data_provenance                   data_quality_issues               import_jobs                       
+    marketplaces                      accounts                          catalog_products                  skus                              
+    listings                          listing_variations                listing_snapshots                 sku_costs                         
+    marketplace_fees                  price_observations                price_scenarios                   price_rules                       
+    price_change_approvals            keywords                          keyword_clusters                  keyword_observations              
+    keyword_competitor_gaps           search_snapshots                  search_results                    rank_observations                 
+    visibility_share_snapshots        competitors                       competitor_listings               competitor_snapshots              
+    competitor_events                 competitor_alerts                 category_snapshots                category_trends                   
+    product_opportunities             opportunity_scores                customer_voice_items              customer_voice_topics             
+    return_reason_observations        review_insights                   metric_definitions                metric_tree_nodes                 
+    growth_initiatives                growth_hypotheses                 experiments                       experiment_variants               
+    experiment_observations           experiment_results                cohorts                           cohort_metrics                    
+    attribution_records               tasks                             task_items                        task_runs                         
+    automation_guard_decisions        change_sets                       image_library                     description_learnings             
+    typing_profiles                   agent_runs                        agent_evidence                    agent_recommendations             
+    human_feedback                    knowledge_items                   validated_playbooks               gemini_usage                      
+    prompt_versions                   debate_sessions                   auto_upgrade_proposals            connector_registry                
+    connector_credentials_metadata    connector_usage_costs             forecast_runs                     forecast_scenarios                
+    anomaly_events                    alerts                            settings                          secrets                           
+    backups                           schema_migrations                 own_products                      competitor_candidates             
+    competitor_relations              competitor_feedback               competitor_learning_rules         competitor_monitoring_points      
+    competitor_search_runs            
+
+================================================================================
+ PARTE 15 — EXTENSAO DE NAVEGADOR
+================================================================================
+
+  Manifest V3, versao 3.2.0, service worker classico, painel lateral.
+
+  15.1 O que ela faz
+
+    - Reconhece o marketplace pela URL (Mercado Livre BR/MX, Shopee, Amazon).
+    - Classifica a pagina: painel do vendedor, anuncios, pedidos, Ads,
+      perguntas, reputacao, devolucoes, estoque, login, desafio.
+    - Le os rotulos conhecidos da tela (visitas, vendas, faturamento,
+      estoque, perguntas, avaliacoes) e monta o snapshot.
+    - Envia ao servico local pelo host nativo ou por HTTP em 127.0.0.1.
+
+  15.2 Conexao
+
+    - Descoberta de porta na faixa 47811 a 47830.
+    - Token obtido em /api/token, guardado localmente, renovado quando o
+      servico responde 401.
+    - Heartbeat de 1 minuto; fila de envio tentada a cada 5 minutos.
+    - Cartao "Conexao manual" (porta e token) para quando tudo mais falhar.
+    - Diagnostico (mi.diagnose) mostra worker, HTTP, host nativo e token com
+      semaforo verde, amarelo, vermelho ou cinza.
+
+  15.3 O que ela nao faz (por decisao de projeto)
+
+    - Nao le cookie, nao le token do marketplace, nao reproduz requisicao
+      interna, nao resolve CAPTCHA, nao simula humano.
+    - Nao le grafico em canvas: declara o dado como nao coletado.
+
+================================================================================
+ PARTE 16 — NATIVE MESSAGING HOST
+================================================================================
+
+  Programa Node.js registrado no Chrome e no Edge (HKCU) com o identificador
+  fixo da extensao. A extensao fala com ele por stdio e ele repassa ao
+  servico local. Vantagem: nao depende de porta aberta nem de CORS.
+  Se o host nao estiver disponivel, a extensao cai para HTTP em 127.0.0.1.
+
+================================================================================
+ PARTE 17 — INSTALADOR, ARQUIVOS E DESINSTALACAO
+================================================================================
+
+  Instalador: MarketplaceIntelligence-Setup.exe (21.8 MB), pt-BR, x64.
+
+  Ele faz: copia o programa, cria atalhos (area de trabalho e menu iniciar),
+  registra o host nativo para Chrome e Edge, grava o identificador da
+  extensao, cria a pasta de dados, gera as credenciais do administrador e
+  registra a inicializacao automatica (autorizada pelo usuario).
+
+  Desinstalar: Configuracoes > Aplicativos > Marketplace Intelligence >
+  Desinstalar. O programa sai; a pasta de dados e preservada para nao apagar
+  historico. Apague-a manualmente se quiser remover tudo.
+
+================================================================================
+ PARTE 18 — CHECKLIST: O QUE ESTA PRONTO, PARCIAL E PLANEJADO
+================================================================================
+
+  246 itens em 21 secoes. Estado de hoje:
+
+    Funcionando (verificado) ...... 126
+    Parcial ....................... 77
+    Nao funciona .................. 35
+    Nao existe .................... 8
+
+  A lista completa, item por item com a observacao de cada um, esta em
+  docs/CHECKLIST-FUNCIONALIDADES.md e no PDF
+  docs/Checklist-Funcionalidades-Marketplace-Intelligence.pdf.
+
+
+  1. Acesso e controle do sistema
+    ✅  Login administrativo
+    🟡  Controle de usuários e permissões
+    ✅  Identificação automática do marketplace
+    🟡  Identificação automática da conta/loja
+    🟡  Suporte a múltiplas contas
+    🟡  Visão individual por loja
+    ❌  Visão consolidada de todas as lojas
+    🟡  Compatibilidade com Chrome
+    🟡  Compatibilidade com Edge
+    ✅  Extensão conectada ao serviço local
+    ✅  Reconhecimento de sessão expirada
+    ✅  Reconexão após login manual
+
+  2. Controle e navegação do navegador
+    🟡  Abrir páginas do marketplace pela sessão autenticada
+    ⬜  Navegar automaticamente entre as áreas autorizadas
+    ✅  Identificar páginas e painéis do vendedor
+    🟡  Reconhecer tabelas, gráficos e indicadores
+    ❌  Identificar filtros e períodos
+    ⬜  Navegar por paginação
+    ⬜  Coletar informações de várias páginas
+    ✅  Identificar anúncios e produtos
+    🟡  Salvar o progresso da navegação
+    🟡  Retomar operações interrompidas
+    🟡  Pausar quando houver CAPTCHA ou bloqueio
+    🟡  Mostrar o que está sendo coletado em tempo real
+
+  3. Coleta automática de dados
+    🟡  Vendas / pedidos / unidades
+    🟡  Faturamento
+    ❌  Receita líquida
+    🟡  Visitas
+    🟡  Impressões / cliques
+    ❌  Taxa de conversão
+    ❌  Publicidade, investimento, vendas atribuídas
+    ✅  Preço dos anúncios
+    ❌  Descontos e promoções
+    ❌  Comissões e taxas
+    🟡  Estoque
+    🟡  Perguntas
+    🟡  Avaliações e reputação
+    ❌  Cancelamentos / devoluções / reclamações / motivos
+    🟡  Atualizar histórico automaticamente
+
+  4. Central de sincronização
+    ✅  Botão atualizar dados agora
+    ✅  Atualizar somente a página atual
+    ⬜  Atualizar todos os dados da loja
+    ⬜  Atualizar várias contas / todos os marketplaces
+    🟡  Agendar por hora / 6h / diária / semanal / personalizado
+    🟡  Mostrar progresso da coleta
+    ✅  Mostrar última atualização
+    ✅  Mostrar erros de captura
+    🟡  Repetir coleta com falha
+    ✅  Mostrar dados ausentes
+    ✅  Evitar registros duplicados
+
+  5. Painel executivo e KPIs
+    ✅  Dashboard geral
+    🟡  Faturamento, vendas, pedidos, ticket médio
+    ✅  CTR, CVR, ROAS, ACoS, TACoS, CPC, custo por venda
+    ✅  Participação de Ads no faturamento
+    ✅  Margem de contribuição, lucro estimado
+    ❌  Lucro realizado
+    ✅  Taxa de devolução / cancelamento
+    ✅  Giro e cobertura de estoque
+    ✅  Participação orgânica
+    🟡  Histórico de indicadores e gráficos de evolução
+
+  6. Comparações e diagnósticos
+    🟡  Hoje x ontem, 7d x anterior, 30d x anterior, mês x mês
+    🟡  Períodos personalizados
+    ❌  Comparação entre lojas / marketplaces / produtos / anúncios
+    🟡  Identificar quedas, custos, perda de conversão
+    🟡  Campanhas deficitárias
+    🟡  Produtos com potencial
+    ✅  Diagnóstico das causas
+    ✅  Sugestão de ações corretivas
+
+  7. Inteligência competitiva e concorrentes
+    ✅  Cadastrar produtos próprios
+    ✅  Identificar concorrentes automaticamente
+    🟡  Pesquisa por EAN/GTIN/UPC/marca/modelo/SKU/atributos
+    ✅  Anúncios semelhantes / em outros marketplaces
+    🟡  Analisar os 10–20 primeiros resultados
+    ✅  Iguais / similares / confiança
+    ✅  Pendentes / aprovar / rejeitar / editar
+    ✅  Aprender com aprovações e rejeições
+    ✅  Monitorar aprovados
+    🟡  Histórico de preços / promoções
+    🟡  Comparar avaliações, posicionamento, frete, títulos, imagens, atributos
+    ❌  Anúncios patrocinados visíveis
+    ✅  Vantagens competitivas / como superar
+
+  8. SEO e inteligência de palavras-chave
+    ✅  Pesquisar palavras-chave
+    ❌  Sugestões de busca
+    🟡  Keywords dos concorrentes
+    ✅  Keywords ausentes nos próprios anúncios
+    🟡  Cauda longa / intenção de compra
+    ❌  Agrupamentos
+    🟡  Cobertura SEO
+    ✅  Monitorar posições / histórico
+    ❌  Participação de visibilidade
+    ✅  Sugerir títulos / atributos
+    ❌  Canibalização entre anúncios próprios
+
+  9. Financeiro e precificação
+    ✅  Cadastrar custo, embalagem, frete, imposto, comissão
+    ✅  Margem por SKU / lucro por anúncio
+    ✅  Simular preço, desconto, cupom, Ads
+    ✅  Preço mínimo viável / competitivo
+    🟡  Anúncios com margem negativa
+    ✅  Oportunidades de margem
+    ❌  Kits e combos
+    ✅  Ponto de equilíbrio
+    🟡  Rentabilidade entre produtos
+
+  10. Publicidade e campanhas
+    ❌  Analisar campanhas, investimento, cliques, impressões
+    ✅  ROAS / ACoS / TACoS
+    🟡  Campanhas deficitárias
+    🟡  Anúncios que merecem mais investimento
+    🟡  Consumir orçamento sem resultado
+    ✅  Considerar margem antes de escalar
+    ✅  Considerar estoque antes de investir
+    ✅  Simular mudanças de orçamento
+    ⬜  Preparar alterações de campanha
+    ❌  Executar alterações autorizadas
+
+  11. Produtos, anúncios e CRO
+    🟡  Cadastro e gestão de produtos
+    ✅  Cadastro de SKUs
+    🟡  Gestão de variações
+    ✅  Análise de títulos / descrições
+    🟡  Sugestões de imagens
+    ❌  Biblioteca de imagens
+    🟡  Preparar troca de capa
+    ✅  Fichas técnicas / informações ausentes
+    ✅  Conteúdo para conversão / blocos anti-devolução
+    ✅  Preservar integralmente o texto original
+    ✅  Comparação antes e depois
+    🟡  Duplicar anúncios
+    ❌  Variações de oferta
+    🟡  Medir resultados das alterações
+
+  12. Estoque e operação
+    🟡  Monitorar estoque
+    ✅  Risco de ruptura / cobertura
+    ✅  Produtos parados / alto giro
+    ✅  Alertar estoque insuficiente
+    ✅  Cruzar estoque com Ads
+    ✅  Recomendar reposição
+    🟡  Perguntas pendentes
+    🟡  Problemas operacionais
+
+  13. Voz do cliente e pós-venda
+    🟡  Analisar avaliações / perguntas / reclamações / devoluções
+    🟡  Motivos recorrentes de devolução
+    🟡  Objeções de compra / problemas de qualidade
+    ✅  Oportunidades de melhoria de produto
+    ✅  Recomendações para reduzir devoluções
+    🟡  Monitorar reputação
+
+  14. Inteligência artificial e aprendizado
+    ✅  14 agentes especializados
+    ✅  AI Director coordenando
+    🟡  Chat de consulta com Gemini
+    ✅  Debate entre agentes
+    ✅  Memória operacional local
+    ✅  Aprender com aprovações / rejeições / resultados
+    ✅  Reutilizar estratégias que funcionaram
+    ✅  Histórico de recomendações
+    🟡  Melhoria progressiva
+    ✅  Controle de orçamento da IA
+    ✅  Funcionamento sem Gemini
+    ✅  Propostas de melhoria do software
+    🟡  Auto-upgrade com aprovação, backup e rollback
+
+  15. Modos de operação e análise
+    ❌  AUTO_PILOT / AUTO_ASSISTED / MANUAL_GUIDED
+    ❌  Análise RÁPIDA / PADRÃO / FORENSE
+    🟡  Análise por conta / produto / anúncio
+    ❌  Análise 360° da loja
+    🟡  Agendamento de análises
+    ✅  Análises sob demanda
+    🟡  Relatórios automáticos
+    ✅  Missões do Dia
+    ✅  Alertas de oportunidade / problema crítico
+
+  16. Growth Lab e experimentação
+    ❌  Criar iniciativas
+    ✅  Criar hipóteses
+    ✅  Árvore de métricas
+    ✅  Criar testes A/B
+    ✅  Antes e depois
+    ✅  Significância estatística
+    ✅  Problemas de amostragem
+    ✅  Registrar aprendizados
+    ✅  Estratégias vencedoras
+    ✅  Impacto em margem e lucro
+
+  17. Central de tarefas e automações
+    ✅  Criar tarefas individuais
+    🟡  Criar em lote / por filtro de desempenho
+    ✅  Executar imediatamente
+    ✅  Agendar / recorrência
+    ✅  Pausar / retomar / cancelar / pular item
+    🟡  Retentar com falha
+    ✅  Preparar em rascunho
+    🟡  Publicar alterações autorizadas
+    ✅  Perfis e velocidade de digitação
+    ✅  Verificar se foi salvo
+    ✅  Registrar resultados
+    🟡  Reverter quando suportado
+
+  18. Conectores e integrações opcionais
+    🟡  Importar CSV
+    ❌  Importar XLSX
+    ❌  Importar PDF
+    ⬜  APIs oficiais opcionais
+    ⬜  Serviços externos opcionais
+    ❌  Google Trends / GA4 / Search Console / SEO / inteligência
+    ✅  Testar conexão
+    🟡  Ativar/desativar conector
+    ✅  Custos e limites
+    ✅  Última sincronização
+    ❌  Desconectar integrações
+    ✅  Operar sem nenhuma API externa
+
+  19. Relatórios e administração
+    ✅  Relatório executivo / KPIs / financeiro / anúncio / concorrentes / auditoria
+    ✅  Exportar CSV
+    ❌  Exportar XLSX
+    ✅  Exportar JSON
+    ❌  Gerar PDF
+    ✅  Criar backups
+    ✅  Consultar backups
+    ❌  Restaurar dados
+    ✅  Histórico de operações / auditoria
+    🟡  Reverter alterações
+    ✅  Gerenciar chave Gemini
+    ✅  Consultar consumo de IA
+    ✅  Diagnosticar adaptadores
+    🟡  Configurar permissões e limites financeiros
+
+  20. Interface e experiência SaaS
+    ✅  Painel moderno e profissional
+    🟡  Todas as funcionalidades na interface
+    ✅  Menu lateral completo
+    🟡  Filtros por marketplace / conta / período / SKU / anúncio
+    ❌  Tabelas pesquisáveis
+    ❌  Ordenação e paginação
+    ❌  Gráficos históricos
+    🟡  Comparações lado a lado
+    ❌  Detalhamento ao clicar nos KPIs
+    🟡  Explicação das fórmulas
+    ✅  Indicadores de origem dos dados
+    ✅  Indicadores de qualidade dos dados
+    ✅  Avisos e notificações
+    ✅  Área de demonstração identificada
+    🟡  Nenhum botão sem funcionamento
+    ✅  Nenhuma informação fictícia misturada aos dados reais
+
+  21. Segurança, instalação e funcionamento
+    ✅  Banco de dados local
+    ✅  Serviço local persistente
+    ✅  Native Messaging Host
+    ✅  Criptografia de credenciais
+    ✅  Proteção de chaves e tokens
+    ✅  Isolamento entre contas
+    ✅  Auditoria das ações
+    ✅  Proteção contra prompt injection
+    ✅  Proteção contra alterações não autorizadas
+    ✅  Automation Guard
+    ✅  Backup antes de alterações críticas
+    ✅  Verificação posterior das alterações
+    ✅  Instalador Windows completo
+    ✅  Instalação sem conhecimento técnico
+    ✅  Inicialização automática autorizada
+    🟡  Atualização do software
+    ✅  Desinstalação correta
+    ✅  Testes automatizados aprovados
+    🟡  Teste real em Chrome
+    🟡  Teste real em Edge
+    ✅  Documentação atualizada
+
+================================================================================
+ PARTE 19 — LIMITACOES CONHECIDAS E PROIBICOES
+================================================================================
+
+  Limitacoes reais desta versao:
+
+    - A leitura da tela cobre os rotulos conhecidos do painel do vendedor.
+      Graficos em canvas e componentes que carregam sob demanda ainda nao
+      sao lidos (aparecem como dado nao coletado).
+    - Nao ha tela de usuarios e permissoes: os papeis existem e sao aplicados
+      no servico, mas a criacao de usuarios e feita por API.
+    - Nao ha visao consolidada entre contas.
+    - Exportacao em CSV e JSON; XLSX e PDF ainda nao.
+    - Integracoes externas (planilhas, ERP) estao planejadas, nao prontas.
+    - Forecast exige 8 semanas de historico coletado.
+
+  Proibicoes (nao sao limitacoes, sao decisoes):
+
+    - Nenhuma API oficial? Usa a sessao do usuario. Nunca endpoint privado.
+    - Nunca reenviar requisicao capturada, nunca extrair cookie ou token.
+    - Nunca burlar autenticacao, CAPTCHA ou anti-bot.
+    - Nunca simular comportamento humano para enganar deteccao.
+    - Nunca inventar dado para preencher tela.
+
+================================================================================
+ PARTE 20 — SOLUCAO DE PROBLEMAS
+================================================================================
+
+  20.1 O painel abre pedindo login ou mostra erro de sessao
+
+    Abra pelo atalho (ele injeta o token). Se persistir, veja
+    admin-credentials.txt e confira a porta em port.txt.
+
+  20.2 "Nao foi possivel obter a URL do painel"
+
+    Veja %LOCALAPPDATA%\MarketplaceIntelligence\logs\service.log e
+    panel-err.txt. Confira se a porta 47811 esta livre.
+
+  20.3 A extensao nao captura
+
+    - Recarregue a extensao em chrome://extensions (ou edge://extensions).
+    - Abra o painel lateral e veja os quatro indicadores.
+    - Cinza = nao testado: clique em "Testar conexao".
+    - Amarelo = respondeu e recusou: veja a mensagem (token ou sessao).
+    - Vermelho = fora do ar: o servico local nao esta rodando; abra o atalho.
+    - Recarregue a pagina do marketplace depois de instalar a extensao.
+
+  20.4 Indicadores aparecem como indisponiveis
+
+    E o comportamento correto sem captura: o sistema mostra o motivo em vez
+    de inventar numero.
+
+  20.5 Erro de validacao na API
+
+    A mensagem diz qual campo falhou. Dinheiro em centavos inteiros;
+    percentuais de 0 a 100.
+
+  20.6 Erro no Gemini
+
+    NO_KEY, BUDGET_EXCEEDED, QUOTA, RATE_LIMIT, HTTP_ERROR, EMPTY_RESPONSE,
+    NETWORK. A falta do Gemini nao quebra calculo nem revisao.
+
+  20.7 Ja tentei tudo
+
+    Abra Pre-Start & Diagnostico, clique em "Testar conexao" e leia os
+    quatro semaforos. E o mesmo caminho que o suporte tecnico percorre.
+
+================================================================================
+ PARTE 21 — DESENVOLVIMENTO, BUILD E TESTES
+================================================================================
+
+  Node.js 22 em tools/node-v22.14.0-win-x64 (embarcado no projeto).
+
+  Instalar dependencias:   npm install
+  Tipos:                   npx tsc --noEmit -p tsconfig.json
+  Testes:                  npx vitest run
+  Build do servico:        node scripts/build-local-agent.mjs
+  Build da extensao:       node scripts/build-extension.mjs
+  Build do host nativo:    node scripts/build-native-host.mjs
+  Pacote Windows:          node scripts/package-windows.mjs
+  Instalador (Inno Setup): "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+                           installer\marketplace-intelligence.iss
+  Este documento:          node scripts/gerar-documentacao-txt.mjs
+
+  Arquivos de teste: 7 (extension.test.ts, competitor.test.ts, local-agent.test.ts, main.test.ts, native-host.test.ts, competitive.test.ts, shared.test.ts).
+  Resultado da ultima execucao: 177 de 177 testes aprovados e tsc limpo.
+
+================================================================================
+ PARTE 22 — O QUE MUDOU NESTA VERSAO (26/11/2026)
+================================================================================
+
+  Defeitos encontrados numa varredura completa e corrigidos:
+
+   1. Captura que nunca completava: o worker da extensao chamava
+      sessionToken() em 7 pontos e a funcao NAO EXISTIA. O erro aparecia
+      como "servico local indisponivel". A funcao foi definida e um teste
+      passa a falhar se o worker voltar a chamar funcao inexistente.
+   2. O envio ao servico ia sem o token no corpo; a API autentica pelo
+      campo token do envelope, nao pelo cabecalho. Agora vai nos dois.
+   3. Paginas do vendedor eram classificadas com um tipo fora do contrato
+      (metrics). Agora usam os tipos validos (seller_dashboard etc.).
+   4. A conta local:default nao existia antes da captura; agora e criada a
+      partir dos dados da pagina, com confianca baixa e nao verificada.
+   5. Botoes do painel mandavam payload incompleto: keyword.gap sem
+      accountId, competitor.relations com ownProductId nulo e
+      adapter.diagnostics sem marketplace. Os tres foram corrigidos e
+      verificados no servico instalado.
+   6. Busca de concorrentes perdia a lista inteira quando um candidato nao
+      tinha os campos do schema; agora normaliza antes de enviar.
+   7. O Guard derrubava a chamada com "Cannot read properties of undefined"
+      quando faltava contexto; agora valida e responde o que falta.
+   8. Agentes quebravam com metricas vazias; agora declaram o dado ausente.
+   9. Exportacao de relatorio reescrita: gera CSV e JSON reais por tipo de
+      relatorio (antes a opcao existia e nao produzia arquivo).
+  10. Growth iniciativas e somente leitura no servico: o botao agora avisa
+      em vez de fingir que gravou.
+
+  Resultado: 177 de 177 testes aprovados, tsc limpo, pacote reinstalado e
+  verificado ponta a ponta (captura, guard, relatorio, tarefa, voz do
+  cliente, financeiro).
+
+================================================================================
+ GLOSSARIO
+================================================================================
+
+  ACoS .......... custo de publicidade sobre o faturamento total
+  CVR ........... taxa de conversao (pedidos / visitas)
+  CTR ........... taxa de cliques (cliques / impressoes)
+  Guard ......... conjunto de verificacoes que autoriza ou bloqueia acao
+  IPC ........... chamada interna entre painel/extensao e servico local
+  MDE ........... diferenca minima detectavel num experimento
+  MV3 ........... Manifest V3, modelo atual de extensao do Chrome
+  ROAS .......... retorno sobre o investimento em publicidade
+  SRM ........... desvio na proporcao da amostra (sinal de experimento
+                  mal distribuido)
+  TACoS ......... custo de publicidade sobre o faturamento total, incluindo
+                  vendas organicas
+  VoC ........... voz do cliente (avaliacoes, perguntas, reclamacoes)
+
+================================================================================
+ FIM DO DOCUMENTO
+================================================================================

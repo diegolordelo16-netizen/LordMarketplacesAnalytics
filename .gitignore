@@ -1,28 +1,22 @@
-# runtime portátil e dependências
-tools/
+# Dependências
 node_modules/
-**/node_modules/
-.pnpm-store/
 
-# artefatos de build
+# Artefatos de build (gerados por scripts/build-*.mjs)
 dist/
-build/
-release/
-*.tsbuildinfo
 
-# banco local e dados do usuário (NUNCA versionar)
-data/
+# Binários embarcados (baixados/baixados do Node e do instalador)
+tools/
+installer/output/
+
+# Dados locais do software em execução
 *.db
 *.db-wal
 *.db-shm
-logs/
-
-# segredos e configuração local
-.env
-.env.local
-*.token
+*.log
 secrets/
+backups/
 
-# sistema
-.DS_Store
+# Sistema
 Thumbs.db
+desktop.ini
+.DS_Store
