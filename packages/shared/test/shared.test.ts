@@ -101,6 +101,12 @@ describe('motor de KPIs (§9)', () => {
     expect(k.pillars.operational_health.stockoutRisk).toBe('LOW');
   });
 
+  it('não marca faturamento ausente quando o GMV fornece o fallback bruto', () => {
+    const k = computeListingKpis({ ...base, grossRevenue: undefined, gmv: 30000 });
+    expect(k.missingInputs).not.toContain('grossRevenue');
+    expect(k.pillars.acquisition_ads.tacos.value).toBeCloseTo((2000 / 30000) * 100, 6);
+  });
+
   it('nunca transforma campo ausente em zero nem usa GMV como receita líquida', () => {
     const k = computeListingKpis({ ...base, netRevenue: undefined, adSpend: undefined, paidImpressions: undefined });
     expect(k.pillars.acquisition_ads.adSpend).toBeNull();
@@ -501,6 +507,22 @@ describe('estatística de experimentação (§15)', () => {
     expect(ci.low).toBeGreaterThanOrEqual(0);
     expect(ci.high).toBeLessThanOrEqual(1);
     expect(ci.mean).toBeCloseTo(0.06, 2);
+  });
+
+  it('rejeita parâmetros estatísticos fora dos domínios válidos', () => {
+    expect(() => normalCdf(Number.NaN)).toThrow(/finito/);
+    expect(() => sampleSizePerArm(Number.NaN, 0.01)).toThrow(/proporção base/);
+    expect(() => sampleSizePerArm(0.9, 0.2)).toThrow(/MDE/);
+    expect(() => sampleSizePerArm(0.1, 0.01, 1, 0.8)).toThrow(/alpha/);
+    expect(() => sampleSizePerArm(0.1, 0.01, 0.05, 0.5)).toThrow(/poder/);
+    expect(() => compareProportions({ successes: 11, n: 10 }, { successes: 1, n: 10 })).toThrow(/exceder/);
+    expect(() => compareProportions({ successes: 1, n: -1 }, { successes: 1, n: 10 })).toThrow(/inteiro seguro/);
+    expect(() => compareProportions({ successes: 1, n: 10 }, { successes: 1, n: 10 }, { alpha: 0 })).toThrow(/alpha/);
+    expect(() => detectSrm([10, 10], 1)).toThrow(/expectedRatio/);
+    expect(() => detectSrm([-1, 10])).toThrow(/inteiro seguro/);
+    expect(() => betaCredibleInterval(11, 10)).toThrow(/exceder/);
+    expect(() => betaCredibleInterval(1, 10, { a: 0, b: 1 })).toThrow(/prior Beta/);
+    expect(() => betaCredibleInterval(1, 10, { a: 1, b: 1 }, 1)).toThrow(/level/);
   });
 
   it('veredito: ganho com guardrail violado é HARMFUL', () => {

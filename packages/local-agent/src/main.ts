@@ -22,7 +22,7 @@ import {
   SecretStore,
   TaskScheduler,
 } from './index';
-import { createFileLogger, processFrames, encodeFrame } from './host-bridge';
+import { createFileLogger, processNativeStream, encodeFrame } from './host-bridge';
 import { spawn } from 'node:child_process';
 import { startPanelServer, type PanelServer } from './server/panel-server';
 import {
@@ -139,7 +139,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     knowledge,
     autoUpgrade,
     capture,
-    version: options.version ?? '3.1.0',
+    version: options.version ?? '3.2.1',
   });
 
   // Token de sessão do painel: gerado a cada início, nunca persistido em disco.
@@ -149,7 +149,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     db,
     service,
     gemini,
-    version: options.version ?? '3.1.0',
+    version: options.version ?? '3.2.1',
     token,
     dataDir,
     close: async () => {
@@ -171,16 +171,11 @@ export function defaultDataDir(): string {
 /** Executa o modo nativo: lê frames de stdin e responde em stdout. */
 export function runNativeHost(app: Bootstrap, logger = createFileLogger(join(app.dataDir, 'logs'))): void {
   logger.info(`serviço local em modo nativo (pid ${process.pid})`);
-  process.stdin.on('data', (chunk: Buffer) => {
-    void (async () => {
-      const result = await processFrames(chunk, {
-        logger,
-        service: (req) => app.service.handle(req),
-      });
-      for (const response of result.responses) process.stdout.write(encodeFrame(response));
-    })();
-  });
-  process.stdin.resume();
+  void processNativeStream(
+    process.stdin,
+    { logger, service: (req) => app.service.handle(req) },
+    (response) => process.stdout.write(encodeFrame(response)),
+  ).catch((err: unknown) => logger.error('falha ao processar stream Native Messaging', err));
 }
 
 export interface StartedApp extends Bootstrap {

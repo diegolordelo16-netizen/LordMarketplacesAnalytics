@@ -55,27 +55,52 @@ export class LocalDatabase {
           .sort()
       : [];
 
-    const appliedRows = this.db.prepare('SELECT version FROM schema_migrations').all() as Array<{ version: number }>;
-    const appliedSet = new Set(appliedRows.map((r) => r.version));
+    const appliedRows = this.db
+      .prepare('SELECT version, checksum FROM schema_migrations')
+      .all() as Array<{ version: number; checksum: string }>;
+    const appliedByVersion = new Map(appliedRows.map((row) => [row.version, row.checksum]));
+    const seenVersions = new Set<number>();
+    const migrations = files.map((file) => {
+      const version = Number.parseInt(file.split('_')[0] as string, 10);
+      if (!Number.isSafeInteger(version) || version < 1) {
+        throw new Error(`versão de migration inválida: ${file}`);
+      }
+      if (seenVersions.has(version)) throw new Error(`versão de migration duplicada: ${version} (${file})`);
+      seenVersions.add(version);
+      const sql = readFileSync(join(this.migrationsDir, file), 'utf8');
+      const checksum = createHash('sha256').update(sql).digest('hex');
+      return { file, version, sql, checksum };
+    });
+
+    // A validação completa precede qualquer DDL: migration aplicada ausente ou alterada
+    // não pode ser descoberta só depois que outras pendentes já foram executadas.
+    for (const version of appliedByVersion.keys()) {
+      if (!seenVersions.has(version)) {
+        throw new Error(`migration ${version} já aplicada não existe no diretório; restaure o arquivo original`);
+      }
+    }
+    for (const migration of migrations) {
+      const appliedChecksum = appliedByVersion.get(migration.version);
+      if (appliedChecksum !== undefined && appliedChecksum !== migration.checksum) {
+        throw new Error(`migration ${migration.version} foi alterada depois de aplicada; restaure o arquivo original ou crie uma nova migration`);
+      }
+    }
 
     const applied: number[] = [];
     const skipped: number[] = [];
 
-    for (const file of files) {
-      const version = Number.parseInt(file.split('_')[0] as string, 10);
-      if (appliedSet.has(version)) {
-        skipped.push(version);
+    for (const migration of migrations) {
+      if (appliedByVersion.has(migration.version)) {
+        skipped.push(migration.version);
         continue;
       }
-      const sql = readFileSync(join(this.migrationsDir, file), 'utf8');
-      const checksum = createHash('sha256').update(sql).digest('hex');
       this.transaction(() => {
-        this.db.exec(sql);
+        this.db.exec(migration.sql);
         this.db
           .prepare('INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)')
-          .run(version, file, new Date().toISOString(), checksum);
+          .run(migration.version, migration.file, new Date().toISOString(), migration.checksum);
       });
-      applied.push(version);
+      applied.push(migration.version);
     }
     return { applied, skipped };
   }
@@ -107,7 +132,10 @@ export class LocalDatabase {
     } catch (err) {
       this.txDepth -= 1;
       if (isOuter) this.db.exec('ROLLBACK');
-      else this.db.exec(`ROLLBACK TO ${savepoint}`);
+      else {
+        this.db.exec(`ROLLBACK TO ${savepoint}`);
+        this.db.exec(`RELEASE ${savepoint}`);
+      }
       throw err;
     }
   }

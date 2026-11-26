@@ -165,7 +165,10 @@ export function computeListingKpis(input: ListingPeriodInput): ListingKpis {
     },
   };
 
-  const missingInputs = REQUIRED_INPUTS.filter((k) => input[k] === undefined).map(String);
+  const missingInputs = REQUIRED_INPUTS
+    .filter((key) => key !== 'grossRevenue' && input[key] === undefined)
+    .map(String);
+  if (input.grossRevenue === undefined && input.gmv === undefined) missingInputs.push('grossRevenue');
 
   return {
     listingId: input.listingId,

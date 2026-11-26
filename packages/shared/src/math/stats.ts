@@ -21,6 +21,18 @@ export interface TwoProportionResult {
   inconclusiveReason?: string;
 }
 
+function assertProbability(value: number, label: string): void {
+  if (!Number.isFinite(value) || value <= 0 || value >= 1) {
+    throw new RangeError(`${label} deve estar entre 0 e 1 (exclusive)`);
+  }
+}
+
+function assertCount(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${label} deve ser um inteiro seguro não negativo`);
+  }
+}
+
 /** Erro padrão da diferença entre duas proporções (pooled). */
 function pooledSe(p1: number, p2: number, n1: number, n2: number): number | null {
   if (n1 <= 0 || n2 <= 0) return null;
@@ -35,6 +47,7 @@ function unpooledSe(p1: number, p2: number, n1: number, n2: number): number | nu
 
 /** Aproximação de Abramowitz-Stegun para a normal padrão acumulada (erro < 1.5e-7). */
 export function normalCdf(z: number): number {
+  if (!Number.isFinite(z)) throw new RangeError('z deve ser finito');
   const t = 1 / (1 + 0.2316419 * Math.abs(z));
   const poly =
     t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
@@ -49,6 +62,7 @@ export function twoSidedPValue(z: number): number {
 
 /** z crítico para confiança de duas caudas (95% → 1.96). */
 export function zCritical(confidence = 0.95): number {
+  assertProbability(confidence, 'confiança');
   // Busca binária simples e determinística.
   let lo = 0;
   let hi = 6;
@@ -66,9 +80,15 @@ export function zCritical(confidence = 0.95): number {
  * em proporção base `p`, com alfa e poder dados (fórmula padrão de duas proporções).
  */
 export function sampleSizePerArm(p: number, mde: number, alpha = 0.05, power = 0.8): number {
-  if (p <= 0 || p >= 1) throw new Error('proporção base deve estar em (0,1)');
-  if (mde <= 0) throw new Error('MDE deve ser > 0');
-  const p2 = Math.min(0.999999, Math.max(0.000001, p + mde));
+  assertProbability(p, 'proporção base');
+  assertProbability(alpha, 'alpha');
+  if (!Number.isFinite(mde) || mde <= 0 || p + mde >= 1) {
+    throw new RangeError('MDE deve ser finito, positivo e manter p + MDE abaixo de 1');
+  }
+  if (!Number.isFinite(power) || power <= 0.5 || power >= 1) {
+    throw new RangeError('poder deve estar entre 0,5 e 1 (exclusive)');
+  }
+  const p2 = p + mde;
   const za = zCritical(1 - alpha);
   const zb = zCritical(2 * power - 1);
   const pBar = (p + p2) / 2;
@@ -93,6 +113,20 @@ export function compareProportions(
 ): TwoProportionResult {
   const alpha = opts.alpha ?? 0.05;
   const minSample = opts.minSamplePerArm ?? 100;
+  assertProbability(alpha, 'alpha');
+  assertCount(s1.n, 'n do grupo 1');
+  assertCount(s2.n, 'n do grupo 2');
+  assertCount(s1.successes, 'sucessos do grupo 1');
+  assertCount(s2.successes, 'sucessos do grupo 2');
+  if (s1.successes > s1.n || s2.successes > s2.n) {
+    throw new RangeError('sucessos não podem exceder o tamanho da amostra');
+  }
+  if (!Number.isSafeInteger(minSample) || minSample < 1) {
+    throw new RangeError('minSamplePerArm deve ser um inteiro positivo');
+  }
+  if (opts.metricsCount !== undefined && (!Number.isSafeInteger(opts.metricsCount) || opts.metricsCount < 1)) {
+    throw new RangeError('metricsCount deve ser um inteiro positivo');
+  }
   const p1 = s1.n > 0 ? s1.successes / s1.n : 0;
   const p2 = s2.n > 0 ? s2.successes / s2.n : 0;
   const diff = p2 - p1;
@@ -138,7 +172,12 @@ export function detectSrm(
   expectedRatio = 0.5,
   alpha = 0.0001,
 ): { srm: boolean; pValue: number; observedRatio: number } {
+  assertCount(observed[0], 'observado do grupo 1');
+  assertCount(observed[1], 'observado do grupo 2');
+  assertProbability(expectedRatio, 'expectedRatio');
+  assertProbability(alpha, 'alpha');
   const total = observed[0] + observed[1];
+  if (!Number.isSafeInteger(total)) throw new RangeError('total observado excede o inteiro seguro');
   if (total === 0) return { srm: false, pValue: 1, observedRatio: 0 };
   const e1 = total * expectedRatio;
   const e2 = total * (1 - expectedRatio);
@@ -154,7 +193,8 @@ export function detectSrm(
  * para documentar a regra usada — não é um método exato de alpha-spending.
  */
 export function sequentialAlphaPerLook(alpha: number, looks: number): number {
-  if (looks < 1) throw new Error('looks deve ser >= 1');
+  assertProbability(alpha, 'alpha');
+  if (!Number.isSafeInteger(looks) || looks < 1) throw new RangeError('looks deve ser um inteiro >= 1');
   return alpha / looks;
 }
 
@@ -165,8 +205,15 @@ export function betaCredibleInterval(
   prior: { a: number; b: number } = { a: 1, b: 1 },
   level = 0.95,
 ): { low: number; high: number; mean: number } {
+  assertCount(successes, 'sucessos');
+  assertCount(n, 'n');
+  if (successes > n) throw new RangeError('sucessos não podem exceder n');
+  if (!Number.isFinite(prior.a) || prior.a <= 0 || !Number.isFinite(prior.b) || prior.b <= 0) {
+    throw new RangeError('parâmetros do prior Beta devem ser finitos e positivos');
+  }
+  assertProbability(level, 'level');
   const a = prior.a + successes;
-  const b = prior.b + Math.max(0, n - successes);
+  const b = prior.b + (n - successes);
   const mean = a / (a + b);
   const variance = (a * b) / ((a + b) ** 2 * (a + b + 1));
   const sd = Math.sqrt(variance);

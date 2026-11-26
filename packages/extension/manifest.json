@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Marketplace Intelligence",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Inteligência e operações autônomas para marketplaces, direto no seu navegador autenticado. Sem APIs oficiais, sem cookies, sem tokens.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy3DeSiq+OYEqVR3l2lS549ay8MsYHs+G8D2+XKJhTI7kIn0fbCJRA5kH3qZQtz8CQU+lYhBjkeXGEzfgOfmhu9Y8Na2Fib1BlRr4pG4leyRXnjppXfJUZAgGK6I8WGIlEZCnj7hT9f/Zb15F+pm/fHCnXREVX+QCwgu/txozqHxZnC1UaQKx3UnFHAOOmveKIwL/J8yUHrYFA1j9Qq4G/uC/5i6Tv5XkCF44QYKDOjMPpK2Mu/F6kCA/ITc+EH/Hq3yCusccQoK7dJo/cpJTwt94EYXVF/noqstOXrQCVmjG3+YDqc5wdvqLSz2wY5uIcTuWdYkMzKyLNSOXBfIZ9QIDAQAB",
   "default_locale": "pt_BR",
@@ -18,7 +18,8 @@
     "https://*.mercadolivre.com.br/*",
     "https://*.mercadolibre.com/*",
     "https://*.shopee.com.br/*",
-    "https://sellercentral.amazon.com.br/*"
+    "https://sellercentral.amazon.com.br/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "service-worker.js"

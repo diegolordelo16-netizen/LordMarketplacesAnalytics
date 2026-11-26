@@ -1,8 +1,10 @@
 export {
   MAX_FRAME_BYTES,
   BufferFrameReader,
+  StreamingFrameDecoder,
   encodeFrame,
   processFrames,
+  processNativeStream,
   runHost,
   createFileLogger,
   appDataDir,

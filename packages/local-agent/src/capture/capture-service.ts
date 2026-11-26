@@ -39,14 +39,22 @@ export class CaptureService {
     let written = 0;
 
     this.db.transaction(() => {
-      // Conta precisa existir (isolamento por conta, §6).
-      const account = this.db.db.prepare('SELECT id FROM accounts WHERE id = ?').get(data.accountId);
-      if (!account) {
+      // A conta precisa existir, estar ativa e pertencer ao marketplace declarado.
+      // O ID sozinho não prova a associação marketplace → conta.
+      const account = this.db.db
+        .prepare('SELECT id, marketplace, is_active FROM accounts WHERE id = ?')
+        .get(data.accountId) as { id: string; marketplace: string; is_active: number } | undefined;
+      if (!account || account.is_active !== 1 || account.marketplace !== data.marketplace) {
+        const reason = !account
+          ? `conta ${data.accountId} não cadastrada`
+          : account.is_active !== 1
+            ? `conta ${data.accountId} inativa`
+            : `conta ${data.accountId} pertence ao marketplace ${account.marketplace}, não ${data.marketplace}`;
         issues.push({
           kind: 'REFERENTIAL_BREAK',
           severity: 'CRITICAL',
           field: 'accountId',
-          message: `conta ${data.accountId} não cadastrada; captura rejeitada`,
+          message: `${reason}; captura rejeitada`,
         });
         return;
       }

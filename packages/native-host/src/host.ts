@@ -12,10 +12,47 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { ipcRequestSchema, MAX_MESSAGE_BYTES } from '@mi/shared';
+import { ipcRequestSchema, MAX_MESSAGE_BYTES, protocolCompatible, PROTOCOL_VERSION } from '@mi/shared';
 import type { IpcResponse } from '@mi/shared';
 
 export const MAX_FRAME_BYTES = MAX_MESSAGE_BYTES;
+
+/**
+ * Decodificador incremental do stream Native Messaging. Eventos `data` do Node
+ * não respeitam os limites dos frames; cabeçalho e corpo podem chegar fragmentados.
+ */
+export class StreamingFrameDecoder {
+  private pending = Buffer.alloc(0);
+
+  push(chunk: Uint8Array): Buffer[] {
+    if (chunk.byteLength === 0) return [];
+    this.pending = this.pending.length
+      ? Buffer.concat([this.pending, Buffer.from(chunk)])
+      : Buffer.from(chunk);
+
+    const frames: Buffer[] = [];
+    let offset = 0;
+    while (this.pending.length - offset >= 4) {
+      const length = this.pending.readUInt32LE(offset);
+      if (length > MAX_FRAME_BYTES) {
+        throw new Error(`frame de ${length} bytes excede o limite de ${MAX_FRAME_BYTES}`);
+      }
+      const frameLength = 4 + length;
+      if (this.pending.length - offset < frameLength) break;
+      frames.push(Buffer.from(this.pending.subarray(offset, offset + frameLength)));
+      offset += frameLength;
+    }
+
+    this.pending = offset > 0 ? Buffer.from(this.pending.subarray(offset)) : this.pending;
+    return frames;
+  }
+
+  finish(): void {
+    if (this.pending.length > 0) {
+      throw new Error(`stdin terminou com frame incompleto (${this.pending.length} bytes pendentes)`);
+    }
+  }
+}
 
 export interface HostLogger {
   info(message: string): void;
@@ -130,10 +167,23 @@ export async function processFrames(input: Buffer, options: HostOptions): Promis
       responses.push({
         id,
         ok: false,
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         error: {
           code: 'VALIDATION_ERROR',
           message: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+        },
+      });
+      continue;
+    }
+
+    if (!protocolCompatible(parsed.data.protocolVersion)) {
+      responses.push({
+        id: parsed.data.id,
+        ok: false,
+        protocolVersion: PROTOCOL_VERSION,
+        error: {
+          code: 'PROTOCOL_MISMATCH',
+          message: `protocolo ${parsed.data.protocolVersion} não suportado; esperado ${PROTOCOL_VERSION}`,
         },
       });
       continue;
@@ -145,7 +195,7 @@ export async function processFrames(input: Buffer, options: HostOptions): Promis
       responses.push({
         id: parsed.data.id,
         ok: false,
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
         error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
       });
       options.logger.error(`falha no método ${parsed.data.method}`, err);
@@ -153,6 +203,22 @@ export async function processFrames(input: Buffer, options: HostOptions): Promis
   }
 
   return { responses, errors };
+}
+
+/** Reconstitui frames entre eventos arbitrários do stream e processa-os em ordem. */
+export async function processNativeStream(
+  input: AsyncIterable<Uint8Array>,
+  options: HostOptions,
+  write: (response: IpcResponse) => void,
+): Promise<void> {
+  const decoder = new StreamingFrameDecoder();
+  for await (const chunk of input) {
+    for (const frame of decoder.push(chunk)) {
+      const result = await processFrames(frame, options);
+      for (const response of result.responses) write(response);
+    }
+  }
+  decoder.finish();
 }
 
 /** Diretório de dados do app no Windows. */
@@ -176,20 +242,14 @@ export async function runHost(options: HostOptions): Promise<void> {
     process.exit(1);
   }
 
-  process.stdin.on('data', (chunk: Buffer) => {
-    void (async () => {
-      const result = await processFrames(chunk, options);
-      for (const response of result.responses) {
-        process.stdout.write(encodeFrame(response));
-      }
-    })();
-  });
-
-  process.stdin.on('end', () => {
+  try {
+    await processNativeStream(process.stdin, options, (response) => {
+      process.stdout.write(encodeFrame(response));
+    });
     options.logger.info('stdin encerrado; host finalizando');
-  });
-
-  process.stdin.resume();
+  } catch (err) {
+    options.logger.error('falha ao processar stream Native Messaging', err);
+  }
 }
 
 /** Utilitário usado pelo instalador: manifesto com o caminho absoluto do host. */

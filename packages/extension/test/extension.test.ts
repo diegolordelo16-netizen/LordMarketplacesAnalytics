@@ -22,6 +22,12 @@ function loadDomUtils() {
 describe('extensão: manifest', () => {
   const manifest = JSON.parse(readFileSync(join(ext, 'manifest.json'), 'utf8'));
 
+  it('mantém a versão visível do painel alinhada ao manifest', () => {
+    const panel = readFileSync(join(ext, 'panel', 'panel.html'), 'utf8');
+    expect(panel.match(/id="version">v([^<]+)</)?.[1]).toBe(manifest.version);
+    expect(manifest.version).toBe('3.2.1');
+  });
+
   it('é MV3 e não pede permissões além do necessário', () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.permissions).toEqual(
@@ -33,11 +39,14 @@ describe('extensão: manifest', () => {
     expect(manifest.permissions).not.toContain('history');
   });
 
-  it('restringe host_permissions a domínios de marketplace', () => {
-    for (const pattern of manifest.host_permissions) {
+  it('restringe host_permissions a marketplaces e ao loopback do serviço local', () => {
+    const marketplaceHosts = manifest.host_permissions.filter((pattern: string) => pattern !== 'http://127.0.0.1/*');
+    expect(marketplaceHosts.length).toBeGreaterThan(0);
+    for (const pattern of marketplaceHosts) {
       expect(pattern).toMatch(/mercadolivre|mercadolibre|shopee|sellercentral\.amazon/);
-      expect(pattern).not.toBe('<all_urls>');
     }
+    expect(manifest.host_permissions).toContain('http://127.0.0.1/*');
+    expect(manifest.host_permissions).not.toContain('<all_urls>');
   });
 
   it('todos os arquivos citados existem no pacote', () => {
@@ -100,6 +109,12 @@ describe('extensão: manifest', () => {
     const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
     expect(worker).not.toMatch(/^\s*import\s/m);
     expect(worker).not.toMatch(/^\s*export\s/m);
+  });
+
+  it('aceita chamadas IPC apenas de páginas da própria extensão', () => {
+    const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
+    expect(worker).toContain('sender.id !== chrome.runtime.id');
+    expect(worker).toContain('sender.url.startsWith(extensionOrigin)');
   });
 });
 

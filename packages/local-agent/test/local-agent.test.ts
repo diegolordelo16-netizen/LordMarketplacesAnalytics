@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import { TaskScheduler } from '../src/scheduler/task-scheduler';
 import { SecretStore, hashPassword } from '../src/security/secrets';
 import { GeminiClient } from '../src/ai/gemini-client';
 import { KnowledgeBase } from '../src/ai/knowledge-base';
-import { AutoUpgradeEngine } from '../src/ai/auto-upgrade';
+import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths } from '../src/ai/auto-upgrade';
 import { CaptureService } from '../src/capture/capture-service';
 import { LocalService, redactPII } from '../src/service';
 import { evaluateGuard, GUARD_CHECKS } from '../src/guard/automation-guard';
@@ -74,6 +74,52 @@ describe('banco local', () => {
     expect(db.rows<{ version: number }>('SELECT version FROM schema_migrations').length).toBe(before);
   });
 
+  it('detecta alteração de migration já aplicada', () => {
+    const migrationsDir = join(dir, 'migration-check');
+    mkdirSync(migrationsDir, { recursive: true });
+    const migrationFile = join(migrationsDir, '0001_probe.sql');
+    writeFileSync(migrationFile, 'CREATE TABLE migration_probe (id TEXT PRIMARY KEY);', 'utf8');
+    const probeDb = new LocalDatabase({ file: join(dir, 'migration-check.sqlite'), migrationsDir });
+    try {
+      expect(probeDb.migrate().applied).toEqual([1]);
+      writeFileSync(join(migrationsDir, '0002_pending.sql'), 'CREATE TABLE pending_migration_probe (id TEXT PRIMARY KEY);', 'utf8');
+      writeFileSync(migrationFile, 'CREATE TABLE migration_probe (id TEXT PRIMARY KEY, note TEXT);', 'utf8');
+      expect(() => probeDb.migrate()).toThrow(/foi alterada depois de aplicada/);
+      expect(probeDb.row<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_migration_probe'")).toBeNull();
+    } finally {
+      probeDb.close();
+    }
+  });
+
+  it('detecta migration aplicada removida do pacote', () => {
+    const migrationsDir = join(dir, 'missing-migration-check');
+    mkdirSync(migrationsDir, { recursive: true });
+    const migrationFile = join(migrationsDir, '0001_probe.sql');
+    writeFileSync(migrationFile, 'CREATE TABLE missing_migration_probe (id TEXT PRIMARY KEY);', 'utf8');
+    const probeDb = new LocalDatabase({ file: join(dir, 'missing-migration-check.sqlite'), migrationsDir });
+    try {
+      expect(probeDb.migrate().applied).toEqual([1]);
+      rmSync(migrationFile);
+      expect(() => probeDb.migrate()).toThrow(/já aplicada não existe no diretório/);
+    } finally {
+      probeDb.close();
+    }
+  });
+
+  it('libera savepoints aninhados depois de rollback', () => {
+    db.db.exec('CREATE TABLE nested_tx_probe (value TEXT PRIMARY KEY)');
+    db.transaction(() => {
+      expect(() => db.transaction(() => {
+        db.db.prepare('INSERT INTO nested_tx_probe (value) VALUES (?)').run('rollback');
+        throw new Error('rollback de teste');
+      })).toThrow(/rollback de teste/);
+      db.transaction(() => {
+        db.db.prepare('INSERT INTO nested_tx_probe (value) VALUES (?)').run('commit');
+      });
+    });
+    expect(db.rows<{ value: string }>('SELECT value FROM nested_tx_probe')).toEqual([{ value: 'commit' }]);
+  });
+
   it('gera backup verificável', () => {
     const b = db.backup('teste');
     expect(b.bytes).toBeGreaterThan(0);
@@ -99,6 +145,12 @@ describe('autenticação e perfis', () => {
     const r = await call('task.list', {}, false);
     expect(r.ok).toBe(false);
     expect(r.error?.code).toBe('UNAUTHORIZED');
+  });
+
+  it('rejeita versão de protocolo incompatível antes de executar o método', async () => {
+    const r = await service.handle({ id: 'future', protocolVersion: 2, method: 'ping', payload: {} });
+    expect(r.ok).toBe(false);
+    expect(r.error?.code).toBe('PROTOCOL_MISMATCH');
   });
 
   it('bloqueia método inexistente', async () => {
@@ -192,6 +244,22 @@ describe('captura e KPIs', () => {
     const res = r.result as { ok: boolean; errors: string[] };
     expect(res.ok).toBe(false);
     expect(res.errors.join(' ')).toContain('não cadastrada');
+  });
+
+  it('rejeita captura quando a conta pertence a outro marketplace', async () => {
+    await call('account.upsert', {
+      marketplace: 'shopee',
+      accountId: 'sh:conta1',
+      displayName: 'Loja Shopee',
+      confidence: 1,
+      verifiedByUser: true,
+    });
+    const r = await call('capture.ingest', { ...payload, accountId: 'sh:conta1' });
+    const result = r.result as { ok: boolean; listingsIngested: number; errors: string[] };
+    expect(result.ok).toBe(false);
+    expect(result.listingsIngested).toBe(0);
+    expect(result.errors.join(' ')).toMatch(/pertence ao marketplace shopee/);
+    expect(db.rows<{ count: number }>('SELECT COUNT(*) AS count FROM listing_snapshots')[0]?.count).toBe(0);
   });
 
   it('grava snapshot com proveniência quando a conta existe', async () => {
@@ -496,5 +564,56 @@ describe('backup', () => {
     expect((r.result as { ok: boolean }).ok).toBe(true);
     const audit = db.rows<{ action: string }>("SELECT action FROM audit_log WHERE action = 'BACKUP_CREATE'");
     expect(audit.length).toBe(1);
+  });
+});
+
+
+describe('segurança de caminhos do auto-upgrade', () => {
+  it.each(['../secrets.env', '../../outside.ts', '/etc/passwd', 'C:\\Windows\\win.ini', '\\\\server\\share\\file.ts'])(
+    'recusa o caminho inseguro %s', (target) => {
+      const diff = `diff --git a/safe.ts b/${target}\n--- a/safe.ts\n+++ b/${target}\n@@ -1 +1 @@\n-old\n+new\n`;
+      expect(() => extractTargetPaths(diff)).toThrow(/caminho de patch/);
+    },
+  );
+
+  it('não chama reader nem writer quando o diff contém traversal', () => {
+    let reads = 0;
+    let writes = 0;
+    const diff = [
+      'diff --git a/../../secret.txt b/../../secret.txt',
+      '--- a/../../secret.txt',
+      '+++ b/../../secret.txt',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+      '',
+    ].join('\n');
+    const result = applyUnifiedDiff(diff, () => { reads += 1; return 'old'; }, () => { writes += 1; });
+    expect(result.errors.join(' ')).toMatch(/caminho de patch/);
+    expect(reads).toBe(0);
+    expect(writes).toBe(0);
+  });
+
+  it('valida todos os hunks antes de gravar qualquer arquivo', () => {
+    const diff = [
+      'diff --git a/first.ts b/first.ts',
+      '--- a/first.ts',
+      '+++ b/first.ts',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new',
+      'diff --git a/second.ts b/second.ts',
+      '--- a/second.ts',
+      '+++ b/second.ts',
+      '@@ -1 +1 @@',
+      '-expected',
+      '+new',
+      '',
+    ].join('\n');
+    const writes: string[] = [];
+    const result = applyUnifiedDiff(diff, (path) => path === 'first.ts' ? 'old' : 'actual', (path) => writes.push(path));
+    expect(result.errors.join(' ')).toMatch(/contexto do hunk não corresponde/);
+    expect(writes).toEqual([]);
+    expect(result.appliedFiles).toEqual([]);
   });
 });

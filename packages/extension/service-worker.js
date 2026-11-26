@@ -439,8 +439,17 @@ async function diagnose() {
 }
 
 /** Ponte para o painel lateral e para o popup. */
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== 'MI_CALL') return false;
+  const extensionOrigin = `chrome-extension://${chrome.runtime.id}/`;
+  if (
+    sender.id !== chrome.runtime.id ||
+    typeof sender.url !== 'string' ||
+    !sender.url.startsWith(extensionOrigin)
+  ) {
+    sendResponse({ ok: false, error: { code: 'SENDER', message: 'origem não autorizada' } });
+    return false;
+  }
   void (async () => {
     try {
       if (message.method === 'capture.activeTab') {

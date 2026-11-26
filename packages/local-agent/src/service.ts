@@ -7,6 +7,8 @@ import { z } from 'zod';
 import {
   evaluateQualityGate,
   ipcRequestSchema,
+  protocolCompatible,
+  PROTOCOL_VERSION,
   roleHasPermission,
   simulateScenario,
   buildDailyMissions,
@@ -1027,6 +1029,17 @@ export class LocalService {
       };
     }
     const req = parsed.data;
+    if (!protocolCompatible(req.protocolVersion)) {
+      return {
+        id: req.id,
+        ok: false,
+        protocolVersion: PROTOCOL_VERSION,
+        error: {
+          code: 'PROTOCOL_MISMATCH',
+          message: `protocolo ${req.protocolVersion} não suportado; esperado ${PROTOCOL_VERSION}`,
+        },
+      };
+    }
     const handler = this.handlers.get(req.method);
     if (!handler) {
       return { id: req.id, ok: false, protocolVersion: 1, error: { code: 'NOT_FOUND', message: `método ${req.method} inexistente` } };

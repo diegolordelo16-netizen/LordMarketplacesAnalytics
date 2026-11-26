@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BufferFrameReader,
   MAX_FRAME_BYTES,
+  StreamingFrameDecoder,
   buildRegFile,
   encodeFrame,
   planRegistration,
   processFrames,
+  processNativeStream,
   type HostLogger,
 } from '../src/index';
 
@@ -41,6 +43,24 @@ describe('framing do host nativo', () => {
   it('devolve null quando o frame está incompleto', () => {
     const buf = frame({ n: 1 }).subarray(0, 6);
     expect(new BufferFrameReader(buf).read()).toBeNull();
+  });
+
+  it('reconstitui frames quando cabeçalho e corpo chegam fragmentados', () => {
+    const input = Buffer.concat([frame({ id: 'a' }), frame({ id: 'b' })]);
+    const decoder = new StreamingFrameDecoder();
+    const frames: Buffer[] = [];
+    for (const byte of input) frames.push(...decoder.push(Buffer.from([byte])));
+    decoder.finish();
+    expect(frames.map((part) => JSON.parse(part.subarray(4).toString('utf8')))).toEqual([
+      { id: 'a' },
+      { id: 'b' },
+    ]);
+  });
+
+  it('não aceita EOF com frame parcialmente recebido', () => {
+    const decoder = new StreamingFrameDecoder();
+    decoder.push(frame({ id: 'partial' }).subarray(0, 6));
+    expect(() => decoder.finish()).toThrow(/frame incompleto/);
   });
 
   it('rejeita frame acima do limite', () => {
@@ -112,6 +132,37 @@ describe('processamento de mensagens', () => {
       service: async (req) => ({ id: (req as { id: string }).id, ok: true, protocolVersion: 1 }),
     });
     expect(result.responses.map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('processa stream fragmentado em ordem e rejeita protocolo incompatível', async () => {
+    const input = Buffer.concat([frame(request({ id: 'a' })), frame(request({ id: 'b' }))]);
+    const order: string[] = [];
+    const responses: Array<{ id: string }> = [];
+    async function* chunks(): AsyncGenerator<Buffer> {
+      yield input.subarray(0, 2);
+      yield input.subarray(2, 9);
+      yield input.subarray(9);
+    }
+    await processNativeStream(chunks(), {
+      logger: silentLogger,
+      service: async (raw) => {
+        const id = (raw as { id: string }).id;
+        order.push(`start:${id}`);
+        await Promise.resolve();
+        order.push(`end:${id}`);
+        return { id, ok: true, protocolVersion: 1 };
+      },
+    }, (response) => responses.push({ id: response.id }));
+    expect(order).toEqual(['start:a', 'end:a', 'start:b', 'end:b']);
+    expect(responses.map((response) => response.id)).toEqual(['a', 'b']);
+
+    let called = false;
+    const incompatible = await processFrames(frame(request({ protocolVersion: 2 })), {
+      logger: silentLogger,
+      service: async () => { called = true; return { id: 'x', ok: true, protocolVersion: 1 }; },
+    });
+    expect(called).toBe(false);
+    expect(incompatible.responses[0]?.error?.code).toBe('PROTOCOL_MISMATCH');
   });
 });
 

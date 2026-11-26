@@ -3,8 +3,8 @@
  * Travamentos obrigatórios: nada é aplicado sem validação + testes + aprovação do super_admin
  * + backup automático, e cada aplicação é reversível com 1 clique.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import type { LocalDatabase } from '../db/database';
 import type { GeminiClient } from '../ai/gemini-client';
@@ -42,6 +42,52 @@ export function canApply(pre: ApplyPreconditions): { allowed: boolean; reasons: 
   if (!pre.syntaxValid) reasons.push('patch com erro de sintaxe/schema');
   if (!pre.backupPath || !existsSync(pre.backupPath)) reasons.push('backup pré-aplicação ausente ou inválido');
   return { allowed: reasons.length === 0, reasons };
+}
+
+/** Recusa caminhos absolutos, traversal e sintaxe de caminho Windows em qualquer host. */
+function assertSafePatchPath(rawPath: string): string {
+  const normalized = rawPath.replace(/\\/g, '/');
+  if (
+    !normalized ||
+    normalized.includes('\0') ||
+    normalized.startsWith('/') ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.split('/').some((part) => part === '..')
+  ) {
+    throw new Error(`caminho de patch fora da raiz permitido: ${rawPath}`);
+  }
+  const segments = normalized.split('/').filter((part) => part && part !== '.');
+  if (segments.length === 0) throw new Error(`caminho de patch inválido: ${rawPath}`);
+  return segments.join(sep);
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/** Resolve sob a raiz e verifica o ancestral real existente para bloquear symlink escape. */
+function resolveInsideRoot(root: string, rawPath: string): string {
+  const safePath = assertSafePatchPath(rawPath);
+  const rootPath = realpathSync(resolve(root));
+  const target = resolve(rootPath, safePath);
+  if (!isPathInside(rootPath, target)) {
+    throw new Error(`caminho de patch fora da raiz permitido: ${rawPath}`);
+  }
+  let current = target;
+  while (isPathInside(rootPath, current)) {
+    if (existsSync(current)) {
+      const actual = realpathSync(current);
+      if (!isPathInside(rootPath, actual)) {
+        throw new Error(`caminho de patch atravessa link simbólico fora da raiz: ${rawPath}`);
+      }
+      break;
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return target;
 }
 
 export interface PatchPreview {
@@ -196,13 +242,22 @@ export class AutoUpgradeEngine {
     // Snapshot dos arquivos alvo.
     const snapshotDir = join(this.baseDir, 'upgrade-snapshots', row.id);
     mkdirSync(snapshotDir, { recursive: true });
-    const targets = extractTargetPaths(row.diff_text);
-    for (const t of targets) {
-      const abs = join(input.targetRoot, t);
-      if (existsSync(abs)) {
-        const dest = join(snapshotDir, t.replace(/[\\/]/g, '__'));
-        copyFileSync(abs, dest);
+    let targets: string[];
+    try {
+      targets = extractTargetPaths(row.diff_text);
+    } catch (err) {
+      return { applied: false, reasons: [err instanceof Error ? err.message : String(err)], backupPath: backup.path };
+    }
+    try {
+      for (const t of targets) {
+        const abs = resolveInsideRoot(input.targetRoot, t);
+        if (existsSync(abs)) {
+          const dest = join(snapshotDir, t.replace(/[\\/]/g, '__'));
+          copyFileSync(abs, dest);
+        }
       }
+    } catch (err) {
+      return { applied: false, reasons: [err instanceof Error ? err.message : String(err)], backupPath: backup.path };
     }
 
     const { appliedFiles, errors } = applyUnifiedDiff(row.diff_text, input.readFile, input.writeFile);
@@ -226,7 +281,15 @@ export class AutoUpgradeEngine {
     const snapshotDir = join(this.baseDir, 'upgrade-snapshots', proposalId);
     if (!existsSync(snapshotDir)) return { ok: false, message: 'snapshot de arquivos não encontrado' };
 
-    const targets = extractTargetPaths(row.diff_text);
+    let targets: string[];
+    try {
+      targets = extractTargetPaths(row.diff_text).map((path) => {
+        resolveInsideRoot(targetRoot, path);
+        return path;
+      });
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
     let restored = 0;
     for (const t of targets) {
       const snap = join(snapshotDir, t.replace(/[\\/]/g, '__'));
@@ -271,7 +334,7 @@ export function extractTargetPaths(diff: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(diff)) !== null) {
     const p = (m[1] as string).trim();
-    if (p && p !== '/dev/null') paths.add(p);
+    if (p && p !== '/dev/null') paths.add(assertSafePatchPath(p));
   }
   return [...paths];
 }
@@ -288,15 +351,24 @@ export function applyUnifiedDiff(
 ): { appliedFiles: string[]; errors: string[] } {
   const errors: string[] = [];
   const appliedFiles: string[] = [];
+  const pendingWrites: Array<{ target: string; original: string; content: string }> = [];
   const fileBlocks = diff.split(/^diff --git /m).slice(1);
   const blocks = fileBlocks.length > 0 ? fileBlocks : [diff];
 
   for (const block of blocks) {
     const targetMatch = /^\+\+\+ b\/(.+)$/m.exec(block);
     const sourceMatch = /^--- a\/(.+)$/m.exec(block);
-    const target = targetMatch?.[1]?.trim();
-    if (!target) continue;
-    const source = sourceMatch?.[1]?.trim() ?? target;
+    const rawTarget = targetMatch?.[1]?.trim();
+    if (!rawTarget) continue;
+    let target: string;
+    let source: string;
+    try {
+      target = assertSafePatchPath(rawTarget);
+      source = assertSafePatchPath(sourceMatch?.[1]?.trim() ?? rawTarget);
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+      continue;
+    }
     const hunks = block.split(/^(?=@@ )/m).filter((h) => h.startsWith('@@'));
     const baseContent = reader(source);
     if (baseContent === null) {
@@ -328,9 +400,27 @@ export function applyUnifiedDiff(
       current.splice(oldStart, oldLines.length, ...newLines);
       content = current.join('\n');
     }
-    if (ok) {
-      writeFile(target, content);
-      appliedFiles.push(target);
+    if (ok) pendingWrites.push({ target, original: baseContent, content });
+  }
+
+  if (errors.length === 0) {
+    const committed: typeof pendingWrites = [];
+    try {
+      for (const item of pendingWrites) {
+        committed.push(item);
+        writeFile(item.target, item.content);
+        appliedFiles.push(item.target);
+      }
+    } catch (err) {
+      for (const item of committed.reverse()) {
+        try {
+          writeFile(item.target, item.original);
+        } catch (rollbackError) {
+          errors.push(`rollback de ${item.target} falhou: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+      }
+      appliedFiles.length = 0;
+      errors.unshift(`falha ao gravar arquivos do patch: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return { appliedFiles, errors };
