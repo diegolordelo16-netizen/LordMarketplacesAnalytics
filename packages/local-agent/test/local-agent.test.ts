@@ -194,6 +194,22 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(JSON.parse(info.accounts[0].progress_json).pages[1].listingIds).toEqual(['MLB123452']);
   });
 
+  it('persiste identidade SPA geral e rejeita regressão ou troca de fingerprint',async()=>{
+    seedImportAccount('acct-spa-general');
+    const accountId='acct-spa-general';
+    const {batchId}=(await call('sync.createAll',{scope:'ACCOUNT',accountId,browserRequest:true})).result as {batchId:string};
+    const {leaseToken}=(await call('sync.claimAccount',{batchId,accountId})).result as {leaseToken:string};
+    const url='https://vendedores.mercadolivre.com.br/reputacao';
+    const pages=[1,2].map(n=>({page:n,pageKind:'seller_reputation',url,spaPage:n,spaFingerprint:String(n).repeat(64),filterSignature:'',ok:true}));
+    const payload={batchId,accountId,leaseToken,pagesScanned:2,pagesSucceeded:2,pages,seenUrls:[url],pendingLinks:[],maxPages:5};
+    expect((await call('sync.accountProgress',payload)).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:[pages[0],{...pages[1],spaFingerprint:'a'.repeat(64)}]})).ok).toBe(false);
+    expect((await call('sync.accountProgress',{...payload,pages:[pages[0],{...pages[1],spaFingerprint:undefined}]})).ok).toBe(false);
+    const info=(await call('sync.list',{batchId})).result as any;
+    expect(info.pageRuns.map((p:any)=>p.spa_page)).toEqual([1,2]);
+    expect(JSON.parse(info.accounts[0].progress_json).pages[1].spaFingerprint).toBe('2'.repeat(64));
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';
