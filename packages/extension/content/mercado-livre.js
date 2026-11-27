@@ -41,7 +41,7 @@
     if (/\/(anuncios|publicaciones)(\/|$)/i.test(url) && /vendedores\.|seller/i.test(url)) return 'seller_listings';
     if (/\/(publicidade|product_ads|ads|promocoes|promociones)\b/i.test(url)) return 'seller_ads';
     if (/\/(perguntas|preguntas|questions)\b/i.test(url)) return 'seller_questions';
-    if (/\/(reputacao|reputación|reputation)\b/i.test(url)) return 'seller_reputation';
+    if (/\/(reputacao|reputación|reputation|avaliacoes|reviews|opiniones)\b/i.test(url)) return 'seller_reputation';
     if (/\/(reclamacoes|reclamaciones|reclamos|claims|complaints|disputas|mediacoes|mediaciones)\b/i.test(url)) return 'seller_complaints';
     if (/\/(devolucoes|devoluciones|returns)\b/i.test(url)) return 'seller_returns';
     if (/\/(estoque|inventario|inventory|stock)\b/i.test(url)) return 'seller_inventory';
@@ -103,23 +103,7 @@
   }
 
   function visibleCustomerVoice(pageKind) {
-    const kind = pageKind === 'seller_complaints' ? 'COMPLAINT' : pageKind === 'seller_returns' ? 'RETURN_REASON' : null;
-    if (!kind) return [];
-    const selectors = kind === 'COMPLAINT'
-      ? '[data-testid*="claim-description"], [data-testid*="complaint-description"], [class*="claim-description"], [class*="complaint-description"]'
-      : '[data-testid*="return-reason"], [data-testid*="devolution-reason"], [class*="return-reason"], [class*="motivo-devolucao"]';
-    const items = [];
-    const seen = new Set();
-    for (const element of Array.from(document.querySelectorAll(selectors))) {
-      if (items.length >= 50 || !window.MI_DOM.isVisible(element)) continue;
-      const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
-      if (text.length < 3 || text.length > 5000 || seen.has(text)) continue;
-      seen.add(text);
-      const container = element.closest('[data-id], [data-testid*="claim"], [data-testid*="return"], tr');
-      const externalRef = container?.getAttribute('data-id') || undefined;
-      items.push({ kind, text, ...(externalRef ? { externalRef: String(externalRef).slice(0, 200) } : {}) });
-    }
-    return items;
+    return window.MI_DOM.visibleCustomerVoice(document, pageKind);
   }
 
   const LABELS = {

@@ -69,22 +69,7 @@
   }
 
   function visibleCustomerVoice(pageKind) {
-    const kind = pageKind === 'seller_complaints' ? 'COMPLAINT' : pageKind === 'seller_returns' ? 'RETURN_REASON' : null;
-    if (!kind) return [];
-    const selectors = kind === 'COMPLAINT'
-      ? '[data-testid*="dispute-description"], [data-testid*="complaint-description"], [class*="dispute-description"], [class*="complaint-description"]'
-      : '[data-testid*="return-reason"], [data-testid*="refund-reason"], [class*="return-reason"], [class*="refund-reason"]';
-    const items = [], seen = new Set();
-    for (const element of Array.from(document.querySelectorAll(selectors))) {
-      if (items.length >= 50 || !window.MI_DOM.isVisible(element)) continue;
-      const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
-      if (text.length < 3 || text.length > 5000 || seen.has(text)) continue;
-      seen.add(text);
-      const container = element.closest('[data-id], [data-testid*="dispute"], [data-testid*="return"], tr');
-      const externalRef = container?.getAttribute('data-id') || undefined;
-      items.push({ kind, text, ...(externalRef ? { externalRef: String(externalRef).slice(0, 200) } : {}) });
-    }
-    return items;
+    return window.MI_DOM.visibleCustomerVoice(document, pageKind);
   }
 
   const LABELS = {

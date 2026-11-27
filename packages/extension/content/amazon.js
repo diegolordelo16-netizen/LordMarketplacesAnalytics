@@ -11,6 +11,7 @@
     if (/\/(edit|update|delete|remove)(\/|\?|#|$)/i.test(url)) return 'unknown';
     if (/myinventory|manageinventory|inventory/i.test(url)) return 'seller_listings';
     if (/return|refund/i.test(url)) return 'seller_returns';
+    if (/\/(questions|question)(\/|\?|#|$)/i.test(url)) return 'seller_questions';
     if (/feedback|reputation|reviews/i.test(url)) return 'seller_reputation';
     if (/claims|complaints|disputes/i.test(url)) return 'seller_complaints';
     if (/orders-v3|\/orders/i.test(url)) return 'seller_orders';
@@ -24,7 +25,7 @@
   function visibleAuthorizedAreaLinks() {
     const allowed = new Set([
       'seller_dashboard', 'seller_orders', 'seller_listings', 'seller_ads',
-      'seller_questions', 'seller_reputation', 'seller_returns', 'seller_inventory',
+      'seller_questions', 'seller_reputation', 'seller_returns', 'seller_complaints', 'seller_inventory',
     ]);
     const current = new URL(location.href);
     const found = new Map();
@@ -115,9 +116,9 @@
     }
     if (['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints'].includes(pageKind)) {
       const fields = {
-        orders:['pedidos','orders','total order items'], units:['unidades vendidas','units ordered','units sold'],
+        orders:['pedidos','orders'], units:['unidades vendidas','units ordered','units sold'],
         gmv:['vendas de produtos pedidos','ordered product sales','faturamento bruto','gross sales'], netRevenue:['receita líquida','net revenue','net sales'],
-        visits:['sessões','sessions','visitas'], organicImpressions:['impressões orgânicas','organic impressions'], paidImpressions:['impressões pagas','ad impressions'],
+        visits:['visitas','visits'], organicImpressions:['impressões orgânicas','organic impressions'], paidImpressions:['impressões pagas','ad impressions'],
         adSpend:['gasto com anúncios','ad spend','advertising cost'], adClicks:['cliques em anúncios','ad clicks'],
         adAttributedRevenue:['vendas atribuídas','ad-attributed sales'], adAttributedOrders:['pedidos atribuídos','ad-attributed orders'],
         returnsCount:['devoluções','returns'], returnsValue:['valor devolvido','refund amount'], cancellations:['cancelamentos','cancellations'],
@@ -139,6 +140,7 @@
       ...visibleAccountIdentity(),
       url: location.href,
       listings,
+      customerVoice: window.MI_DOM.visibleCustomerVoice(document, pageKind),
       evidence,
       missing: pageKind === 'seller_listings' ? ['sku_or_asin', 'title', 'price', 'stockAvailable'].filter((key) => {
         if (key === 'sku_or_asin') return listings.length === 0;

@@ -127,5 +127,32 @@
     return /verify you are human|verifique que voce e humano|verifique se voce e humano|confirme que voce nao e um robo|complete o captcha|security check|human verification/.test(text);
   }
 
-  window.MI_DOM = { parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  /** Only explicit, visible text fields. Never use a static test-id as an item identity. */
+  function visibleCustomerVoice(root, pageKind) {
+    const spec = {
+      seller_questions: ['QUESTION','question-text','question-content','question-description'],
+      seller_reputation: ['REVIEW','review-text','review-content','feedback-comment'],
+      seller_complaints: ['COMPLAINT','claim-description','complaint-description','dispute-description'],
+      seller_returns: ['RETURN_REASON','return-reason','refund-reason','devolution-reason','motivo-devolucao'],
+    }[pageKind];
+    if (!spec) return [];
+    const [kind, ...names] = spec;
+    const selectors = names.flatMap(name => ['[data-testid*="' + name + '"]','[class*="' + name + '"]']).join(', ');
+    const attrs = { QUESTION:['data-question-id'], REVIEW:['data-review-id','data-feedback-id'], COMPLAINT:['data-claim-id','data-dispute-id'], RETURN_REASON:['data-return-id','data-refund-id'] }[kind];
+    const items = [], seen = new Set();
+    for (const element of root.querySelectorAll(selectors)) {
+      if (items.length >= 50 || !isVisible(element)) continue;
+      const text = String(element.innerText ?? '').replace(/\s+/g, ' ').trim();
+      if (text.length < 3 || text.length > 5000) continue;
+      const row = element.closest([...attrs.map(attr => '[' + attr + ']'),'[data-id]'].join(', '));
+      const ref = row && [...attrs,'data-id'].map(attr => row.getAttribute(attr)).find(value => value && /^[A-Za-z0-9_.:-]{1,150}$/.test(value));
+      const key = ref ? 'id:' + ref : 'text:' + text;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ kind, text, ...(ref ? { externalRef: ref } : {}) });
+    }
+    return items;
+  }
+
+  window.MI_DOM = { visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

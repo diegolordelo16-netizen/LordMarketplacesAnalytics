@@ -396,6 +396,7 @@ describe('extensão: classificação de página do Mercado Livre', () => {
       MI_DOM: {
         isVisible: (element: any) => !element.hidden,
         hasChallenge: () => false,
+        visibleCustomerVoice: () => [],
         extractExternalId: (value: unknown) => String(value).match(/MLB\d+/)?.[0] ?? null,
         parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
         findValueByLabel: () => null,
@@ -433,6 +434,7 @@ describe('extensão: classificação e diagnóstico da Shopee', () => {
     const window = {
       MI_DOM: {
         hasChallenge: () => false,
+        visibleCustomerVoice: () => [],
         findValueByLabel: (_body: unknown, labels: string[]) =>
           labels.some((label) => label === 'stock') ? { text: '12', label: 'Stock' } : null,
         parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
@@ -634,5 +636,23 @@ describe('captura direta: bloqueio de desafios', () => {
     expect(response.ok).toBe(false);
     expect(response.error).toContain('CAPTCHA');
     expect(response.snapshot).toBeUndefined();
+  });
+});
+
+
+describe('voz do cliente: campos visíveis e identidade real', () => {
+  it.each([['seller_questions','QUESTION','data-question-id'],['seller_reputation','REVIEW','data-review-id'],['seller_complaints','COMPLAINT','data-claim-id'],['seller_returns','RETURN_REASON','data-return-id']])('lê %s sem confiar em test-id', (pageKind, kind, attr) => {
+    class FakeElement {
+      constructor(public innerText: string, public visible: boolean, public id?: string) {}
+      getBoundingClientRect() { return { width: this.visible ? 20 : 0, height: 10 }; }
+      closest() { return this; }
+      getAttribute(name: string) { return name === attr ? this.id ?? null : name === 'data-testid' ? 'static-test-id' : null; }
+    }
+    const rows = [new FakeElement('Texto igual',true,'A1'),new FakeElement('Texto igual',true,'A2'),new FakeElement('Oculto',false,'A3'),new FakeElement('Outro comentário',true)];
+    const window: any = { getComputedStyle: () => ({ visibility:'visible', display:'block', opacity:'1' }) };
+    const context = vm.createContext({ window, Element: FakeElement });
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),context);
+    const result = window.MI_DOM.visibleCustomerVoice({ querySelectorAll: () => rows }, pageKind);
+    expect(result).toEqual([{kind,text:'Texto igual',externalRef:'A1'},{kind,text:'Texto igual',externalRef:'A2'},{kind,text:'Outro comentário'}]);
   });
 });
