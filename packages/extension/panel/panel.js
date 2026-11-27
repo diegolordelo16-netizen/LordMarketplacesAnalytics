@@ -500,7 +500,7 @@ async function learningTick(){
     if(learningSession!==session)return;
     if(!res?.ok||!ctx||ctx.tabId!==session.tabId||ctx.accountId!==session.accountId||ctx.origin!==session.origin){stopLearning('Aprendizado pausado: aba, loja ou área mudou.');return;}
     if(ctx.route===session.lastRoute&&ctx.pageKind===session.lastKind)return;
-    const saved=await call('learning.observe',{...session,route:ctx.route,pageKind:ctx.pageKind});
+    const saved=await call('learning.observe',{...session,route:ctx.route,pageKind:ctx.pageKind,fromRoute:session.lastRoute??undefined});
     if(learningSession!==session)return;
     if(!saved?.ok||saved.result?.ok!==true){stopLearning('Aprendizado pausado: '+(saved?.error?.message??'rota não reconhecida'));return;}
     session.lastRoute=ctx.route;session.lastKind=ctx.pageKind;
