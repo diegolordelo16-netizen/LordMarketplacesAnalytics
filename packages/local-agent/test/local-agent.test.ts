@@ -412,7 +412,7 @@ describe('captura de métricas agregadas da conta', () => {
       url: 'https://www.mercadolivre.com.br/anuncios/publicidade', sourceClass: 'A_PRIMARY_UI',
       referenceAt: '2026-11-26T13:00:00.000Z', collectedAt: '2026-11-26T13:00:00.000Z', method: 'content_script_dom', listings: [],
     });
-    expect(result.result).toMatchObject({ ok: false, errors: [expect.stringContaining('captura sem anúncios nem métricas de conta')] });
+    expect(result.result).toMatchObject({ ok: false, errors: [expect.stringContaining('captura sem anúncios, detalhes nem métricas de conta')] });
   });
 });
 
