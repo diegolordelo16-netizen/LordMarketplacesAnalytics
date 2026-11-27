@@ -751,8 +751,9 @@ export class LocalService {
       return account;
     };
     this.register('navigation.observe',(payload,auth)=>{
-      const i=navigationContext.extend({route:z.string().max(160).regex(/^\/(?:[a-z][a-z_-]{0,39}\/)*[a-z][a-z_-]{0,39}\/?$/i),pageKind:z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']) ,fromRoute:z.string().max(160).optional()}).strict().parse(payload);
+      const i=navigationContext.extend({route:z.string().max(160).regex(/^\/(?:[a-z][a-z_-]{0,39}\/)*[a-z][a-z_-]{0,39}\/?$/i),pageKind:z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']) ,fromRoute:z.string().max(160).optional(),actionKind:z.enum(['SPA_NEXT','FILTER_CHANGE']).optional()}).strict().parse(payload);
       navigationAccount(i);
+      if(i.actionKind&&i.fromRoute!==i.route)throw new Error('ação interna exige a mesma rota');
       const segments=i.route.toLowerCase().split('/').filter(Boolean);
       const allowed=new Set('portal product list manage datacenter business-insights order orders sales dashboard home resumo summary metricas stats performance vendas anuncios publicaciones moderador mis-publicaciones itens items publicidade product_ads ads promocoes promociones perguntas preguntas questions question reputacao reputation avaliacoes reviews opinions rating ratings reclamacoes reclamaciones claims complaints disputas mediacoes devolucoes devoluciones returns return refund estoque inventario inventory stock produtos productos ventas pedidos marketing advertising campaignmanager myinventory manageinventory feedback complaint dispute'.split(' '));
       if(segments.some(part=>!allowed.has(part)))throw new Error('rota não estrutural ou não reconhecida');
@@ -768,6 +769,7 @@ export class LocalService {
           if(!prior&&(db.row<{n:number}>('SELECT COUNT(*) n FROM navigation_transitions WHERE account_id=?',i.accountId)?.n??0)>=500)throw new Error('limite de transições atingido');
           db.db.prepare('INSERT INTO navigation_transitions(account_id,origin,from_route,to_route,last_seen_at) VALUES(?,?,?,?,?) ON CONFLICT(account_id,origin,from_route,to_route) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.fromRoute,i.route,now);
         }
+        if(i.actionKind)db.db.prepare('INSERT INTO navigation_actions(account_id,origin,route,action_kind,last_seen_at) VALUES(?,?,?,?,?) ON CONFLICT(account_id,origin,route,action_kind) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.route,i.actionKind,now);
       });
       this.audit(auth,'NAVIGATION_OBSERVE','account',i.accountId,'OK','rota estrutural demonstrada');
       return {ok:true};
@@ -785,7 +787,8 @@ export class LocalService {
       if(!db.row('SELECT 1 FROM accounts WHERE id=? AND is_active=1 AND verified_by_user=1',i.accountId))throw new Error('conta ativa e verificada necessária');
       return {
         routes:db.rows('SELECT origin,route,page_kind,observations,last_seen_at FROM navigation_memory WHERE account_id=? ORDER BY last_seen_at DESC,route LIMIT 100',i.accountId),
-        transitions:db.rows('SELECT origin,from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId)
+        transitions:db.rows('SELECT origin,from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId),
+        actions:db.rows('SELECT origin,route,action_kind,observations,last_seen_at FROM navigation_actions WHERE account_id=? ORDER BY last_seen_at DESC LIMIT 200',i.accountId)
       };
     });
     this.register('navigation.clear',(payload,auth)=>{
