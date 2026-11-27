@@ -1107,3 +1107,21 @@ describe('agendamento de busca competitiva',()=>{
     await vm.runInContext("competitorSchedule('stop')",context);expect(stored[key]).toBeUndefined();
   });
 });
+
+describe('captura pública do conteúdo de anúncios',()=>{
+  it('preserva descrição e promoção explícitas, não inventa hash e rejeita páginas não reconhecidas',()=>{
+    const source=readFileSync(join(ext,'service-worker.js'),'utf8');
+    const start=source.indexOf('function collectPublicProductContent(){'),end=source.indexOf('function collectPublicCompetitorCards(){',start);
+    expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
+    const visible={getClientRects:()=>[{}]};
+    const nodes:Record<string,any[]>={'#productTitle':[{...visible,innerText:'Capacete'}],'#productDescription':[{...visible,innerText:'Casco ABS'}],'#couponBadge, #couponText, #promoPriceBlockMessage_feature_div, #vpcButton':[{...visible,innerText:'Cupom 10%'}],'#landingImage, #altImages img':[{...visible,tagName:'IMG',currentSrc:'https://images.example.com/a.jpg?secret=1',complete:false}]};
+    const context=vm.createContext({URL,Date,location:{href:'https://www.amazon.com.br/dp/B012345678'},document:{querySelectorAll:(s:string)=>nodes[s]??[]},getComputedStyle:()=>({visibility:'visible',display:'block'})});
+    const fn=source.slice(start,end)+';collectPublicProductContent()';
+    expect(vm.runInContext(fn,context)).toMatchObject({description:'Casco ABS',promotions:['Cupom 10%'],images:[{url:'https://images.example.com/a.jpg'}]});
+    expect(vm.runInContext(fn,context).images[0]).not.toHaveProperty('dhash64');
+    delete nodes['#couponBadge, #couponText, #promoPriceBlockMessage_feature_div, #vpcButton'];
+    expect(vm.runInContext(fn,context)).not.toHaveProperty('promotions');
+    context.location.href='https://sellercentral.amazon.com.br/';
+    expect(vm.runInContext(fn,context)).toHaveProperty('error');
+  });
+});
