@@ -21,6 +21,7 @@ describe('growth opportunity', () => {
     const r = growthOpportunity({...after,stockAvailable:6},before,true);
     expect(r.scenarios.every(s=>s.incrementalOrders===5&&s.stockLimited)).toBe(true);
     expect(growthOpportunity({...after,stockAvailable:0},before,true).scenarios).toEqual([]);
+    expect(growthOpportunity({...after,stockAvailable:0,units:null},before,true).scenarios).toEqual([]);
   });
   it('does not prioritize when stock or units are unavailable', () => {
     expect(growthOpportunity({...after,stockAvailable:null},before,true).best).toBeNull();
