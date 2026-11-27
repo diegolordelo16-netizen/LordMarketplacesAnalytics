@@ -1655,6 +1655,15 @@ describe('analytics, keyword intelligence and bundle simulation', () => {
     expect(result.ok).toBe(true);
     const point=(result.result as {points:Array<Record<string,unknown>>}).points.find(p=>p.date===day);
     expect(point).toMatchObject({gmv:120,orders:3,visits:null,accountsCaptured:2,gmvCoverage:2,visitsCoverage:1});
+    const scope={marketplace:'amazon',accountId:a,listingId:a+'-listing',days:30};
+    const dashboard=await call('kpi.dashboard',scope);
+    expect(dashboard.result).toMatchObject({totals:{gmvCents:1000},window:{entityScoped:true,days:30},coverage:{totalListings:1,accountsWithSnapshots:0}});
+    const scopedHistory=await call('kpi.history',scope);
+    expect(scopedHistory.result).toMatchObject({points:[{gmv:10,orders:1,accountsCaptured:1}]});
+    const recent=await call('kpi.dashboard',{...scope,days:7});
+    expect(recent.result).toMatchObject({totals:{gmvCents:null},coverage:{capturedListings:0}});
+    expect((await call('kpi.history',{...scope,days:7})).result).toMatchObject({points:[]});
+
   });
 
   it('suggests local title phrases without claiming search volume', async () => {
