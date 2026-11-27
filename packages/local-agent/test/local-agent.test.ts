@@ -88,6 +88,12 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(info.accounts[0].pages_succeeded).toBe(205);
     expect(JSON.parse(info.accounts[0].progress_json).pendingLinks[0].url).toBe(url(206));
     expect(info.pageRuns).toHaveLength(205);
+    const compact=(await call('sync.list',{batchId:retryId,compact:true,pageLimit:100,pageOffset:100})).result as any;
+    expect(compact.totalPageRuns).toBe(205);
+    expect(compact.pageRuns).toHaveLength(100);
+    expect(compact.pageRuns[0].page_no).toBe(101);
+    expect(compact.accounts[0].progress_json).toBeUndefined();
+    expect(compact.accounts[0].pendingPages).toBe(1);
   });
   it('exclui outro navegador e outro lote; depois de expirar rejeita o token antigo', async () => {
     seedImportAccount('acct-lease');

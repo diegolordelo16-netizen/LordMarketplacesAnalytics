@@ -722,3 +722,29 @@ describe('filtros e cobertura observáveis',()=>{
     expect(window.MI_DOM.collectionCoverage(root)).toEqual(['TABELA_VIRTUALIZADA']);
   });
 });
+
+
+describe('tabelas e centavos visíveis',()=>{
+  it('usa cabeçalho único e preserva fração monetária sem aceitar centavos ocultos',()=>{
+    class E{
+      constructor(public innerText:string,public parentElement:E|null=null,public hidden=false){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(){return null}
+      querySelectorAll(){return []}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const h1=new E('Cliques'),h2=new E('Gasto com anúncios'),c1=new E('25'),c2=new E('R$ 99,90');
+    const row:any=new E('');
+    row.tagName='TR';row.cells=[c1,c2];row.closest=()=>({tHead:{rows:[{cells:[h1,h2]}]}});
+    expect(window.MI_DOM.findValueByLabel(row,['Gasto com anúncios']).text).toBe('R$ 99,90');
+    row.closest=()=>({tHead:{rows:[{cells:[h2,h2]}]}});
+    expect(window.MI_DOM.findValueByLabel(row,['Gasto com anúncios'])).toBeNull();
+    const cents=new E('90'),fraction:any=new E('1.234');
+    fraction.closest=()=>({querySelector:()=>cents});
+    expect(window.MI_DOM.visibleMoneyParts(fraction)).toEqual({value:1234.9,text:'1.234,90'});
+    cents.hidden=true;
+    expect(window.MI_DOM.visibleMoneyParts(fraction)).toBeNull();
+  });
+});

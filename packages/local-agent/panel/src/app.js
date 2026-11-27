@@ -1050,20 +1050,24 @@ function browserSyncScope() {
   return scope === 'ACCOUNT' ? { scope, accountId: state.accountId } : { scope };
 }
 
+let syncPageOffset=0;
+let syncPageBatch='';
 async function showBrowserSyncBatch() {
   const target = $('#browser-sync-detail');
   const batchId = selectedSyncBatch;
   if (!target || !batchId) return;
-  const data = await api('sync.list', { batchId });
-  if (!target.isConnected || selectedSyncBatch !== batchId) return;
+  if(syncPageBatch!==batchId){syncPageBatch=batchId;syncPageOffset=0;}
+  const offset=syncPageOffset;
+  const data = await api('sync.list', { batchId,compact:true,pageLimit:100,pageOffset:offset });
+  if (!target.isConnected || selectedSyncBatch !== batchId || syncPageOffset!==offset) return;
   const rows = data.accounts.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${esc(row.marketplace)}</td>
-    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}${(() => { try { const progress = JSON.parse(row.progress_json || '{}'); return `<div class="muted small">${num((progress.pendingLinks || []).length)} páginas na fila${progress.unsupportedLinks ? ' · links/filtros exigem revisão manual' : ''}</div>`; } catch { return ''; } })()}</td></tr>`);
+    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}<div class="muted small">${num(row.pendingPages??0)} páginas na fila${row.unsupportedLinks?' · cobertura exige revisão manual':''}${row.stoppedReason?` · ${esc(row.stoppedReason)}`:''}</div></td></tr>`);
   const pages = data.pageRuns.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${num(row.page_no)}</td>
     <td>${esc(row.page_kind)}</td><td>${esc(syncLabel(row.status))}</td><td>${esc(row.error ?? '')}</td></tr>`);
   const content = card(`Progresso do lote · ${esc(syncLabel(data.batch?.status))}`,
     table(['Conta','Marketplace','Estado','Páginas concluídas','Observação'], rows) +
-    table(['Conta','Página','Área','Estado','Observação'], pages, 'Nenhuma página registrada.'));
-  const signature = JSON.stringify([batchId, data.batch?.status, rows, pages]);
+    table(['Conta','Página','Área','Estado','Observação'], pages, 'Nenhuma página registrada.')+`<div class="actions"><button class="btn" data-act="browser-sync-prev-page" ${offset===0?'disabled':''}>Anteriores</button><span>${data.totalPageRuns?offset+1:0}–${Math.min(offset+100,data.totalPageRuns??0)} de ${num(data.totalPageRuns??0)}</span><button class="btn" data-act="browser-sync-next-page" ${offset+100>=(data.totalPageRuns??0)?'disabled':''}>Próximas</button></div>`);
+  const signature = JSON.stringify([batchId, data.batch?.status, offset, data.totalPageRuns, rows, pages]);
   target.querySelector('[data-sync-error]')?.remove();
   if (target.dataset.signature === signature) return;
   target.dataset.signature = signature;
@@ -1236,6 +1240,8 @@ const ACTIONS = {
     await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
     await renderView();
   },
+  'browser-sync-prev-page': async()=>{syncPageOffset=Math.max(0,syncPageOffset-100);await showBrowserSyncBatch();},
+  'browser-sync-next-page': async()=>{syncPageOffset+=100;await showBrowserSyncBatch();},
   'browser-sync-refresh': renderView,
   'browser-sync-request': async () => {
     const result = await api('sync.createAll', { ...browserSyncScope(), browserRequest: true });

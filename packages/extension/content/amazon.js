@@ -62,7 +62,8 @@
   function numeric(root, selectors) {
     for (const selector of selectors) {
       const el = root.querySelector(selector);
-      const raw = el?.value ?? el?.textContent;
+      if(!el||!window.MI_DOM.isVisible(el))continue;
+      const raw = el.value ?? el.textContent;
       const value = window.MI_DOM.parseNumberPtBr(raw);
       if (value !== null) return value;
     }

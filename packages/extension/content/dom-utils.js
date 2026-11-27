@@ -54,6 +54,19 @@
   function findValueByLabel(root, labels) {
     if (!root) return null;
     const wanted = labels.map(normalizeLabel);
+    // A row may contain only numeric cells. Accept an unambiguous visible header
+    // from the same table, never infer a column by position alone.
+    if(String(root.tagName??'').toUpperCase()==='TR' && root.cells){
+      const table=root.closest?.('table'), rows=table?.tHead?.rows;
+      const cells=Array.from(root.cells),headers=rows?.length===1?Array.from(rows[0].cells):[];
+      if(headers.length===cells.length&&headers.every(el=>(el.colSpan??1)===1&&(el.rowSpan??1)===1)&&cells.every(el=>(el.colSpan??1)===1&&(el.rowSpan??1)===1)){
+        const indexes=headers.map((el,index)=>isVisible(el)&&wanted.includes(normalizeLabel(el.innerText??el.textContent??''))?index:-1).filter(i=>i>=0);
+        if(indexes.length===1){
+          const cell=cells[indexes[0]],text=String(cell.innerText??cell.textContent??'').trim();
+          if(isVisible(cell)&&parseNumberPtBr(text)!==null)return {text,label:String(headers[indexes[0]].innerText??headers[indexes[0]].textContent??'').trim(),node:cell};
+        }
+      }
+    }
     const nodes = root.querySelectorAll('div, span, td, th, dt, dd, li, p, label, strong, b');
     for (const node of nodes) {
       if (!isVisible(node)) continue;
@@ -85,8 +98,11 @@
     if (!el || !(el instanceof Element)) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return false;
-    const style = window.getComputedStyle(el);
-    return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0;
+    for(let node=el;node;node=node.parentElement){
+      const style=window.getComputedStyle(node);
+      if(node.hidden||node.getAttribute?.('aria-hidden')==='true'||style.visibility==='hidden'||style.display==='none'||Number(style.opacity||'1')===0)return false;
+    }
+    return true;
   }
 
   /** Só aceita links seguintes HTTPS, same-origin e dentro dos hosts suportados. */
@@ -274,5 +290,17 @@
     }
     return [...new Set(warnings)];
   }
-  window.MI_DOM = { collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  function visibleMoneyParts(fraction){
+    if(!isVisible(fraction))return null;
+    const whole=String(fraction.innerText??fraction.textContent??'').trim();
+    const container=fraction.closest?.('.andes-money-amount')??fraction;
+    const cents=container.querySelector?.('.andes-money-amount__cents');
+    if(cents){
+      if(!isVisible(cents)||!/^\d{2}$/.test(String(cents.innerText??cents.textContent??'').trim())||!/^(?:\d+|\d{1,3}(?:\.\d{3})+)$/.test(whole))return null;
+      const text=whole+','+String(cents.innerText??cents.textContent).trim();
+      const value=parseNumberPtBr(text);return value!==null&&value>=0?{value,text}:null;
+    }
+    const value=parseNumberPtBr(whole);return value!==null&&value>=0?{value,text:whole}:null;
+  }
+  window.MI_DOM = { visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

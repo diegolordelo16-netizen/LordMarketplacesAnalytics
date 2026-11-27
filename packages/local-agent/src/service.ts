@@ -2123,10 +2123,15 @@ export class LocalService {
     });
 
     this.register('sync.list', (payload) => {
-      const i = z.object({ batchId: z.string().optional(), accountId:z.string().optional(), compact:z.boolean().default(false), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
+      const i = z.object({ batchId: z.string().optional(), accountId:z.string().optional(), compact:z.boolean().default(false),includePageRuns:z.boolean().default(true),pageOffset:z.number().int().min(0).max(1000000).default(0),pageLimit:z.number().int().min(1).max(500).optional(), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
       if (i.batchId) {
         const accounts = db.rows<Record<string,unknown>>('SELECT * FROM sync_batch_accounts WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY marketplace,account_id',i.batchId,i.accountId??null,i.accountId??null).map(({lease_hash:_leaseHash,...account})=>account);
-        return { batch:db.row('SELECT * FROM sync_batches WHERE id=?',i.batchId),accounts:i.compact?accounts.map(({progress_json,...account})=>account):accounts,pageRuns:i.compact?[]:db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY account_id,page_no',i.batchId,i.accountId??null,i.accountId??null) };
+        const total=db.row<{total:number}>('SELECT COUNT(*) total FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?)',i.batchId,i.accountId??null,i.accountId??null)?.total??0;
+        const pageRuns=!i.includePageRuns?[]:i.pageLimit!==undefined?db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY account_id,page_no LIMIT ? OFFSET ?',i.batchId,i.accountId??null,i.accountId??null,i.pageLimit,i.pageOffset):i.compact?[]:db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY account_id,page_no',i.batchId,i.accountId??null,i.accountId??null);
+        return { batch:db.row('SELECT * FROM sync_batches WHERE id=?',i.batchId),accounts:i.compact?accounts.map(({progress_json,...account})=>{
+          const progress=parseJsonObject(String(progress_json??'{}'));
+          return {...account,pendingPages:Array.isArray(progress.pendingLinks)?progress.pendingLinks.length:0,unsupportedLinks:progress.unsupportedLinks===true,stoppedReason:progress.stoppedReason??null};
+        }):accounts,pageRuns,totalPageRuns:total };
       }
       return db.rows('SELECT * FROM sync_batches ORDER BY requested_at DESC LIMIT ?', i.limit);
     });

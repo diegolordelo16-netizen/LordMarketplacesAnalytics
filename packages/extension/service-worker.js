@@ -972,7 +972,7 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
     let resumeState = {};
     let resumeOrigin = null;
     try {
-      const detail = await callService('sync.list', { batchId, accountId:account.account_id });
+      const detail = await callService('sync.list', { batchId, accountId:account.account_id,includePageRuns:false });
       if (!detail?.ok || !detail.result?.accounts?.[0]) throw new Error('histórico da conta indisponível');
       resumeState = JSON.parse(detail.result.accounts[0].progress_json || '{}');
       const savedUrl = resumeState.pendingLinks?.[0]?.url ?? resumeState.pages?.[0]?.url;

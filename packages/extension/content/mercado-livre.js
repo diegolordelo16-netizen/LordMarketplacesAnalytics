@@ -226,14 +226,8 @@
       document.querySelector('[data-testid="price-part"]') ??
       document.querySelector('.price-tag-fraction');
     if (priceEl) {
-      const container = priceEl.closest('.andes-money-amount') ?? priceEl;
-      const cents = container.querySelector('.andes-money-amount__cents');
-      const raw = `${priceEl.textContent.trim()}${cents ? `,${cents.textContent.trim()}` : ''}`;
-      const price = window.MI_DOM.parseNumberPtBr(raw);
-      if (price !== null) {
-        listing.price = price;
-        evidence.price = raw;
-      }
+      const money=window.MI_DOM.visibleMoneyParts?.(priceEl);
+      if(money){listing.price=money.value;evidence.price=money.text;}
     }
 
     for (const [key, labelKey] of [
@@ -308,7 +302,8 @@
       const priceText = priceNode && window.MI_DOM.isVisible(priceNode) ? priceNode.textContent : '';
       const item = { listingId: String(id).toUpperCase() };
       if (title) item.title = title.slice(0, 2000);
-      const price = priceText ? window.MI_DOM.parseNumberPtBr(priceText) : null;
+      const money=window.MI_DOM.visibleMoneyParts?.(priceNode);
+      const price = typeof window.MI_DOM.visibleMoneyParts==='function' ? money?.value??null : priceText ? window.MI_DOM.parseNumberPtBr(priceText) : null;
       if (price !== null && price >= 0) item.price = price;
       for (const [field, key] of [['stockAvailable','stock'],['units','units'],['visits','visits'],['orders','orders']]) {
         const found = window.MI_DOM.findValueByLabel(row, LABELS[key]);
