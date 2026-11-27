@@ -7,7 +7,9 @@ import { TaskScheduler } from '../src/scheduler/task-scheduler';
 import { SecretStore, hashPassword, loadMachineSecret } from '../src/security/secrets';
 import { GeminiClient } from '../src/ai/gemini-client';
 import { KnowledgeBase } from '../src/ai/knowledge-base';
-import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths } from '../src/ai/auto-upgrade';
+import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths, validatePatchSyntax } from '../src/ai/auto-upgrade';
+import { matchedSeoEvidence } from '../src/ai/agent-evidence';
+import { runAgents, synthesize, type AgentContext } from '../src/ai/agents';
 import { CaptureService } from '../src/capture/capture-service';
 import { LocalService, redactPII } from '../src/service';
 import { evaluateGuard, GUARD_CHECKS } from '../src/guard/automation-guard';
@@ -2596,5 +2598,81 @@ describe('workspace com evidências',()=>{
     expect((await call('agent.memory',{accountId:'workspace-a'})).result).toHaveLength(1);
     expect((await call('agent.memory',{accountId:'workspace-b'})).result).toEqual([]);
     expect((await call('agent.budget',{accountId:'workspace-a'})).result).toMatchObject({callsToday:0,tokensIn:0,tokensOut:0,costUsd:0,windowHours:24});
+  });
+});
+
+describe('Etapa 07 — evidência externa, confiança e automação',()=>{
+  const context=():AgentContext=>({accountId:'agent-a',listingId:'agent-listing',marketplace:'mercado_livre',window:{start:'2026-11-01T00:00:00.000Z',end:'2026-11-26T23:59:59.999Z',days:26},metrics:{adSpendCents:1000},missingData:[],dataConfidence:0.9});
+  it('não classifica Ads deficitários com receita desconhecida e não inventa impacto',()=>{
+    const ctx=context();
+    expect(runAgents(['ads'],ctx)).toEqual([]);
+    ctx.metrics.adRevenueCents=0;ctx.metrics.contributionMarginPct=-5;
+    const recs=runAgents(['ads','ads'],ctx);
+    expect(recs).toHaveLength(1);
+    expect(recs[0]?.impactRange).toBeNull();
+    expect(synthesize(recs,ctx).finalAction?.agentKey).toBe('ads');
+    ctx.dataConfidence=0.3;
+    expect(synthesize(recs,ctx).finalAction).toBeNull();
+  });
+  it('usa sinais externos com origem, data, escopo, zero legítimo e termos relacionados',()=>{
+    const now=new Date().toISOString();
+    const rows=[{id:'seo1',mode:'suggestions',scope:'GOOGLE_BR_PT',captured_at:now,result_json:JSON.stringify([{keyword:'capacete fechado',searchVolume:0,keywordDifficulty:10},{keyword:'vestido longo',searchVolume:200},{keyword:'capacete fechado',searchVolume:300}])}];
+    const evidence=matchedSeoEvidence(rows,'Capacete fechado preto');
+    expect(evidence).toEqual([{id:'seo1',mode:'suggestions',scope:'GOOGLE_BR_PT',keyword:'capacete fechado',volume:0,difficulty:10,capturedAt:now}]);
+    const ctx={...context(),externalSeo:evidence};
+    const recs=runAgents(['seo_demand','keyword_rank'],ctx);
+    expect(recs).toHaveLength(2);
+    expect(recs[0]?.evidence[0]).toMatchObject({sourceClass:'D_PUBLIC_OBSERVATION',referenceAt:now});
+    expect(recs[0]?.evidence[0]?.value).toContain('seo1');
+    expect(synthesize(recs,ctx).finalAction).toBeNull();
+  });
+  it('reconhece evidência SEO somente na loja vinculada e sem nova consulta externa',async()=>{
+    const accountId='agent-seo-a',other='agent-seo-b',at=new Date().toISOString();
+    seedImportAccount(accountId);seedImportAccount(other);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run('agent-seo-listing',accountId,'mercado_livre','MLB123456789','Capacete fechado preto','ACTIVE',at,at);
+    const insert=db.db.prepare("INSERT INTO seo_external_runs(id,account_id,mode,query,device,scope,requested_at,captured_at,status,result_json) VALUES(?,?,'suggestions','capacete','desktop','GOOGLE_BR_PT',?,?,'OK',?)");
+    insert.run('agent-seo-own',accountId,at,at,JSON.stringify([{keyword:'capacete fechado',searchVolume:0}]));
+    insert.run('agent-seo-other',other,at,at,JSON.stringify([{keyword:'capacete fechado',searchVolume:9000}]));
+    const result=await call('analysis.run',{accountId,listingId:'agent-seo-listing',mode:'360',agents:['seo_demand']});
+    expect(result.ok).toBe(true);
+    expect(result.result).toMatchObject({analyses:[{contextEvidence:{externalSeo:[{id:'agent-seo-own',volume:0}]},recommendations:[{agentKey:'seo_demand',impactRange:null}]}]});
+    expect(JSON.stringify(result.result)).not.toContain('agent-seo-other');
+  });
+  it('não permite aplicar patch pelo IPC ou declarar rollback sem restaurar arquivos',async()=>{
+    const proposalId='11111111-1111-4111-8111-111111111111';
+    expect((await call('autoupgrade.apply',{proposalId,approved:true})).result).toMatchObject({applied:false});
+    expect((await call('autoupgrade.rollback',{proposalId})).result).toMatchObject({ok:false});
+  });
+  it('corrige o deslocamento de hunks e rejeita instruções proibidas em linhas posteriores',()=>{
+    const diff='diff --git a/safe.ts b/safe.ts\n--- a/safe.ts\n+++ b/safe.ts\n@@ -1 +1,2 @@\n-a\n+x\n+y\n@@ -3 +4 @@\n-c\n+z\n';
+    let written='';
+    expect(applyUnifiedDiff(diff,()=> 'a\nb\nc',(_,content)=>{written=content})).toEqual({appliedFiles:['safe.ts'],errors:[]});
+    expect(written).toBe('x\ny\nb\nz');
+    expect(validatePatchSyntax(diff.replace('+z','+skipAuth()'))).toBe(false);
+  });
+  it('serializa chamadas Gemini e evita nova chamada depois de rate limit',async()=>{
+    let release!:()=>void,calls=0;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const c=new GeminiClient(db,new SecretStore(db,join(dir,'sec-rate')),async()=>{calls++;await gate;return {ok:false,status:429,json:{}};});
+    c.setKey('AIzaSyTesteChaveComTamanhoSuficiente123');
+    const input={agentKey:'test',model:'gemini-2.5-flash' as const,systemPrompt:'s',userContent:'u'};
+    const first=c.call(input);
+    expect(await c.call(input)).toMatchObject({ok:false,errorCode:'RATE_LIMIT'});
+    release();expect(await first).toMatchObject({ok:false,errorCode:'RATE_LIMIT',pauseExternal:true});
+    expect(await c.call(input)).toMatchObject({ok:false,errorCode:'RATE_LIMIT',pauseExternal:true});
+    expect(calls).toBe(1);
+  });
+  it('percorre páginas de uma análise agendada sem repetir execução',async()=>{
+    const accountId='agent-schedule-pages',at=new Date().toISOString();seedImportAccount(accountId);
+    const insert=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    for(let i=0;i<26;i++)insert.run('page-listing-'+i,accountId,'mercado_livre','PAGE'+i,'Produto '+i,'ACTIVE',at,at);
+    const res=await call('analysis.schedule.create',{accountId,mode:'RAPIDA',days:7,cadence:'daily'});
+    expect(res.ok).toBe(true);const id=(res.result as {id:string}).id;
+    db.db.prepare("UPDATE analysis_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(id);
+    expect((await service.processScheduledWork()).analyses).toBe(1);
+    const row=db.row<{result_json:string}>('SELECT result_json FROM analysis_schedule_runs WHERE schedule_id=?',id)!;
+    expect(JSON.parse(row.result_json)).toMatchObject({listingCount:26,totalMatched:26,pages:2});
+    expect(db.row('SELECT COUNT(*) n FROM agent_runs WHERE account_id=?',accountId)).toMatchObject({n:104});
+    expect((await service.processScheduledWork()).analyses).toBe(0);
   });
 });
