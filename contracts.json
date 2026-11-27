@@ -494,6 +494,12 @@
     "accessToken": "transient Mercado Livre OAuth token",
     "confirmed": true
   },
+  "variation.api.createUpOffer": {
+    "accountId": "string",
+    "proposalId": "approved User Product offer proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
   "variation.api.verify": {
     "accountId": "string",
     "proposalId": "string",

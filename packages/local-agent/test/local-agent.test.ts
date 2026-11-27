@@ -604,6 +604,44 @@ describe('capacidades adicionais 3.10.3', () => {
     }
   });
 
+  it('cria condição de venda User Products sem duplicar estoque ou aceitar oferta de outra loja',async()=>{
+    const accountId='api-up-shop',itemId='MLB1234567',newId='MLB1234568',listingId='api-up-item',upId='MLBU1234567',at='2025-01-01T00:00:00.000Z';
+    seedImportAccount(accountId);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre',itemId,'Anúncio UP','ACTIVE',at,at);
+    const option={userProductId:upId,categoryId:'MLB1234',listingTypeId:'gold_pro',beforePriceCents:1000,beforeStock:3};
+    const draft=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Oferta premium',options:[option],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:draft.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20}})).ok).toBe(true);
+    let owner=24,created=false,posts=0,readback=false,total=1;
+    const source={id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',user_product_id:upId,category_id:'MLB1234',listing_type_id:'gold_special',buying_mode:'buy_it_now',condition:'new',catalog_listing:false,price:10,available_quantity:3,status:'active',variations:[],channels:['marketplace']};
+    vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit)=>{
+      if(url.pathname==='/users/me')return Response.json({id:23,nickname:accountId,site_id:'MLB',tags:['user_product_seller']});
+      if(url.pathname==='/items/'+itemId)return Response.json(source);
+      if(url.pathname==='/user-products/'+upId)return Response.json({id:upId,user_id:owner,site_id:'MLB'});
+      if(url.pathname==='/users/23/items/search')return Response.json({seller_id:23,results:[itemId],paging:{offset:0,total}});
+      if(url.pathname==='/user-products/'+upId+'/items'&&init.method==='POST'){
+        posts++;expect(JSON.parse(String(init.body))).toEqual({price:12,category_id:'MLB1234',currency_id:'BRL',buying_mode:'buy_it_now',listing_type_id:'gold_pro',channels:['marketplace'],catalog_listing:false});
+        created=true;return Response.json({id:newId},{status:201});
+      }
+      if(url.pathname==='/items/'+newId&&created)return Response.json({...source,id:newId,price:12,listing_type_id:'gold_pro',seller_id:readback?23:24});
+      throw Error('rota inesperada');
+    }));
+    try{
+      const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
+      expect((await call('variation.api.createUpOffer',request)).ok).toBe(false);expect(posts).toBe(0);
+      owner=23;total=51;
+      expect((await call('variation.api.createUpOffer',request)).ok).toBe(false);expect(posts).toBe(0);
+      total=1;
+      const results=await Promise.all([call('variation.api.createUpOffer',request),call('variation.api.createUpOffer',request)]);
+      expect(results.filter(r=>r.ok)).toHaveLength(1);expect(posts).toBe(1);
+      expect(results.find(r=>r.ok)?.result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:newId,action:'CREATE_UP_OFFER'});
+      const {confirmed,...verify}=request;readback=true;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:newId});
+      expect((await call('operation.measure',{accountId,proposalId:draft.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_UP_OFFER_CONFIRMED',measurementScope:'USER_PRODUCT_ORIGINAL_VS_OFFER',createdOffer:{externalId:newId,stock:3},metrics:null,causalityVerified:false});
+      expect(posts).toBe(1);
+    }finally{vi.unstubAllGlobals();}
+  });
+
   it('autoriza variação simples e duplicação apenas com proposta, contexto e limites correspondentes',async()=>{
     const accountId='acct-browser-listing',other='acct-browser-other';seedImportAccount(accountId);seedImportAccount(other);
     const listingId='browser-listing',externalListingId='MLB1234567',at='2025-01-07T23:59:59.999Z';
