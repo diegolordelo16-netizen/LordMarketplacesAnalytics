@@ -2098,7 +2098,7 @@ export class LocalService {
             const existing = db.row<{ id: string;listing_id:string|null;external_listing_id:string|null }>('SELECT id,listing_id,external_listing_id FROM customer_voice_items WHERE account_id=? AND external_ref=? AND kind=? LIMIT 1', i.accountId, externalRef, item.kind);
             if (existing) {
               if((existing.listing_id&&listingId&&existing.listing_id!==listingId)||(existing.external_listing_id&&item.externalListingId&&existing.external_listing_id!==item.externalListingId))throw new Error('feedback já associado a outro anúncio');
-              db.db.prepare('UPDATE customer_voice_items SET listing_id=COALESCE(listing_id,?),external_listing_id=COALESCE(external_listing_id,?) WHERE id=? AND account_id=?').run(listingId,item.externalListingId??null,existing.id,i.accountId);
+              db.db.prepare('UPDATE customer_voice_items SET listing_id=COALESCE(listing_id,?),external_listing_id=COALESCE(external_listing_id,?),rating=COALESCE(rating,?) WHERE id=? AND account_id=?').run(listingId,item.externalListingId??null,item.kind==='REVIEW'?item.rating??null:null,existing.id,i.accountId);
               duplicates.push(existing.id);continue;
             }
           }
