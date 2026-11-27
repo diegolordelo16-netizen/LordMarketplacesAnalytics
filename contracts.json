@@ -463,5 +463,19 @@
   },
   "listing.browser.list": {
     "accountId": "string"
+  },
+  "operation.limits.get": {
+    "accountId": "string"
+  },
+  "operation.limits.set": {
+    "accountId": "string",
+    "limits": {
+      "maxCampaignDailyBudgetCents": "integer",
+      "minVariationPriceCents": "integer",
+      "maxVariationPriceCents": "integer",
+      "maxVariationStock": "integer",
+      "maxVariationPriceChangePct": "0–100"
+    },
+    "confirmed": true
   }
 }
