@@ -543,7 +543,7 @@ async function listingOperationApply(){
   if(listingOperationBusy)return;
   const proposalId=$('listing-op-proposal').value.trim(),externalListingId=$('listing-op-external').value.trim(),action=$('listing-op-action').value,variationId=$('listing-op-variation').value.trim(),out=$('listing-op-out');
   if(!proposalId||!externalListingId||(action==='EDIT_VARIATION'&&!variationId)||(action!=='EDIT_VARIATION'&&variationId)){out.textContent='Informe proposta, anúncio e ID de variação somente para edição.';return;}
-  if(!window.confirm('Solicitar uma execução única da proposta aprovada? Confira a loja, o anúncio e os dados do formulário.'+(action==='EDIT_VARIATION'?' A extensão tentará conferir a edição em uma nova aba.':'')))return;
+  if(!window.confirm('Solicitar uma execução única da proposta aprovada? Confira a loja, o anúncio e os dados do formulário.'+(action!=='DUPLICATE'?' A extensão tentará conferir a variação em uma nova aba.':'')))return;
   listingOperationBusy=true;$('listing-op-apply').disabled=true;
   try{
     const response=await call('listing.browser.apply',{proposalId,externalListingId,action,variationId:variationId||undefined,confirmed:true});

@@ -475,3 +475,25 @@ test('edição de variação só registra a releitura em documento novo e da mes
   assert.equal(calls.length,3);
   assert.deepEqual(removed,[26,26,26,26,26,26]);
 });
+
+test('criação assistida apenas registra um candidato único em nova leitura',async()=>{
+  const start=worker.indexOf('async function verifyVariationInFreshTab');
+  const end=worker.indexOf('async function readCapturePageInfo',start);
+  const externalListingId='MLB1234567';
+  const url='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+externalListingId;
+  const accountId='store-a',grant={context:{action:'CREATE_VARIATION',accountId,externalListingId,sourcePath:url},plan:{option:'Azul',priceCents:1200,stock:0}};
+  const row={kind:'LISTING_VARIANT',parentExternalId:externalListingId,externalId:'V1',label:'Azul',metrics:{price:12,stockAvailable:0},evidence:{price:'R$ 12',stockAvailable:'0'}};
+  const snapshot={accountId,marketplace:'mercado_livre',url,pageKind:'seller_listing_edit',details:[row]};
+  const calls=[];
+  const ctx=vm.createContext({grant,tab:{url},captureAccepted:r=>r.ok,waitForTabComplete:async()=>{},chrome:{tabs:{
+    create:async()=>({id:27}),remove:async()=>{},sendMessage:async(_,request)=>{assert.equal(request.type,'MI_CAPTURE_REQUEST');return {ok:true,snapshot};},
+  }},callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:method==='capture.ingest'?{detailRowsIngested:1}:{status:'CANDIDATE_OBSERVED',remoteVerified:false}};}});
+  vm.runInContext(worker.slice(start,end),ctx);
+  const verify=()=>vm.runInContext('verifyVariationInFreshTab(tab,grant,"proposal")',ctx);
+  snapshot.details=[row,{...row,externalId:'V2'}];
+  assert.equal(await verify(),null);
+  assert.equal(calls.length,0);
+  snapshot.details=[row];
+  assert.equal((await verify()).result.remoteVerified,false);
+  assert.equal(calls[1].payload.observedExternalId,'V1');
+});

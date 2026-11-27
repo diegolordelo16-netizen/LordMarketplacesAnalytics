@@ -46,3 +46,4 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - A edição assistida de variação confere preço e estoque em nova aba sem repetir a gravação. A tentativa guarda os IDs das capturas e o painel mostra o antes/depois da própria variação. Uma captura incompleta ou com contexto divergente mantém a conferência pendente.
 - O executor recusa o botão de outro anúncio ou formulário aninhado. A conferência de duplicação rejeita um anúncio que já tinha capturas anteriores à tentativa.
 - A medição consulta o snapshot exato do candidato de criação ou duplicação. O painel exibe seu estado observado e mantém a confirmação da operação pendente. A homologação em conta real fica para depois da implementação técnica, conforme autorização do usuário.
+- A criação assistida também busca um candidato único em nova leitura do editor. A conferência mantém o status de candidato e impede associar a mesma entidade a duas operações da loja.

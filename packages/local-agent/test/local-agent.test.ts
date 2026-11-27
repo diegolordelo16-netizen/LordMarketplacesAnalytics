@@ -533,6 +533,11 @@ describe('capacidades adicionais 3.10.3', () => {
     const copy='MLB3456789';
     expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:after,collectedAt:after,method:'content_script_dom',listings:[{listingId:copy,title:'Produto',price:12}]})).ok).toBe(true);
     expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:copy})).result).toMatchObject({status:'CANDIDATE_OBSERVED',observedExternalId:copy,remoteVerified:false});
+    const second=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Segunda proposta de duplicação'})).result as {id:string};
+    expect((await call('listing.change.review',{accountId,id:second.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    db.db.prepare('UPDATE listing_change_proposals SET updated_at=? WHERE id=?').run(before,second.id);
+    expect((await call('operation.receipt.record',{...duplication,proposalId:second.id})).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:second.id,observedExternalId:copy})).ok).toBe(false);
     const candidateMeasure={accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id};
     expect((await call('operation.measure',candidateMeasure)).result).toMatchObject({
       status:'CANDIDATE_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,

@@ -142,3 +142,6 @@ regressão e CI. Atualize a matriz e preserve o que já foi publicado.
 Atualização posterior. O painel já consulta preço e estoque do snapshot
 exato de candidatos de criação e duplicação, sem atribuir a origem.
 A homologação real foi adiada por autorização do usuário.
+A criação assistida agora tenta localizar um único candidato compatível em
+nova leitura do editor. O serviço bloqueia o reaproveitamento de um mesmo
+candidato em outra tentativa da loja. A confirmação de origem continua pendente.

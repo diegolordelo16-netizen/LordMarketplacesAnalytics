@@ -533,24 +533,38 @@ async function verifyVariationInFreshTab(tab, grant, proposalId) {
     verificationTab=await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
     if (!Number.isInteger(verificationTab.id)) return null;
     await waitForTabComplete(verificationTab.id,tab.url,8000);
-    const observed=await chrome.tabs.sendMessage(verificationTab.id,{
-      type:'MI_LISTING_OPERATION_CONTEXT',action:'EDIT_VARIATION',externalListingId,variationId,
-    });
-    if (!observed?.ok||observed.action!=='EDIT_VARIATION'||observed.accountId!==accountId||
-        observed.externalListingId!==externalListingId||observed.variationId!==variationId||
-        observed.sourcePath!==sourcePath||!observed.documentNonce||observed.documentNonce===documentNonce||
-        observed.variationLabel!==name||observed.beforePriceCents!==priceCents||observed.beforeStock!==stock) return null;
+    const creating=grant.context.action==='CREATE_VARIATION';
+    let detail;
+    if(creating){
+      const response=await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAPTURE_REQUEST'});
+      const snapshot=response?.snapshot;
+      if(!response?.ok||snapshot?.marketplace!=='mercado_livre'||snapshot.accountId!==accountId||
+          snapshot.url!==tab.url||snapshot.pageKind!=='seller_listing_edit'||snapshot.coverageWarnings?.length||
+          !Array.isArray(snapshot.details))return null;
+      const matches=snapshot.details.filter(row=>row.kind==='LISTING_VARIANT'&&row.parentExternalId===externalListingId&&
+        row.label===grant.plan.option&&typeof row.metrics?.price==='number'&&Math.round(row.metrics.price*100)===priceCents&&row.metrics.stockAvailable===stock);
+      if(matches.length!==1)return null;
+      detail=matches[0];
+    }else{
+      const observed=await chrome.tabs.sendMessage(verificationTab.id,{
+        type:'MI_LISTING_OPERATION_CONTEXT',action:'EDIT_VARIATION',externalListingId,variationId,
+      });
+      if (!observed?.ok||observed.action!=='EDIT_VARIATION'||observed.accountId!==accountId||
+          observed.externalListingId!==externalListingId||observed.variationId!==variationId||
+          observed.sourcePath!==sourcePath||!observed.documentNonce||observed.documentNonce===documentNonce||
+          observed.variationLabel!==name||observed.beforePriceCents!==priceCents||observed.beforeStock!==stock) return null;
+      detail={kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:observed.variationLabel,
+        metrics:{price:observed.beforePriceCents/100,stockAvailable:observed.beforeStock},
+        evidence:{price:'Preço no editor: R$ '+(observed.beforePriceCents/100).toFixed(2),stockAvailable:'Estoque no editor: '+observed.beforeStock}};
+    }
     const now=new Date().toISOString();
     const capture=await callService('capture.ingest',{
       accountId,marketplace:'mercado_livre',pageKind:'seller_listing_edit',url:sourcePath,
-      sourceClass:'A_PRIMARY_UI',referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[],
-      details:[{kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:observed.variationLabel,
-        metrics:{price:observed.beforePriceCents/100,stockAvailable:observed.beforeStock},
-        evidence:{price:'Preço no editor: R$ '+(observed.beforePriceCents/100).toFixed(2),stockAvailable:'Estoque no editor: '+observed.beforeStock}}],
+      sourceClass:'A_PRIMARY_UI',referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[],details:[detail],
     });
     if (!captureAccepted(capture)||capture.result?.detailRowsIngested!==1) return null;
-    const verified=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:variationId});
-    return verified?.ok&&verified.result?.status==='UI_READBACK_MATCHED'?verified:null;
+    const verified=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:detail.externalId});
+    return verified?.ok&&verified.result?.status===(creating?'CANDIDATE_OBSERVED':'UI_READBACK_MATCHED')?verified:null;
   } catch {
     return null;
   } finally {
@@ -1316,7 +1330,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
         const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
         const recorded=await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
-        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true&&input.action==='EDIT_VARIATION'
+        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true&&['EDIT_VARIATION','CREATE_VARIATION'].includes(input.action)
           ? await verifyVariationInFreshTab(tab,grant,input.proposalId)
           : null;
         sendResponse(verified??recorded);return;

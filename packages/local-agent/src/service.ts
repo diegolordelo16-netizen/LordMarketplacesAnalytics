@@ -3074,6 +3074,19 @@ export class LocalService {
     }) => {
       const {accountId,marketplace,listingId,externalListingId,observedExternalId,after,baselineAt,action,plan}=input;
       const safeCapture=(at:string,evidence:string)=>at>after&&at<=nowIso()&&!parseJsonObject(evidence).coverageWarnings;
+      if(action!=='EDIT_VARIATION'){
+        const kind=action==='DUPLICATE'?'LISTING_CHANGE':'VARIATION';
+        const parent=action==='DUPLICATE'?null:listingId;
+        const browser=db.row(`SELECT id FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND status='CANDIDATE_OBSERVED'
+          AND json_extract(result_json,'$.observedExternalId')=? AND (? IS NULL OR listing_id=?)`,
+          accountId,kind,observedExternalId,parent,parent);
+        const table=kind==='LISTING_CHANGE'?'listing_change_proposals':'offer_variation_proposals';
+        const manual=db.row(`SELECT r.id FROM operation_manual_receipts r JOIN ${table} p ON p.id=r.proposal_id AND p.account_id=r.account_id
+          WHERE r.account_id=? AND r.proposal_kind=? AND json_extract(r.observation_json,'$.status')='CANDIDATE_OBSERVED'
+          AND json_extract(r.observation_json,'$.observedExternalId')=? AND (? IS NULL OR p.listing_id=?)`,
+          accountId,kind,observedExternalId,parent,parent);
+        if(browser||manual)throw Error('candidato já vinculado a outra operação da loja');
+      }
       if(action==='DUPLICATE'){
         const item=db.row<{id:string;title:string;created_at:string}>('SELECT id,title,created_at FROM listings WHERE account_id=? AND external_id=? AND marketplace=?',accountId,observedExternalId,marketplace);
         if(!item||item.id===listingId||item.created_at<=baselineAt||item.title!==plan.originalTitle)throw Error('informe um novo anúncio da mesma loja com título correspondente');
