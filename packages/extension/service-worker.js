@@ -1175,6 +1175,17 @@ async function diagnose() {
   return report;
 }
 
+// Learning is explicitly requested by the extension panel, never by a webpage.
+async function navigationPage(tabId){
+  const tab=await chrome.tabs.get(tabId);
+  const marketplace=marketplaceOf(tab.url||'');
+  const origin=new URL(tab.url).origin;
+  const info=await chrome.tabs.sendMessage(tabId,{type:'MI_CAPTURE_PAGE_INFO'}).catch(()=>null);
+  if(!marketplace||!info?.ok||info.marketplace!==marketplace||info.url!==tab.url||!info.accountId||info.loginRequired||info.challenge||!AUTHORIZED_AREA_KINDS.has(info.pageKind))throw Error('abra uma área de leitura autenticada e com conta identificada');
+  const url=normalizeAuthorizedAreaUrl(tab.url,origin,marketplace);
+  if(!url||url.port||url.hash)throw Error('rota não autorizada');
+  return {tabId,accountId:info.accountId,origin,route:url.pathname,pageKind:info.pageKind};
+}
 /** Ponte para o painel lateral e para o popup. */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== 'MI_CALL') return false;
@@ -1189,6 +1200,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   void (async () => {
     try {
+      if (['learning.context','learning.observe','learning.list','learning.clear'].includes(message.method)) {
+        const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+        if(!tab?.id)throw Error('nenhuma aba ativa');
+        const ctx=await navigationPage(tab.id);
+        if(message.method==='learning.context'){sendResponse({ok:true,result:ctx});return;}
+        const requested=message.payload;
+        if(!requested||requested.tabId!==ctx.tabId||requested.accountId!==ctx.accountId||requested.origin!==ctx.origin)throw Error('aba, loja ou origem mudou; aprendizado interrompido');
+        const base={accountId:ctx.accountId,origin:ctx.origin};
+        const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind}:base);
+        sendResponse(result);return;
+      }
       if (message.method === 'capture.activeTab') {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tab?.id) throw new Error('nenhuma aba ativa');
