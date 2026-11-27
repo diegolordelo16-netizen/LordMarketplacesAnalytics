@@ -1310,6 +1310,41 @@ async function navigationPage(tabId){
   return {tabId,accountId:info.accountId,origin,route:url.pathname,pageKind:info.pageKind,spaPage:Number.isInteger(info.spaPagination?.page)?info.spaPagination.page:null,canAdvance:info.spaPagination?.canAdvance===true,filterSignature:info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')?null:info.filterSignature??''};
 }
 // Executed in the isolated world of the selected public search tab. No network calls.
+function collectPublicProductContent(){
+  const page=new URL(location.href),host=page.hostname,path=page.pathname;
+  const marketplace=host==='www.amazon.com.br'&&/\/(?:dp|gp\/product)\/[A-Z0-9]{10}(?:$|\/)/i.test(path)?'amazon':
+    host==='shopee.com.br'&&/(?:-i\.|\/product\/)\d+[./]\d+(?:$|\/)/.test(path)?'shopee':
+    ['produto.mercadolivre.com.br','www.mercadolivre.com.br'].includes(host)&&/(?:MLB-?)\d{5,17}(?=[^0-9]|$)/i.test(path)?'mercado_livre':null;
+  if(!marketplace||page.protocol!=='https:'||page.username||page.password||page.port)return {error:'Página pública de produto não reconhecida.'};
+  const selectors={
+    amazon:{title:'#productTitle',description:'#productDescription',promotion:'#couponBadge, #couponText, #promoPriceBlockMessage_feature_div, #vpcButton',images:'#landingImage, #altImages img'},
+    mercado_livre:{title:'.ui-pdp-title',description:'.ui-pdp-description__content',promotion:'.ui-pdp-promotions, .ui-pdp-price__discount, .ui-pdp-coupons',images:'.ui-pdp-gallery__figure img, .ui-pdp-gallery__thumbnail img'},
+    shopee:{title:'[data-testid="product-title"], h1',description:'[data-testid="product-description"], [data-sqe="product-description"]',promotion:'[data-testid="product-voucher"], [data-testid="product-discount"]',images:'[data-testid="product-image"] img, [data-testid="product-image"]'}
+  }[marketplace];
+  const visible=el=>!!el&&el.getClientRects().length>0&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none';
+  const texts=(selector,max)=>[...new Set(Array.from(document.querySelectorAll(selector)).filter(visible).map(e=>(e.innerText||'').trim()).filter(Boolean))].slice(0,max);
+  if(!texts(selectors.title,1).length)return {error:'Título de produto não reconhecido; página não verificada.'};
+  const descriptions=texts(selectors.description,5),promotions=texts(selectors.promotion,40).map(x=>x.slice(0,1000));
+  const images=[],seen=new Set();
+  for(const img of Array.from(document.querySelectorAll(selectors.images)).filter(e=>e.tagName==='IMG'&&visible(e)).slice(0,40)){
+    if(images.length>=20)break;
+    let url;try{const u=new URL(img.currentSrc||img.src);if(u.protocol!=='https:'||u.username||u.password||u.port)continue;url=u.origin+u.pathname;if(url.length>2048||seen.has(url))continue;}catch{continue;}
+    seen.add(url);const item={url};
+    if(img.complete&&img.naturalWidth>0&&img.naturalHeight>0&&img.naturalWidth*img.naturalHeight<=40000000){
+      try{
+        const canvas=document.createElement('canvas');canvas.width=9;canvas.height=8;
+        const ctx=canvas.getContext('2d',{willReadFrequently:true});
+        ctx.fillStyle='#fff';ctx.fillRect(0,0,9,8);ctx.drawImage(img,0,0,9,8);
+        const d=ctx.getImageData(0,0,9,8).data,gray=i=>d[i*4]*299+d[i*4+1]*587+d[i*4+2]*114;
+        let hash='';for(let y=0;y<8;y++)for(let x=0;x<8;x+=4){let n=0;for(let k=0;k<4;k++)n=(n<<1)|Number(gray(y*9+x+k)>gray(y*9+x+k+1));hash+=n.toString(16);}
+        item.dhash64=hash;
+      }catch{/* CORS ou canvas indisponível: URL não comprova semelhança visual */}
+    }
+    images.push(item);
+  }
+  if(!descriptions.length&&!promotions.length&&!images.length)return {error:'Nenhuma evidência reconhecida.'};
+  return {sourceUrl:location.href,capturedAt:new Date().toISOString(),...(descriptions.length?{description:descriptions.join('\n').slice(0,30000)}:{}),...(promotions.length?{promotions}:{}),...(images.length?{images}:{})};
+}
 function collectPublicCompetitorCards(){
   const page=new URL(location.href),mp=page.protocol==='https:'&&!page.port?
     page.hostname==='lista.mercadolivre.com.br'?'mercado_livre':
@@ -1456,6 +1491,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if(['competitor.schedule.start','competitor.schedule.stop','competitor.schedule.status'].includes(message.method)){
         sendResponse({ok:true,result:await competitorSchedule(message.method.split('.').pop(),message.payload??{})});return;
+      }
+      if(message.method==='competitor.captureCurrentPublicContent'){
+        const input=message.payload??{};
+        if(input.confirmed!==true||typeof input.accountId!=='string'||!input.accountId||typeof input.ownProductId!=='string'||!input.ownProductId||!['OWN','RIVAL'].includes(input.side)||(input.side==='RIVAL'&&(typeof input.relationId!=='string'||!input.relationId)))throw Error('Confirme a loja, produto e lado da evidência.');
+        const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+        if(!tab?.id||!tab.url)throw Error('Abra uma página pública de produto.');
+        const host=new URL(tab.url).hostname;
+        if(host==='www.amazon.com.br'&&!await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']}))throw Error('Permissão Amazon ausente.');
+        const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func:collectPublicProductContent});
+        const captured=result[0]?.result,current=await chrome.tabs.get(tab.id);
+        if(!captured||captured.error||current.url!==tab.url||captured.sourceUrl!==tab.url)throw Error(captured?.error||'Página mudou; nenhuma evidência salva.');
+        sendResponse(await callService('competitor.content.record',{accountId:input.accountId,ownProductId:input.ownProductId,side:input.side,...(input.side==='RIVAL'?{relationId:input.relationId}:{}),sourceClass:'A_PRIMARY_UI',...captured}));return;
       }
       if(message.method==='competitor.captureCurrentPublicSearch'){
         const input=message.payload??{};
