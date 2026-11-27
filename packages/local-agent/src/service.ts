@@ -216,6 +216,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'finance.profitability': 'view_reports',
   'inventory.dashboard': 'view_reports',
   'ads.dashboard': 'view_reports',
+  'ads.reconcile': 'manage_accounts',
   'finance.realized.summary': 'view_reports',
   'competitor.evidence.record': 'manage_competitors',
   'competitor.evidence.compare': 'view_reports',
@@ -2592,25 +2593,25 @@ export class LocalService {
       const i = z.object({
         id: z.string().optional(), accountId: z.string(), listingId: z.string().nullable().optional(),
         periodStart: z.string().datetime(), periodEnd: z.string().datetime(),
-        netRevenueCents: z.number().int().min(0), productCostCents: z.number().int().min(0), packagingCents: z.number().int().min(0).default(0),
-        shippingCents: z.number().int().min(0).default(0), marketplaceFeesCents: z.number().int().min(0).default(0), taxesCents: z.number().int().min(0).default(0),
-        adSpendCents: z.number().int().min(0).default(0), refundsCents: z.number().int().min(0).default(0), returnLogisticsCents: z.number().int().min(0).default(0),
-        cancellationLossCents: z.number().int().min(0).default(0), otherCostsCents: z.number().int().min(0).default(0),
+        netRevenueCents: z.number().int().min(0), productCostCents: z.number().int().min(0), packagingCents: z.number().int().min(0),
+        shippingCents: z.number().int().min(0), marketplaceFeesCents: z.number().int().min(0), taxesCents: z.number().int().min(0),
+        adSpendCents: z.number().int().min(0), refundsCents: z.number().int().min(0), returnLogisticsCents: z.number().int().min(0),
+        cancellationLossCents: z.number().int().min(0), otherCostsCents: z.number().int().min(0),
         sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']), evidence: z.record(z.string(), z.unknown()), observedAt: z.string().datetime().optional(),
       }).refine((v) => Date.parse(v.periodStart) <= Date.parse(v.periodEnd), 'periodStart deve ser anterior ou igual a periodEnd')
         .refine((v) => Object.keys(v.evidence).length > 0, 'informe evidência da origem dos valores').parse(payload ?? {});
       const account = db.row<{ id: string; is_active: number }>('SELECT id,is_active FROM accounts WHERE id=?', i.accountId);
       if (!account || account.is_active !== 1) throw new Error('conta inexistente ou inativa');
       if (i.listingId && !db.row('SELECT id FROM listings WHERE id=? AND account_id=?', i.listingId, i.accountId)) throw new Error('anúncio não pertence à conta');
-      const idOwner = i.id ? db.row<{ account_id: string }>('SELECT account_id FROM realized_profit_snapshots WHERE id=?', i.id) : null;
-      if (idOwner && idOwner.account_id !== i.accountId) throw new Error('registro de lucro pertence a outra conta');
+      const idOwner = i.id ? db.row<{ account_id: string;source_class:string;listing_id:string|null;period_start:string;period_end:string }>('SELECT account_id,source_class,listing_id,period_start,period_end FROM realized_profit_snapshots WHERE id=?', i.id) : null;
+      if (idOwner && (idOwner.account_id !== i.accountId||idOwner.source_class!==i.sourceClass||idOwner.listing_id!==(i.listingId??null)||idOwner.period_start!==i.periodStart||idOwner.period_end!==i.periodEnd)) throw new Error('registro de lucro pertence a outro escopo ou fonte');
       const existing = i.id ? db.row<{ id: string }>('SELECT id FROM realized_profit_snapshots WHERE id=? AND account_id=?', i.id, i.accountId)
         : db.row<{ id: string }>('SELECT id FROM realized_profit_snapshots WHERE account_id=? AND listing_id IS ? AND period_start=? AND period_end=? AND source_class=?', i.accountId, i.listingId ?? null, i.periodStart, i.periodEnd, i.sourceClass);
       const id = existing?.id ?? i.id ?? randomUUID();
       db.db.prepare(`INSERT INTO realized_profit_snapshots (id,account_id,listing_id,period_start,period_end,net_revenue_cents,product_cost_cents,packaging_cents,shipping_cents,marketplace_fees_cents,taxes_cents,ad_spend_cents,refunds_cents,return_logistics_cents,cancellation_loss_cents,other_costs_cents,source_class,evidence_json,observed_at,created_by)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET listing_id=excluded.listing_id,period_start=excluded.period_start,period_end=excluded.period_end,net_revenue_cents=excluded.net_revenue_cents,product_cost_cents=excluded.product_cost_cents,packaging_cents=excluded.packaging_cents,shipping_cents=excluded.shipping_cents,marketplace_fees_cents=excluded.marketplace_fees_cents,taxes_cents=excluded.taxes_cents,ad_spend_cents=excluded.ad_spend_cents,refunds_cents=excluded.refunds_cents,return_logistics_cents=excluded.return_logistics_cents,cancellation_loss_cents=excluded.cancellation_loss_cents,other_costs_cents=excluded.other_costs_cents,evidence_json=excluded.evidence_json,observed_at=excluded.observed_at`)
-        .run(id,i.accountId,i.listingId ?? null,i.periodStart,i.periodEnd,i.netRevenueCents,i.productCostCents,i.packagingCents,i.shippingCents,i.marketplaceFeesCents,i.taxesCents,i.adSpendCents,i.refundsCents,i.returnLogisticsCents,i.cancellationLossCents,i.otherCostsCents,i.sourceClass,JSON.stringify(i.evidence),i.observedAt ?? nowIso(),auth?.userId ?? null);
+        .run(id,i.accountId,i.listingId ?? null,i.periodStart,i.periodEnd,i.netRevenueCents,i.productCostCents,i.packagingCents,i.shippingCents,i.marketplaceFeesCents,i.taxesCents,i.adSpendCents,i.refundsCents,i.returnLogisticsCents,i.cancellationLossCents,i.otherCostsCents,i.sourceClass,JSON.stringify({...i.evidence,costFieldsConfirmed:true}),i.observedAt ?? nowIso(),auth?.userId ?? null);
       const realizedProfitCents = i.netRevenueCents - i.productCostCents - i.packagingCents - i.shippingCents - i.marketplaceFeesCents - i.taxesCents - i.adSpendCents - i.refundsCents - i.returnLogisticsCents - i.cancellationLossCents - i.otherCostsCents;
       this.audit(auth, 'REALIZED_PROFIT_UPSERT', 'realized_profit_snapshot', id, 'OK', `${i.sourceClass}; lucro calculado a partir dos valores informados`);
       return { ok: true, id, realizedProfitCents, classification: i.sourceClass === 'F_USER_INPUT' ? 'REALIZED_FROM_REPORTED_INPUT' : 'REALIZED_FROM_CAPTURED_SOURCE', sourceClass: i.sourceClass, notAnEstimate: true };
@@ -2685,6 +2686,21 @@ export class LocalService {
         return {id,label:group[0]?.product_name??group[0]?.title??id,listingCount:group.length,knownListings:group.filter(r=>r.profitCents!==null).length,profitCents:profit,netRevenueCents:net,marginPct:net!==null&&net>0&&profit!==null?profit/net*100:null};
       }),coverageVerified:false,method:'Somente registros do intervalo exato por anúncio; produtos com anúncio sem dado ou registros conflitantes permanecem nulos. Valores registrados não constituem auditoria contábil.'};
     });
+    const campaignCostKeys=['productCostCents','packagingCents','shippingCents','marketplaceFeesCents','taxesCents','refundsCents','returnLogisticsCents','cancellationLossCents','otherCostsCents'];
+    this.register('ads.reconcile',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),snapshotId:z.string().min(1),netAttributedRevenueCents:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),costs:z.record(z.string(),z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)),sourceReference:z.string().trim().min(5).max(1000),confirmedSameScope:z.literal(true)}).strict().parse(payload);
+      operationAccount(i.accountId);
+      if(auth?.role!=='super_admin'||!auth.userId)throw Error('somente super_admin pode registrar conciliação');
+      if(Object.keys(i.costs).length!==campaignCostKeys.length||campaignCostKeys.some(k=>!Object.hasOwn(i.costs,k)))throw Error('informe todos os custos efetivos, inclusive zeros confirmados');
+      const row=db.row<{metrics_json:string;context_json:string;evidence_json:string;source_class:string}>(`SELECT metrics_json,context_json,evidence_json,source_class FROM capture_detail_snapshots WHERE id=? AND account_id=? AND kind='AD_CAMPAIGN'`,i.snapshotId,i.accountId);
+      if(!row||row.source_class!=='A_PRIMARY_UI'||!observedWindow(parseJsonObject(row.context_json))||parseJsonObject(row.evidence_json).coverageWarnings)throw Error('campanha da conta com janela explícita e sem alerta de cobertura necessária');
+      const spend=knownNumber(parseJsonObject(row.metrics_json),'adSpend');
+      const cost=campaignCostKeys.reduce((s,k)=>s+i.costs[k]!,0);
+      if(spend===null||!Number.isSafeInteger(Math.round(spend*100))||!Number.isSafeInteger(cost)||!Number.isSafeInteger(cost+Math.round(spend*100)))throw Error('investimento ou custos inválidos');
+      db.db.prepare('INSERT INTO campaign_profit_observations(snapshot_id,account_id,net_attributed_revenue_cents,costs_json,source_reference,observed_at,created_by) VALUES(?,?,?,?,?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET net_attributed_revenue_cents=excluded.net_attributed_revenue_cents,costs_json=excluded.costs_json,source_reference=excluded.source_reference,observed_at=excluded.observed_at,created_by=excluded.created_by').run(i.snapshotId,i.accountId,i.netAttributedRevenueCents,JSON.stringify(i.costs),i.sourceReference,nowIso(),auth.userId);
+      this.audit(auth,'ADS_RECONCILE','capture_detail_snapshot',i.snapshotId,'OK','custos e receita líquida atribuída informados pelo usuário');
+      return {profitCents:i.netAttributedRevenueCents-cost-Math.round(spend*100),classification:'REPORTED_ATTRIBUTED_PROFIT',coverageVerified:false};
+    });
     this.register('ads.dashboard',(payload)=>{
       const i=z.object({accountId:z.string().min(1),from:z.string().datetime(),to:z.string().datetime(),kind:z.enum(['AD','AD_CAMPAIGN']).optional(),externalId:z.string().max(200).optional()}).strict().parse(payload);
       const account=operationAccount(i.accountId);
@@ -2698,7 +2714,10 @@ export class LocalService {
         const metrics=parseJsonObject(String(r.metrics_json)),context=parseJsonObject(String(r.context_json)),window=observedWindow(context);
         const spend=knownNumber(metrics,'adSpend'),revenue=knownNumber(metrics,'adAttributedRevenue');
         const verified=window!==null&&r.source_class==='A_PRIMARY_UI'&&!parseJsonObject(String(r.evidence_json)).coverageWarnings;
-        items.push({...r,metrics,context,window,verified,signal:verified&&spend!==null&&spend>0&&revenue!==null&&revenue<spend?'REVIEW_SPEND':null});
+        const rec=verified&&r.kind==='AD_CAMPAIGN'?db.row<{net_attributed_revenue_cents:number;costs_json:string;source_reference:string}>(`SELECT net_attributed_revenue_cents,costs_json,source_reference FROM campaign_profit_observations WHERE snapshot_id=? AND account_id=?`,r.id,account.id):null;
+        const costs=rec?parseJsonObject(rec.costs_json):null;
+        const profit=rec&&spend!==null&&costs&&campaignCostKeys.every(k=>knownNumber(costs,k)!==null)?rec.net_attributed_revenue_cents-Math.round(spend*100)-campaignCostKeys.reduce((s,k)=>s+Number(costs[k]),0):null;
+        items.push({...r,metrics,context,window,verified,profitCents:profit,profitSource:rec?.source_reference??null,signal:profit!==null&&profit<0?'REPORTED_NEGATIVE_ATTRIBUTED_PROFIT':verified&&spend!==null&&spend>0&&revenue!==null&&revenue<spend?'REVIEW_SPEND':null});
       }
       const snapshots=db.rows<Record<string,unknown>>(`SELECT * FROM account_snapshots WHERE account_id=? AND marketplace=? AND page_kind IN ('seller_ads','seller_dashboard','seller_orders') AND captured_at>=? AND captured_at<=? ORDER BY captured_at DESC,id DESC LIMIT 501`,account.id,account.marketplace,i.from,i.to);
       const pick=(metric:string,kinds:string[])=>snapshots.find(s=>kinds.includes(String(s.page_kind))&&knownNumber(parseJsonObject(String(s.metrics_json)),metric)!==null);
@@ -2706,13 +2725,28 @@ export class LocalService {
       const aw=ad?observedWindow(parseJsonObject(String(ad.evidence_json))):null,sw=sale?observedWindow(parseJsonObject(String(sale.evidence_json))):null;
       const spend=ad?knownNumber(parseJsonObject(String(ad.metrics_json)),'adSpend'):null,gmv=sale?knownNumber(parseJsonObject(String(sale.metrics_json)),'gmv'):null;
       const compatible=!i.kind&&!i.externalId&&rows.length<=500&&snapshots.length<=500&&aw!==null&&sw!==null&&JSON.stringify(aw)===JSON.stringify(sw)&&ad?.source_class==='A_PRIMARY_UI'&&sale?.source_class==='A_PRIMARY_UI';
-      return {items,tacosPct:compatible&&gmv!==null&&gmv>0&&spend!==null?spend/gmv*100:null,window:compatible?aw:null,truncated:rows.length>500||snapshots.length>500,coverageVerified:false};
+      const listingCandidates=[];
+      if(!i.kind&&!i.externalId){
+        const latest=db.rows<Record<string,unknown>>(`SELECT * FROM (SELECT s.*,l.external_id,l.title,l.sku_id,ROW_NUMBER() OVER(PARTITION BY s.listing_id ORDER BY s.captured_at DESC,s.id DESC) rn FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id AND l.account_id=s.account_id WHERE s.account_id=? AND s.captured_at>=? AND s.captured_at<=?) WHERE rn=1 ORDER BY captured_at DESC,id LIMIT 501`,account.id,i.from,i.to);
+        for(const row of latest.slice(0,500)){
+          const m=parseJsonObject(String(row.metrics_json)),window=observedWindow(parseJsonObject(String(row.evidence_json)));
+          if(!window||row.source_class!=='A_PRIMARY_UI')continue;
+          const spend=knownNumber(m,'adSpend'),revenue=knownNumber(m,'adAttributedRevenue'),stock=knownNumber(m,'stockAvailable'),orders=knownNumber(m,'adAttributedOrders');
+          if(spend===null||spend<=0||revenue===null||stock===null||stock<=0||orders===null||orders<=0||revenue<=spend)continue;
+          const records=db.rows<Record<string,unknown>>('SELECT * FROM realized_profit_snapshots WHERE account_id=? AND listing_id=? AND period_start=? AND period_end=?',account.id,row.listing_id,window.from+'T00:00:00.000Z',window.to+'T23:59:59.999Z');
+          const r=records[0];
+          if(records.length!==1||!r||parseJsonObject(String(r.evidence_json)).costFieldsConfirmed!==true||profitFields.some(k=>knownNumber(r,k)===null))continue;
+          const profit=Number(r.net_revenue_cents)-profitFields.slice(1).reduce((s,k)=>s+Number(r[k]),0);
+          if(profit>0)listingCandidates.push({listingId:row.listing_id,label:row.title??row.external_id,stock,spend,revenue,orders,profitCents:profit,window,signal:'REVIEW_MORE_INVESTMENT',note:'Lucro total do anúncio registrado positivo, receita atribuída maior que investimento e estoque positivo; revisar margem incremental antes de aumentar orçamento.'});
+        }
+      }
+      return {items,listingCandidates,tacosPct:compatible&&gmv!==null&&gmv>0&&spend!==null?spend/gmv*100:null,window:compatible?aw:null,truncated:rows.length>500||snapshots.length>500,coverageVerified:false};
     });
     this.register('inventory.dashboard',(payload)=>{
       const i=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(30)}).strict().parse(payload);
       const account=operationAccount(i.accountId),cutoff=new Date(Date.now()-i.days*86400000).toISOString();
       const listings=db.rows<{id:string;sku_id:string|null;external_id:string;title:string|null}>(`SELECT id,sku_id,external_id,title FROM listings WHERE account_id=? ORDER BY id`,account.id);
-      const snapshots=db.rows<Record<string,unknown>>(`SELECT * FROM listing_snapshots WHERE account_id=? AND captured_at>=? ORDER BY captured_at DESC,id DESC`,account.id,cutoff);
+      const snapshots=db.rows<Record<string,unknown>>(`SELECT * FROM (SELECT *,ROW_NUMBER() OVER(PARTITION BY listing_id ORDER BY captured_at DESC,id DESC) rn FROM listing_snapshots WHERE account_id=? AND captured_at>=?) WHERE rn=1 ORDER BY captured_at DESC,id DESC`,account.id,cutoff);
       const latest=new Map<unknown,Record<string,unknown>>();
       for(const r of snapshots)if(!latest.has(r.listing_id))latest.set(r.listing_id,r);
       const items=listings.map(l=>{
@@ -2722,7 +2756,10 @@ export class LocalService {
         const coverage=window&&row?.source_class==='A_PRIMARY_UI'&&stock!==null&&units!==null&&units>0?stock/(units/window.days):null;
         return {...l,stock,units,adSpend:spend,questionsPending:pending,coverageDays:coverage,capturedAt:row?.captured_at??null,window,signals:[stock===0?'OUT_OF_STOCK':null,coverage!==null&&coverage<=7?'LOW_COVERAGE':null,stock===0&&spend!==null&&spend>0?'ADS_SPEND_WITH_ZERO_STOCK_OBSERVED':null,pending!==null&&pending>0?'PENDING_QUESTIONS':null].filter(Boolean)};
       });
-      return {items,coverageVerified:false,cutoff,method:'Último snapshot por anúncio. Estoque zero é distinto de ausente; não somar estoque de anúncios que compartilham SKU. Cobertura em dias exige janela de vendas explícita. Investimento e estoque observados não comprovam simultaneidade operacional.'};
+      const history=db.rows<Record<string,unknown>>(`SELECT s.id,s.listing_id,s.captured_at,s.metrics_json,s.source_class,s.evidence_json,l.external_id,l.sku_id FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id AND l.account_id=s.account_id WHERE s.account_id=? AND s.captured_at>=? ORDER BY s.captured_at DESC,s.id DESC LIMIT 501`,account.id,cutoff);
+      const areaRows=db.rows<Record<string,unknown>>(`SELECT * FROM account_snapshots WHERE account_id=? AND captured_at>=? AND page_kind IN ('seller_inventory','seller_questions','seller_returns','seller_reputation') ORDER BY captured_at DESC,id DESC LIMIT 101`,account.id,cutoff);
+      const warehouses=db.rows<Record<string,unknown>>(`SELECT * FROM capture_detail_snapshots WHERE account_id=? AND captured_at>=? AND kind='WAREHOUSE_STOCK' ORDER BY captured_at DESC,id DESC LIMIT 101`,account.id,cutoff);
+      return {items,history:history.slice(0,500).map(r=>({...r,stock:knownNumber(parseJsonObject(String(r.metrics_json)),'stockAvailable')})),areas:areaRows.slice(0,100).map(r=>({...r,metrics:parseJsonObject(String(r.metrics_json)),evidence:parseJsonObject(String(r.evidence_json))})),warehouses:warehouses.slice(0,100).map(r=>({...r,metrics:parseJsonObject(String(r.metrics_json))})),truncated:history.length>500||areaRows.length>100||warehouses.length>100,coverageVerified:false,cutoff,method:'Último snapshot por anúncio. Estoque zero é distinto de ausente; não somar estoque de anúncios que compartilham SKU. Cobertura em dias exige janela de vendas explícita. Investimento e estoque observados não comprovam simultaneidade operacional.'};
     });
 
     this.register('competitor.evidence.record', (payload, auth) => {
