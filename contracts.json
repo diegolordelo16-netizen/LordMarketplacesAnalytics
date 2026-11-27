@@ -284,5 +284,18 @@
   "capture.chartPoints": {
     "payload": "accountId | limit?",
     "permission": "view_reports"
+  },
+  "navigation.observe": {
+    "payload": "accountId | origin | route | pageKind",
+    "permission": "execute_task",
+    "behavior": "Record only whitelisted structural routes for a verified active account; no raw DOM or query parameters."
+  },
+  "navigation.list": {
+    "payload": "accountId | origin",
+    "permission": "execute_task"
+  },
+  "navigation.clear": {
+    "payload": "accountId | origin",
+    "permission": "execute_task"
   }
 }
