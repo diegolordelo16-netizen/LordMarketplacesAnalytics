@@ -595,3 +595,30 @@ test('manifesto Windows registra arquivo real do host e instalador inclui o wrap
   assert.ok(build.includes("writeFileSync(join(outdir, 'native-host.bat')"));
   assert.ok(iss.includes('native-host\\native-host.bat'));
 });
+
+test('ordenação usa valor monetário, percentual, data e mantém ausência no fim',()=>{
+  const ctx=vm.createContext({Date,Number,Math});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function compareTableCells('),dashboard.indexOf('function updateTableView(')),ctx);
+  const cmp=(a,b,d)=>{ctx.a=a;ctx.b=b;ctx.d=d;return vm.runInContext('compareTableCells(a,b,d)',ctx);};
+  assert.equal(cmp('R$ 1.000,00','R$ 99,99',1),1);
+  assert.equal(cmp('9,9%','10,1%',1),-1);
+  assert.equal(cmp('31/10/2026, 23:00:00','01/11/2026, 00:00:00',1),-1);
+  assert.equal(cmp('—','0',-1),1);
+});
+test('troca de conta limpa filtros de entidade e estados de importação e relatório',()=>{
+  const ctx=vm.createContext({state:{accountId:'A',ownProductId:'P',execFilters:{marketplace:'shopee',days:30,listingId:'L',skuId:'S'}},activeImportJobId:'job',activeImportAccountId:'A',reportPaging:{offsets:[0]}});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function selectAccount('),dashboard.indexOf('async function bootAccountSelector(')),ctx);
+  vm.runInContext("selectAccount('B')",ctx);
+  assert.equal(ctx.state.accountId,'B');assert.equal(ctx.state.ownProductId,'');
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.state.execFilters)),{marketplace:'',days:30,listingId:'',skuId:''});
+  assert.equal(ctx.activeImportJobId,'');assert.equal(ctx.activeImportAccountId,'');assert.equal(ctx.reportPaging,null);
+});
+test('detalhamento de KPI ignora resposta depois de troca de conta e usa dias UTC completos',async()=>{
+  let resolve;const pending=new Promise(r=>resolve=r), host={innerHTML:''},calls=[];
+  const ctx=vm.createContext({state:{accountId:'A',execFilters:{}},viewRenderSequence:1,$:()=>host,comparisonPreset:()=>['2026-11-01','2026-11-07','2026-10-25','2026-10-31'],run:fn=>fn(),api:async(method,payload)=>{calls.push(payload);return pending;}});
+  const start=dashboard.indexOf("  'kpi-drilldown':"),end=dashboard.indexOf("  'kpi-listing':",start);
+  vm.runInContext('const actions={'+dashboard.slice(start,end)+'};',ctx);
+  const promise=vm.runInContext("actions['kpi-drilldown']({metric:'gmv'})",ctx);
+  ctx.state.accountId='B';ctx.viewRenderSequence=2;resolve({rows:[]});await promise;
+  assert.equal(host.innerHTML,'');assert.equal(calls[0].accountId,'A');assert.equal(calls[0].primaryTo,'2026-11-07');
+});

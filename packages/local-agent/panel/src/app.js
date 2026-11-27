@@ -202,6 +202,29 @@ function table(headers, rows, empty = 'Nenhum registro.') {
     <tbody>${rows.join('')}</tbody></table></div>`;
 }
 
+function compareTableCells(left, right, direction = 1) {
+  const a = String(left ?? '').trim(), b = String(right ?? '').trim();
+  const missing = v => !v || /^(?:—|–|não informado|não comprovada|indisponível)$/i.test(v);
+  if (missing(a) || missing(b)) return missing(a) === missing(b) ? 0 : missing(a) ? 1 : -1;
+  const numeric = v => {
+    const match = v.match(/^(R\$\s*)?(-?\d+(?:\.\d{3})*(?:,\d+)?)(?:\s*(%|d))?$/);
+    if (!match) return null;
+    const value = Number(match[2].replaceAll('.', '').replace(',', '.'));
+    return Number.isFinite(value) ? { value, unit: match[1] ? 'BRL' : match[3] || '' } : null;
+  };
+  const date = v => {
+    const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (!m) return null;
+    const value = Date.UTC(+m[3], +m[2]-1, +m[1], +(m[4]||0), +(m[5]||0), +(m[6]||0));
+    const parsed = new Date(value);
+    return parsed.getUTCDate() === +m[1] && parsed.getUTCMonth() === +m[2]-1 && parsed.getUTCFullYear() === +m[3] ? value : null;
+  };
+  const an=numeric(a), bn=numeric(b), ad=date(a), bd=date(b);
+  if (an && bn && an.unit === bn.unit) return Math.sign(an.value-bn.value)*direction;
+  if (ad !== null && bd !== null) return Math.sign(ad-bd)*direction;
+  return a.localeCompare(b, 'pt-BR', {numeric:true,sensitivity:'base'})*direction;
+}
+
 function updateTableView(wrapper) {
   if (!wrapper) return;
   const body = wrapper.querySelector('tbody');
@@ -210,7 +233,7 @@ function updateTableView(wrapper) {
   const column = Number(wrapper.dataset.sortColumn ?? -1);
   const direction = wrapper.dataset.sortDirection === 'desc' ? -1 : 1;
   if (column >= 0) {
-    rows.sort((a, b) => (a.cells[column]?.textContent || '').trim().localeCompare((b.cells[column]?.textContent || '').trim(), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction);
+    rows.sort((a, b) => compareTableCells(a.cells[column]?.textContent, b.cells[column]?.textContent, direction));
     for (const row of rows) body.appendChild(row);
   }
   const filtered = rows.filter((row) => !query || row.textContent.toLocaleLowerCase('pt-BR').includes(query));
@@ -1972,21 +1995,20 @@ const ACTIONS = {
   'exec-filter': async()=>{state.execFilters={marketplace:$('#exec-market').value,days:Number($('#exec-days').value),listingId:$('#exec-listing').value.trim(),skuId:$('#exec-sku').value.trim()};await renderView();},
   'kpi-drilldown': async (d) => {
     const metric = d.metric;
+    const generation=viewRenderSequence, accountId=state.accountId, host=$('#kpi-drilldown-out');
+    if(!host)return;
     const supported = new Set(['gmv','netRevenue','orders','visits','cvr','aov','acos','roas','returnRate']);
     if (!supported.has(metric)) throw new Error('Detalhamento ainda não disponível para este indicador.');
-    const today = new Date();
-    const day = (offset) => { const value = new Date(today); value.setDate(value.getDate() + offset); return value.toISOString().slice(0, 10); };
+    const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('7');
     const result = await run(() => api('kpi.compare.detail', {
-      primaryFrom: day(-6), primaryTo: day(0),
-      comparisonFrom: day(-13), comparisonTo: day(-7),
+      primaryFrom, primaryTo, comparisonFrom, comparisonTo,
       groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),...(state.execFilters.marketplace?{marketplace:state.execFilters.marketplace}:{}),...(state.execFilters.listingId?{listingId:state.execFilters.listingId}:{}),...(state.execFilters.skuId?{skuId:state.execFilters.skuId}:{}),
     }));
     const metricLabel = { gmv:'GMV', netRevenue:'Receita líquida', orders:'Pedidos', visits:'Visitas', cvr:'CVR', aov:'Ticket médio', acos:'ACoS', roas:'ROAS', returnRate:'Taxa de devolução' }[metric] || metric;
     const format = (value) => value == null ? '—' : ['gmv','netRevenue','aov'].includes(metric) ? brl(Math.round(value * 100)) : ['cvr','acos','returnRate'].includes(metric) ? pct(value) : metric === 'roas' ? num(value, 2) : num(value);
     const rows = (result.rows || []).filter((row) => row.current?.metrics?.[metric] != null || row.previous?.metrics?.[metric] != null).slice(0, 100);
-    const host = $('#kpi-drilldown-out');
-    if (!host) return;
-    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação observada','Variação com filtros compatíveis'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td><td>${row.verifiedDeltaPct?.[metric] == null ? 'Não comprovada' : `${num(row.verifiedDeltaPct[metric],1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#kpi-drilldown-out'))return;
+    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias completos UTC (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação observada','Variação com filtros compatíveis'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td><td>${row.verifiedDeltaPct?.[metric] == null ? 'Não comprovada' : `${num(row.verifiedDeltaPct[metric],1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
     initializeTables(host);
     host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
@@ -1994,9 +2016,10 @@ const ACTIONS = {
   'kpi-listing': async () => {
     const id = $('#kpi-listing-id').value.trim();
     if (!id) { toast('Informe o ID do anúncio.', 'bad'); return; }
-    const result = await api('kpi.listing', { listingId: id, accountId: state.accountId || undefined });
-    const target = $('#kpi-listing-out');
-    if (!target) return;
+    const generation=viewRenderSequence,accountId=state.accountId,target=$('#kpi-listing-out');
+    if(!target)return;
+    const result = await api('kpi.listing', { listingId: id, accountId: accountId || undefined });
+    if(generation!==viewRenderSequence||accountId!==state.accountId||target!==$('#kpi-listing-out')||id!==$('#kpi-listing-id')?.value.trim())return;
     if (!result) { target.textContent = 'Nenhum snapshot disponível para este anúncio.'; return; }
     const { conversion_cro: visits, revenue_profit: revenue, operational_health: stock, acquisition_ads: ads } = result.pillars;
     const money = (value) => brl(value == null ? null : Math.round(value * 100));
@@ -2701,10 +2724,20 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+function selectAccount(id) {
+  if (id === state.accountId) return;
+  state.accountId = id;
+  state.ownProductId = '';
+  state.execFilters = {...state.execFilters,marketplace:'',listingId:'',skuId:''};
+  activeImportJobId = '';
+  activeImportAccountId = '';
+  reportPaging = null;
+}
+
 async function bootAccountSelector() {
   const accounts = await api('account.list', {});
   const active = (accounts || []).filter(a => a.is_active !== 0);
-  if (!state.accountId || !active.some(a => a.id === state.accountId)) { state.accountId = active[0]?.id || ''; state.ownProductId = ''; }
+  if (!state.accountId || !active.some(a => a.id === state.accountId)) { selectAccount(active[0]?.id || ''); }
   const sel = $('#account');
   sel.innerHTML = active.length ? active.map(a => `<option value="${esc(a.id)}" ${a.id === state.accountId ? 'selected' : ''}>${esc(a.display_name || a.id)} · ${esc(a.marketplace)}</option>`).join('') : '<option value="">nenhuma conta ativa</option>';
 }
@@ -2732,7 +2765,7 @@ async function boot() {
   } catch { /* primeiro uso */ }
 
   await bootAccountSelector();
-  $('#account').addEventListener('change', () => { state.accountId = $('#account').value; state.ownProductId = ''; renderView(); });
+  $('#account').addEventListener('change', () => { selectAccount($('#account').value); renderView(); });
 
   await renderView();
   setInterval(async () => {
