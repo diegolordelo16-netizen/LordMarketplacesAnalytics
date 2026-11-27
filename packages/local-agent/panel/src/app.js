@@ -490,6 +490,50 @@ async function viewMarket() {
 }
 
 // ------------------------------------------------------------------ CONCORRÊNCIA (núcleo)
+async function localImageFingerprint(file){
+  if(!['image/jpeg','image/png','image/webp','image/gif','image/bmp'].includes(file.type)||file.size>8*1024*1024)throw Error('Use imagens JPEG, PNG, WebP, GIF ou BMP de até 8 MiB.');
+  const bitmap=await createImageBitmap(file);
+  try{
+    if(bitmap.width*bitmap.height>40000000)throw Error('Imagem excede 40 megapixels.');
+    const canvas=document.createElement('canvas');canvas.width=9;canvas.height=8;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('Canvas indisponível.');
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,9,8);ctx.drawImage(bitmap,0,0,9,8);
+    const data=ctx.getImageData(0,0,9,8).data;
+    const gray=i=>data[4*i]*299+data[4*i+1]*587+data[4*i+2]*114;
+    let hash='';
+    for(let y=0;y<8;y++)for(let x=0;x<8;x+=4){
+      let nibble=0;for(let k=0;k<4;k++)nibble=(nibble<<1)|Number(gray(y*9+x+k)>gray(y*9+x+k+1));
+      hash+=nibble.toString(16);
+    }
+    const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+    return {label:file.name.slice(0,200),sha256:Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),dhash64:hash};
+  }finally{bitmap.close();}
+}
+function contentEvidenceView(content,relationId){
+  const desc=content?.description?.comparison,promo=content?.promotions?.comparison,images=content?.images?.comparison;
+  const origin=v=>v?esc(v.sourceClass)+' · '+dt(v.capturedAt):'—';
+  const rows=[
+    ['Descrição: similaridade lexical',desc?.lexicalSimilarityPct==null?'—':num(desc.lexicalSimilarityPct)+'%'],
+    ['Descrição: termos exclusivos concorrente',desc?.rivalOnlyTerms?.join(', ')||'—'],
+    ['Descrição: termos exclusivos próprios',desc?.ownOnlyTerms?.join(', ')||'—'],
+    ['Promoções comuns',promo?.common?.join(' | ')||'—'],
+    ['Promoções exclusivas concorrente',promo?.rivalOnly?.join(' | ')||'—'],
+    ['Promoções exclusivas próprias',promo?.ownOnly?.join(' | ')||'—'],
+    ['Imagens: pares comparáveis',images?.comparableVisualPairs??'—'],
+    ['Imagens: arquivos idênticos',images?.identicalPairs??'—'],
+    ['Imagens: melhor correspondência por concorrente',images?.bestMatches?.map((p,i)=>'Imagem '+(i+1)+': '+(p?p.visualSimilarityPct+'% (própria '+(p.ownIndex+1)+')':'não comparável')).join(' | ')||'—']
+  ];
+  const origins=['description','promotions','images'].map(k=>'<tr><td>'+esc({description:'Descrição',promotions:'Promoções',images:'Imagens'}[k])+'</td><td>'+origin(content?.[k]?.own)+'</td><td>'+origin(content?.[k]?.rival)+'</td></tr>');
+  return '<h3>Descrição, promoções e similaridade visual</h3>'+table(['Comparação','Resultado'],rows.map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+esc(v)+'</td></tr>'),'Sem dados')+
+    table(['Evidência','Produto próprio','Concorrente'],origins,'Sem evidências')+
+    '<p class="muted small">'+esc(content?.note||'Sem amostras comparáveis.')+' · '+esc(images?.note||'dHash estima semelhança estrutural.')+'</p>'+
+    '<div class="form-grid"><label>Origem do registro manual<select data-content-side><option value="OWN">Produto próprio</option><option value="RIVAL">Concorrente</option></select></label>'+
+    '<label class="wide">Descrição observada<textarea data-content-description maxlength="30000"></textarea></label>'+
+    '<label><input type="checkbox" data-content-promo-known> Promoções verificadas (lista vazia = nenhuma observada)</label>'+
+    '<label class="wide">Promoções (uma por linha)<textarea data-content-promotions maxlength="40000"></textarea></label>'+
+    '<label class="wide">Imagens locais (até 20; somente hashes são armazenados)<input data-content-files type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"></label></div>'+
+    '<button class="btn" data-act="content-save" data-id="'+esc(relationId)+'">Registrar evidência manual</button>';
+}
 async function viewCompetition() {
   const generation = viewRenderSequence;
   const accountId = state.accountId;
@@ -1709,6 +1753,7 @@ const ACTIONS = {
     const max = Math.max(...pts.map((p) => p.price_cents || 0), h.ownPriceCents || 0, 1);
     out.innerHTML = `
       ${comparison}
+      ${contentEvidenceView(evidence?.content,d.id)}
       <div class="small">Preço atual: ${brl(h.competitorPriceCents)} · mínimo: ${brl(h.minPriceCents)} · meu preço: ${brl(h.ownPriceCents)}</div>
       <div class="spark">${pts.map((p) => `<div class="bar" style="height:${Math.max(4, ((p.price_cents || 0) / max) * 60)}px" title="${brl(p.price_cents)} · ${dt(p.captured_at)}"></div>`).join('')}</div>
       ${table(['Quando', 'Preço', 'Posição', 'Nota', 'Avaliações'],
@@ -1716,6 +1761,23 @@ const ACTIONS = {
           <td>${p.position ?? '—'}</td><td>${p.rating ?? '—'}</td><td>${p.reviews ?? '—'}</td></tr>`), 'Sem pontos coletados.')}
       <h3>Resultados de busca pública observados</h3>${table(['Data','Marketplace','Ordem nos cartões reconhecidos','Preço','Patrocinado'],(h.publicObservations||[]).map(r=>`<tr><td>${dt(r.observed_at)}</td><td>${esc(r.marketplace)}</td><td>${num(r.observed_order)}</td><td>${brl(r.price_cents)}</td><td>${r.sponsored==null?'—':r.sponsored?'Sim':'Não'}</td></tr>`),'Nenhuma captura pública para este candidato.')}
       ${h.note ? `<div class="muted small">${esc(h.note)}</div>` : ''}`;
+  },
+  'content-save':async d=>{
+    const accountId=state.accountId,ownProductId=state.ownProductId,generation=viewRenderSequence;
+    const out=document.querySelector(`[data-out="${CSS.escape(d.id)}"]`);
+    if(!out||!accountId||!ownProductId)return;
+    const side=out.querySelector('[data-content-side]').value;
+    const description=out.querySelector('[data-content-description]').value.trim();
+    const promoText=out.querySelector('[data-content-promotions]').value.trim(),promoKnown=out.querySelector('[data-content-promo-known]').checked;
+    const promotions=promoKnown||promoText?promoText.split(/\r?\n/).map(x=>x.trim()).filter(Boolean):undefined;
+    const files=Array.from(out.querySelector('[data-content-files]').files||[]);
+    if(files.length>20)throw Error('Limite de 20 imagens.');
+    if(!description&&promotions===undefined&&!files.length)throw Error('Informe ao menos uma evidência.');
+    const images=[];for(const file of files)images.push(await localImageFingerprint(file));
+    if(generation!==viewRenderSequence||accountId!==state.accountId||ownProductId!==state.ownProductId||!out.isConnected)return;
+    await api('competitor.content.record',{accountId,ownProductId,side,...(side==='RIVAL'?{relationId:d.id}:{}),sourceClass:'F_USER_INPUT',...(description?{description}:{}),...(promotions!==undefined?{promotions}:{}),...(images.length?{images}:{})});
+    toast('Evidência manual registrada.');
+    if(generation===viewRenderSequence&&out.isConnected)await ACTIONS.history(d);
   },
   'rebuild-rules': async () => {
     if (!state.ownProductId) { toast('Selecione um produto próprio.', 'bad'); return; }
@@ -2573,7 +2635,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
