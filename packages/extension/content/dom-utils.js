@@ -143,6 +143,25 @@
     return /verify you are human|verifique que voce e humano|verifique se voce e humano|confirme que voce nao e um robo|complete o captcha|security check|human verification/.test(text);
   }
 
+  function individualReviewRating(row) {
+    if (!row || !isVisible(row)) return null;
+    const values = new Set();
+    const parse = (raw, explicit) => {
+      const value = String(raw ?? '').trim();
+      const match = explicit ? value.match(/^([1-5])(?:[.,]0+)?$/) :
+        value.match(/^([1-5])(?:[.,]0+)?\s*(?:de|out of|\/|of)\s*5(?:\s*(?:estrelas?|stars?))?$/i) ||
+        value.match(/^([1-5])\s*(?:estrelas?|stars?)$/i);
+      if (match) values.add(Number(match[1]));
+    };
+    const nodes = [row, ...Array.from(row.querySelectorAll?.('[data-rating], [data-stars], [aria-label], [title]') ?? [])];
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      for (const attr of ['data-rating', 'data-stars']) parse(node.getAttribute(attr), true);
+      for (const attr of ['aria-label', 'title']) parse(node.getAttribute(attr), false);
+    }
+    return values.size === 1 ? [...values][0] : null;
+  }
+
   /** Only explicit, visible text fields. Never use a static test-id as an item identity. */
   function visibleCustomerVoice(root, pageKind, marketplace) {
     const spec = {
@@ -177,7 +196,8 @@
         if(marketplace==='amazon'&&attr==='data-asin'&&!row?.getAttribute('data-sku')&&/^[A-Z0-9]{10}$/.test(value))ids.push(value);
       }
       const unique=[...new Set(ids)];
-      items.push({ kind, text, ...(ref ? { externalRef: ref } : {}), ...(unique.length===1?{externalListingId:unique[0]}:{}) });
+      const rating = kind === 'REVIEW' && ref ? individualReviewRating(row) : null;
+      items.push({ kind, text, ...(rating !== null ? { rating } : {}), ...(ref ? { externalRef: ref } : {}), ...(unique.length===1?{externalListingId:unique[0]}:{}) });
     }
     return items;
   }
