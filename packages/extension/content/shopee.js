@@ -474,8 +474,11 @@
       const kind=detectPageKind(location.href);
       const identity=visibleAccountIdentity();
       const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
-      const ok=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(kind)&&(message.pageKind===kind||(!message.pageKind&&kind==='seller_listings'))&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page));
-      sendResponse({ok});return false;
+      const ok=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(kind)&&(message.pageKind===kind||(!message.pageKind&&kind==='seller_listings'))&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length;
+      if(ok&&message.reactive===true){
+        window.MI_DOM.advanceSpaPageReactive(document,message.page).then(advanced=>sendResponse({ok:advanced})).catch(()=>sendResponse({ok:false}));return true;
+      }
+      sendResponse({ok:ok&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page))});return false;
     }
     if (message?.type === 'MI_CAPTURE_PAGE_INFO') {
       const pageKind = detectPageKind(location.href);
