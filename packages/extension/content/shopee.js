@@ -460,6 +460,11 @@
           window.MI_DOM.collectVirtualizedListings(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
           return true;
         }
+        if(message.virtualized===true&&['seller_questions','seller_reputation','seller_returns','seller_complaints'].includes(observed.pageKind)&&window.MI_DOM.collectVirtualizedFeedback){
+          if(observed.accountId!==message.accountId||observed.url!==message.url||observed.filterSignature!==message.filterSignature||observed.spaPage!==message.spaPage)throw Error('contexto da rolagem não corresponde à aba verificada');
+          window.MI_DOM.collectVirtualizedFeedback(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
+          return true;
+        }
         sendResponse({ok:true,snapshot:observed});
       }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
