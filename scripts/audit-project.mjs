@@ -45,6 +45,13 @@ for (const [name, command] of Object.entries(pkg.scripts ?? {})) {
   }
 }
 
+check(installerIss.split('\n').some(line => line.includes('Name: "autostart"') && line.includes('Flags: unchecked')), 'inicialização automática exige opção explícita no instalador');
+check(installerIss.split('\n').some(line => line.includes('ValueName: "MarketplaceIntelligence"') && line.includes('Tasks: autostart') && line.includes('uninsdeletevalue')), 'registro de inicialização condicionado à opção autorizada');
+check(installerIss.split('\n').some(line => line.includes('ValueName: "MarketplaceIntelligence"') && line.includes('Tasks: not autostart') && line.includes('Flags: deletevalue')), 'desmarcar inicialização remove registro antigo em upgrade');
+check(installerIss.split('\n').some(line => line.includes('Parameters: "--background"') && line.includes('Tasks: autostart')), 'início automático pós-instalação condicionado à opção');
+check(appJs.includes("typeof k.stockCoverageDays === 'number'") && appJs.includes('Number.isFinite(k.stockCoverageDays)'), 'cobertura de estoque indisponível não recebe unidade enganosa');
+check(appJs.includes("['Resumo do lucro realizado',realized]"), 'falha de resumo financeiro aparece nos avisos do painel');
+
 const referenced = [
   manifest.background?.service_worker,
   manifest.side_panel?.default_path,
