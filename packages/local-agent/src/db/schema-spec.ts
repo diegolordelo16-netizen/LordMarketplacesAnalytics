@@ -117,6 +117,9 @@ export const TABLE_SPECS: TableSpec[] = [
   // ---------------------------------------------------------------- conectores, previsão, alertas
   { name: 'seo_external_runs', purpose: 'histórico externo Google, backlinks e IA com proveniência e custo', scope: ['account_id'], retention: 'permanente' },
   { name: 'seo_rank_watches', purpose: 'monitoramento Google opt-in com limite finito de chamadas', scope: ['account_id'], retention: 'permanente' },
+  { name: 'connector_sync_runs', purpose: 'histórico de leituras oficiais segregado por conta e propriedade', scope: ['account_id','connector_id'], retention: '365 dias' },
+  { name: 'connector_sync_rows', purpose: 'dados externos sem promoção automática a KPI', scope: ['run_id'], retention: '365 dias' },
+  { name: 'connector_request_log', purpose: 'reservas de quota local antes de chamadas externas', scope: ['connector_id'], retention: '365 dias' },
   { name: 'connector_registry', purpose: 'conectores disponíveis, limites e custos', scope: [], retention: 'permanente' },
   { name: 'connector_credentials_metadata', purpose: 'metadados de credencial (NUNCA o segredo)', scope: ['connector_id'], retention: 'permanente' },
   { name: 'connector_usage_costs', purpose: 'consumo/custo estimado por conector', scope: ['connector_id'], retention: '365 dias' },

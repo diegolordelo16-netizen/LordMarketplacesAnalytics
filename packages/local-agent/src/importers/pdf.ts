@@ -1,6 +1,10 @@
 import { Buffer } from 'node:buffer';
 import { inflateSync, inflateRawSync } from 'node:zlib';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, writeFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const MAX_PDF_BYTES = 5 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 30 * 1024 * 1024;
@@ -252,4 +256,42 @@ export function parsePdfBase64(base64: string): { rows: Array<{ line: string }>;
     text,
     warnings: ['extração conservadora embutida para staging; tabelas, colunas e totais precisam de conferência manual', 'Poppler/pdftotext indisponível; PDF digitalizado/OCR e fontes CMap não são suportados no fallback embutido'],
   };
+}
+
+const execute=promisify(execFile);
+let ocrBusy=false;
+export async function parsePdfOcr(base64:string):Promise<{rows:Array<{line:string;page:number}>;text:string;warnings:string[]}>{
+  if(ocrBusy)throw Error('OCR local já está em andamento');
+  if(!base64||base64.length>Math.ceil(2*1024*1024*4/3)+32)throw Error('OCR limitado a PDF de 2 MB');
+  const bytes=Buffer.from(base64.replace(/^data:application\/pdf;base64,/i,'').replace(/\s/g,''),'base64');
+  if(bytes.length>2*1024*1024||bytes.subarray(0,5).toString('ascii')!=='%PDF-')throw Error('PDF inválido');
+  ocrBusy=true;
+  let dir:string|undefined;
+  try{
+    dir=await mkdtemp(join(tmpdir(),'mi-ocr-'));
+    const file=join(dir,'document.pdf');
+    await writeFile(file,bytes,{mode:0o600});
+    const run=async(cmd:string,args:string[],timeout=10000)=>{
+      try{return (await execute(cmd,args,{timeout,maxBuffer:1024*1024,windowsHide:true,encoding:'utf8',env:{...process.env,OMP_THREAD_LIMIT:'1'}})).stdout;}
+      catch(e){const code=(e as {code?:string}).code;if(code==='ENOENT')throw Error('OCR indisponível: instale Poppler e Tesseract com idiomas por e eng no PATH');throw Error('OCR falhou em '+cmd+'; confira ferramentas, idiomas e PDF');}
+    };
+    const info=await run('pdfinfo',[file]);
+    const pages=Number(/^Pages:\s*(\d+)\s*$/mi.exec(info)?.[1]);
+    if(!Number.isInteger(pages)||pages<1||pages>8)throw Error('OCR exige PDF de 1 a 8 páginas');
+    const rows:Array<{line:string;page:number}>=[];
+    for(let page=1;page<=pages;page++){
+      const out=join(dir,'page-'+page);
+      await run('pdftoppm',['-f',String(page),'-l',String(page),'-singlefile','-scale-to','1600','-png',file,out]);
+      const image=out+'.png';
+      if((await stat(image)).size>16*1024*1024)throw Error('imagem OCR excede limite local');
+      const text=await run('tesseract',[image,'stdout','-l','por+eng','--psm','6'],15000);
+      for(const line of text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)){
+        if(rows.length>=MAX_LINES)throw Error('OCR excede limite de linhas');
+        rows.push({line:line.slice(0,32000),page});
+      }
+      await rm(image,{force:true});
+    }
+    if(!rows.length)throw Error('OCR não encontrou texto; não foram inventados dados');
+    return {rows,text:rows.map(x=>x.line).join('\n'),warnings:['OCR local: texto estimado, páginas e valores exigem revisão manual; não é importação direta de KPIs.','Nenhum arquivo é enviado para serviço externo.']};
+  }finally{try{if(dir)await rm(dir,{recursive:true,force:true});}finally{ocrBusy=false;}}
 }

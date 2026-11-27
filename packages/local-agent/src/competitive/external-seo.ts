@@ -68,7 +68,9 @@ export class ExternalSeoWorkspace{
   constructor(private readonly db:LocalDatabase,private readonly secrets:SecretStore){}
   private credentials(){const login=this.secrets.get('seo:dataforseo:login'),password=this.secrets.get('seo:dataforseo:password');if(login&&password)return {login,password,source:'LOCAL_ENCRYPTED'};if(this.secrets.get('seo:dataforseo:disabled')==='true')return null;const l=process.env.MI_DATAFORSEO_LOGIN?.trim(),p=process.env.MI_DATAFORSEO_PASSWORD;return l&&p?{login:l,password:p,source:'ENVIRONMENT'}:null;}
   private scheduleEnabled(){const value=this.secrets.get('seo:dataforseo:schedules');return value!==null?value==='true':process.env.MI_DATAFORSEO_ENABLE_SCHEDULES==='true';}
-  status(){return {configured:!!this.credentials(),source:this.credentials()?.source??null,schedulesEnabled:this.scheduleEnabled(),busy:this.busy};}
+  private usage(){const row=this.db.row<{requests:number;knownCostUsd:number|null;unknownCosts:number}>("SELECT COUNT(*) requests,SUM(cost_usd) knownCostUsd,COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) unknownCosts FROM seo_external_runs WHERE requested_at>=?",new Date(Date.now()-86400000).toISOString());return {requests:row?.requests??0,knownCostUsd:row?.knownCostUsd??null,unknownCosts:row?.unknownCosts??0,requestLimit:20,knownCostThresholdUsd:5};}
+  private assertBudget(){const u=this.usage();if(u.requests>=u.requestLimit||(u.knownCostUsd!==null&&u.knownCostUsd>=u.knownCostThresholdUsd))throw Error('Limite local de consultas SEO em 24h atingido; valores desconhecidos continuam possíveis.');}
+  status(){return {configured:!!this.credentials(),source:this.credentials()?.source??null,schedulesEnabled:this.scheduleEnabled(),busy:this.busy,usage:this.usage()};}
   configure(payload:unknown){const i=z.object({login:z.string().trim().min(1).max(254).regex(/^[^:\r\n]+$/),password:z.string().min(1).max(256),enableSchedules:z.boolean().default(false)}).strict().parse(payload);if(this.busy)throw Error('Aguarde a consulta em andamento.');this.db.transaction(()=>{this.secrets.set('seo:dataforseo:login',i.login);this.secrets.set('seo:dataforseo:password',i.password);this.secrets.set('seo:dataforseo:schedules',String(i.enableSchedules));this.secrets.delete('seo:dataforseo:disabled');if(!i.enableSchedules)this.db.db.prepare('UPDATE seo_rank_watches SET enabled=0').run();});return this.status();}
   disconnect(){if(this.busy)throw Error('Aguarde a consulta em andamento.');this.db.transaction(()=>{this.secrets.deletePrefix('seo:dataforseo:');this.secrets.set('seo:dataforseo:disabled','true');this.secrets.set('seo:dataforseo:schedules','false');this.db.db.prepare('UPDATE seo_rank_watches SET enabled=0').run();});return this.status();}
   account(accountId:string){if(!this.db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',accountId))throw Error('Selecione uma conta ativa.');}
@@ -77,7 +79,7 @@ export class ExternalSeoWorkspace{
     const parsed=seoResearchInput.parse(input),request=seoRequest(parsed);
     const credentials=this.credentials();if(!credentials)throw Error('Configure DataForSEO no painel SEO & Keywords.');
     if(this.busy)throw Error('Já existe uma consulta externa em andamento.');
-    this.busy=true;
+    this.assertBudget();this.busy=true;
     const id=randomUUID();
     try{
       this.db.db.prepare('INSERT INTO seo_external_runs(id,account_id,mode,query,device,location_name,scope,requested_at,status,schedule_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
@@ -95,7 +97,7 @@ export class ExternalSeoWorkspace{
     this.account(accountId);const input=z.array(googleAdsTerm).min(1).max(20).parse(terms);
     const credentials=transient??this.credentials();if(!credentials)throw Error('Configure DataForSEO no painel SEO & Keywords.');
     if(this.busy)throw Error('Já existe uma consulta externa em andamento.');
-    this.busy=true;const id=randomUUID(),at=new Date().toISOString();
+    this.assertBudget();this.busy=true;const id=randomUUID(),at=new Date().toISOString();
     try{
       this.db.db.prepare('INSERT INTO seo_external_runs(id,account_id,mode,query,device,scope,requested_at,status) VALUES(?,?,?,?,?,?,?,?)').run(id,accountId,'googleVolume',input.join(' | '),'desktop','GOOGLE_ADS_BR_PT',at,'DISPATCHED');
       const result=await lookupGoogleAdsVolume(credentials.login,credentials.password,input);

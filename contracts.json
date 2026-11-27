@@ -97,7 +97,8 @@
     "csvText": "CSV text?",
     "base64": "XLSX base64?",
     "maxBytes": "2 MB",
-    "result": "persisted staging; no KPI promotion"
+    "result": "persisted staging; no KPI promotion",
+    "ocr": "optional true for local scanned PDF"
   },
   "connector.disconnect": "connectorId (desativa o conector, remove segredos do namespace e metadados de credenciais)",
   "connector.import.list": {
@@ -615,5 +616,50 @@
     "sourceUrl": "recognized public search URL",
     "observedAt": "ISO datetime",
     "candidates": "1..20 visible cards"
+  },
+  "connector.configure": {
+    "connectorId": "supported official provider",
+    "provider": "GOOGLE_ANALYTICS4|GOOGLE_SEARCH_CONSOLE|MARKETPLACE_SERVICE",
+    "publicConfig": "property or seller identity plus accountId",
+    "secrets": "encrypted access/refresh credentials, never returned"
+  },
+  "connector.test": {
+    "connectorId": "string"
+  },
+  "connector.sync": {
+    "connectorId": "string",
+    "accountId": "active linked account",
+    "from": "optional YYYY-MM-DD",
+    "to": "optional YYYY-MM-DD",
+    "confirmedExternal": true,
+    "continueRunId": "optional prior scoped run; one successful continuation"
+  },
+  "connector.sync.history": {
+    "accountId": "string",
+    "connectorId": "optional",
+    "limit": "1..100"
+  },
+  "connector.sync.get": {
+    "accountId": "string",
+    "runId": "string",
+    "offset": "optional 0..10000",
+    "limit": "optional 1..500"
+  },
+  "connector.trends.import": {
+    "accountId": "active account",
+    "csvText": "official interest over time export",
+    "confirmedSource": true
+  },
+  "connector.external.import": {
+    "accountId": "active account",
+    "connectorId": "seo_service_generic|marketplace_service_generic",
+    "providerLabel": "declared authorized provider",
+    "datasetLabel": "string",
+    "fileName": "string",
+    "fileType": "csv|xlsx",
+    "csvText": "optional CSV content",
+    "base64": "optional XLSX content",
+    "referenceDate": "optional YYYY-MM-DD",
+    "confirmedSource": true
   }
 }

@@ -1,0 +1,2 @@
+ALTER TABLE connector_sync_runs ADD COLUMN source_metadata_json TEXT;
+UPDATE connector_registry SET data_available='CSV/XLSX autorizado, fornecedor e data declarados, evidência separada de KPIs',refresh_policy='Importação manual',missing_fields='Adaptador API específico depende do contrato e documentação do fornecedor; nenhuma conexão genérica fictícia.',limits='5000 linhas e 4 MB normalizados por exportação' WHERE id IN('seo_service_generic','marketplace_service_generic');

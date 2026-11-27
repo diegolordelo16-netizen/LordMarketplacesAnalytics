@@ -34,3 +34,6 @@ Pendências: workspace Gemini com contexto e histórico, deduplicação de feedb
 - Atualização do binário Node, atalhos, registro do host e metadados do desinstalador é feita pelo instalador completo, não por este payload. A extensão preserva ID fixo; recarregue no navegador após atualização. Não há download/execução automática de conteúdo não aprovado.
 - CI nº 229/230 revelou erro de sintaxe SQL; corrigido. CI nº 231/232 passou typecheck e três builds, revelou três testes regressivos (fixture futura e detector de funções da extensão); corrigidos com novas asserções. Nova CI e smoke Windows precisam concluir para considerar a versão validada.
 - PR 11 agora aponta para master e inclui a etapa 06. Não confundir a publicação no branch com lançamento estável.
+
+## Encerramento da validação e publicação
+CI 238 aprovada integralmente no commit c2e75c71: 374 Vitest, 36 regressões, 677 verificações estáticas, 45 migrations, 0 violações de FK, 6 testes do atualizador e smoke Windows com versão anterior sintética. PR #11 integrado à master no commit e315a665e0107033156eb6cdd9b475b3f7cf4eeb. A versão 3.16.0 foi confirmada no package.json da master. Validação real de contas/API continua separada. Estas informações substituem as pendências de CI e publicação das revisões anteriores.

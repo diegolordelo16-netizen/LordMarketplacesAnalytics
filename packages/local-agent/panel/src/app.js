@@ -7,6 +7,7 @@
 
 // ------------------------------------------------------------------ estado
 let activeImportJobId = '';
+let activeImportAccountId = '';
 
 const state = {
   token: new URLSearchParams(location.search).get('token') || sessionStorage.getItem('mi.token') || '',
@@ -433,7 +434,7 @@ async function viewKeywords() {
         <option value="IMPORTACAO">Importação</option></select></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="kw-add">Adicionar termo</button></div>`)
-  + card('Conexão SEO externa — DataForSEO',`<p class="muted small">${seoConfig.configured?'Credencial disponível · '+esc(seoConfig.source):'Não configurado'} · Agendamento ${seoConfig.schedulesEnabled?'habilitado':'desabilitado'}. Nenhum teste pago automático.</p><div class="form-grid"><label>Login da API<input id="seo-config-login" autocomplete="off" maxlength="254"></label><label>Senha da API<input id="seo-config-password" type="password" autocomplete="off" maxlength="256"></label><label><input id="seo-config-schedules" type="checkbox" ${seoConfig.schedulesEnabled?'checked':''}> Permitir agendamentos tarifados autorizados individualmente</label></div><button class="btn" data-act="seo-config-save">Salvar conexão local</button> <button class="btn ghost" data-act="seo-config-clear">Desconectar</button>`)
+  + card('Conexão SEO externa — DataForSEO',`<p class="muted small">${seoConfig.configured?'Credencial disponível · '+esc(seoConfig.source):'Não configurado'} · Agendamento ${seoConfig.schedulesEnabled?'habilitado':'desabilitado'}. Nenhum teste pago automático. ${num(seoConfig.usage?.requests??0)}/20 consultas em 24h · custo conhecido USD ${seoConfig.usage?.knownCostUsd==null?'—':esc(seoConfig.usage.knownCostUsd)} · ${num(seoConfig.usage?.unknownCosts??0)} custos desconhecidos. Bloqueia novas consultas após USD 5 conhecidos; não é teto garantido de cobrança.</p><div class="form-grid"><label>Login da API<input id="seo-config-login" autocomplete="off" maxlength="254"></label><label>Senha da API<input id="seo-config-password" type="password" autocomplete="off" maxlength="256"></label><label><input id="seo-config-schedules" type="checkbox" ${seoConfig.schedulesEnabled?'checked':''}> Permitir agendamentos tarifados autorizados individualmente</label></div><button class="btn" data-act="seo-config-save">Salvar conexão local</button> <button class="btn ghost" data-act="seo-config-clear">Desconectar</button>`)
   + (accountId?card('Pesquisa SEO externa — OpenSEO / DataForSEO', `
     <p class="muted small">Google Brasil em português; ChatGPT externo EUA/en; backlinks da web global. Selecione outra localização canônica somente para SERP. Não representa volume ou posição no Mercado Livre, Shopee ou Amazon. Cada consulta pode ser cobrada pela DataForSEO, inclusive falhas. Configure a conexão acima; as consultas ficam no histórico da loja.</p>
     <div class="form-grid"><label>Pesquisa<select id="seo-external-mode"><option value="suggestions">Sugestões de palavras-chave</option><option value="googleVolume">Volume Google Ads (até 20 termos, um por linha)</option><option value="related">Termos relacionados</option><option value="ideas">Ideias de palavras-chave</option><option value="serp">Resultados Google (SERP)</option><option value="ranked">Palavras-chave de domínio concorrente</option><option value="domain">Visibilidade de domínio</option><option value="backlinks">Resumo de backlinks</option><option value="overview">Visão geral da palavra-chave</option><option value="competitors">Concorrentes na SERP</option><option value="pages">Páginas orgânicas de domínio</option><option value="backlinkRows">Backlinks individuais</option><option value="referringDomains">Domínios de referência</option><option value="backlinkPages">Páginas com backlinks</option><option value="lighthouse">Auditoria técnica Lighthouse (URL HTTPS)</option><option value="aiGoogle">Menções em IA Google (BR/pt)</option><option value="aiChatGPT">Menções ChatGPT (EUA/en)</option></select></label>
@@ -894,10 +895,31 @@ async function viewTasks() {
 }
 
 // ------------------------------------------------------------------ CONECTORES
+function renderImportPreview(r,fileType,accountId){
+    const rows = r?.previewRows || [];
+    const columns = Array.from(rows.reduce((set, row) => { Object.keys(row || {}).forEach((key) => set.add(key)); return set; }, new Set()));
+    const preview = rows.length ? table(columns, rows.map((row) => `<tr>${columns.map((key) => `<td>${esc(row[key] ?? '')}</td>`).join('')}</tr>`), 'Sem linhas de prévia.') : '';
+    if (fileType === 'pdf'||r.status!=='PENDENTE_VALIDACAO') {
+      activeImportJobId = ''; activeImportAccountId='';
+      $('#import-out').innerHTML = `<p>${num(r.rowCount)} linhas de texto guardadas para conferência. Use um CSV ou XLSX com IDs de anúncios para importar métricas.</p>
+        <ul>${(r.warnings ?? []).map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>${preview}`;
+      initializeTables($('#import-out'));
+      return;
+    }
+    activeImportJobId = r?.jobId || ''; activeImportAccountId=accountId;
+    const options = `<option value="">— não mapear —</option>${columns.map((column) => `<option value="${esc(column)}">${esc(column)}</option>`).join('')}`;
+    const metricFields = [['gmv','Faturamento bruto'],['netRevenue','Receita líquida'],['orders','Pedidos'],['units','Unidades vendidas'],['visits','Visitas'],['impressions','Impressões'],['clicks','Cliques'],['adSpend','Investimento em Ads'],['adClicks','Cliques em Ads'],['adAttributedRevenue','Receita atribuída a Ads'],['stockAvailable','Estoque disponível'],['returnsCount','Devoluções'],['cancellations','Cancelamentos'],['reviewRating','Nota de avaliação'],['reviewCount','Quantidade de avaliações']];
+    const mapping = `<div class="form-grid"><label>ID externo do anúncio<select id="im-map-external"><option value="">— selecione a coluna —</option>${columns.map((column) => `<option value="${esc(column)}">${esc(column)}</option>`).join('')}</select></label><label>Data do registro (opcional)<select id="im-map-date">${options}</select></label>${metricFields.map(([key,label]) => `<label>${esc(label)}<select class="im-map-metric" data-metric="${key}">${options}</select></label>`).join('')}</div><div class="actions"><button class="btn primary" data-act="import-commit" ${state.accountId ? '' : 'disabled'}>Validar mapeamento e importar para KPIs</button></div><p class="muted small">Os anúncios precisam já existir na conta. O sistema rejeita IDs desconhecidos, datas duplicadas e valores inválidos. A origem será registrada como F_USER_INPUT.</p>`;
+    $('#import-out').innerHTML = `<p>${num(r?.rowCount || 0)} linha(s) em staging · status ${esc(r?.status || '—')} · job ${esc(r?.jobId || '—')}</p><p class="muted small">${esc(r?.note || 'Os dados aguardam mapeamento e validação; ainda não alteram KPIs.')}</p>${preview}${mapping}`;
+    initializeTables($('#import-out'));
+
+}
+
 async function viewConnectors() {
-  const [registry, imports] = await Promise.all([
+  const [registry, imports, syncs] = await Promise.all([
     api('connector.registry', {}),
     state.accountId ? api('connector.import.list', { accountId: state.accountId, limit: 30 }) : Promise.resolve([]),
+    state.accountId ? api('connector.sync.history',{accountId:state.accountId,limit:30}) : Promise.resolve([]),
   ]);
   return card('Conectores opcionais', table(['Conector', 'Dados', 'Estado', 'Custo', 'Limites', 'Ação'],
     (registry || []).map((c) => `<tr><td>${esc(c.label || c.id)}</td><td>${esc(c.data_available || '—')}</td>
@@ -905,21 +927,32 @@ async function viewConnectors() {
         ${c.last_test_at ? `<div class="muted small">${dt(c.last_test_at)} · ${esc(c.last_test_message)}</div>` : ''}</td>
       <td>${esc(c.cost_note || '—')}</td><td>${esc(c.limits || '—')}</td><td><div class="actions">
         <button class="btn tiny" data-act="connector-toggle" data-id="${esc(c.id)}" data-enabled="${c.enabled ? '1':'0'}" ${c.enabled || !c.requires_credentials || c.status === 'CONECTADO' ? '' : 'disabled'}>${c.enabled ? 'Desativar' : 'Habilitar'}</button>
-        ${c.configured && ['google_analytics4','google_search_console'].includes(c.id) ? `<button class="btn tiny" data-act="connector-test" data-id="${esc(c.id)}">Testar</button>` : ''}
+        ${c.configured && ['google_analytics4','google_search_console','mercado_livre_official_api','shopee_official_api','amazon_sp_api'].includes(c.id) ? `<button class="btn tiny" data-act="connector-test" data-id="${esc(c.id)}">Testar</button>` : ''}
+        ${c.enabled&&c.bound_account_id===state.accountId?`<button class="btn tiny" data-act="connector-sync" data-id="${esc(c.id)}">Sincronizar</button>`:''}
+        <div class="small muted">${esc(c.bound_account_id||'Sem loja vinculada')} · ${num(c.requests_24h||0)}/30 chamadas · última leitura: ${c.last_sync_at?dt(c.last_sync_at):'—'}</div>
         <button class="btn tiny danger" data-act="connector-disconnect" data-id="${esc(c.id)}" data-label="${esc(c.label || c.id)}">Desconectar / limpar</button></div></td></tr>`),
     'Catálogo de conectores indisponível.'))
-  + card('Conexões Google', `<div class="form-grid">
-    <label>ID da propriedade GA4<input id="ga4-property" inputmode="numeric" maxlength="20"></label>
-    <label>Token OAuth de leitura do GA4<input id="ga4-token" type="password" autocomplete="off" maxlength="5000"></label>
-    <div class="wide actions"><button class="btn" data-act="connector-configure" data-id="google_analytics4">Salvar GA4</button></div>
-    <label>Propriedade Search Console<input id="gsc-property" placeholder="sc-domain:dominio.com" maxlength="500"></label>
-    <label>Token OAuth de leitura do Search Console<input id="gsc-token" type="password" autocomplete="off" maxlength="5000"></label>
-    <div class="wide actions"><button class="btn" data-act="connector-configure" data-id="google_search_console">Salvar Search Console</button></div>
-    </div><p class="muted small">Salve um token de acesso autorizado e teste a propriedade. Substitua o token quando expirar.</p>`)
-  + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td></tr>`), 'Nenhuma importação para esta conta.'))
+  + card('Configuração oficial — somente leitura', `<div class="form-grid">
+    <label>Provedor <select id="co-provider"><option value="google_analytics4">GA4</option><option value="google_search_console">Search Console</option><option value="mercado_livre_official_api">Mercado Livre</option><option value="shopee_official_api">Shopee</option><option value="amazon_sp_api">Amazon SP-API</option></select></label>
+    <label>Propriedade / ID do vendedor / Shop ID<input id="co-target" maxlength="500"></label>
+    <label>Partner ID (somente Shopee)<input id="co-partner" maxlength="15"></label>
+    <label>Access token (opcional se refresh completo)<input id="co-token" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Refresh token (opcional)<input id="co-refresh" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Client ID (Google, ML ou Amazon)<input id="co-client" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Client secret (Google, ML ou Amazon)<input id="co-secret" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Partner key (somente Shopee)<input id="co-key" type="password" autocomplete="off" maxlength="5000"></label>
+    <div class="wide actions"><button class="btn" data-act="connector-configure">Vincular à loja selecionada e salvar</button></div>
+    </div><p class="muted small">Credenciais autorizadas pelo titular, armazenadas cifradas. Um vínculo por provedor; salvar novamente substitui a configuração. Teste e habilite antes de sincronizar. Dados web externos não são somados aos KPIs. Limite local 30 chamadas em 24h; custos e cotas do provedor podem variar.</p>`)
+  + card('Sincronização externa', `<div class="form-grid"><label>Data inicial (Google, opcional)<input id="co-from" type="date"></label><label>Data final (Google, opcional)<input id="co-to" type="date"></label></div>
+    <p class="muted small">Sem datas, Google usa janela incremental; marketplaces consultam páginas limitadas, com continuação autorizada. Ausência de linha não significa zero.</p>`+
+    table(['Provedor','Escopo','Status','Linhas','Última leitura','Ação'],(syncs||[]).map(r=>`<tr><td>${esc(r.connector_id)}</td><td>${esc(r.kind)} · ${esc(r.period_start||'—')} → ${esc(r.period_end||'—')}</td><td>${esc(r.status)}${r.partial?' · PARCIAL':''}</td><td>${num(r.row_count)}</td><td>${dt(r.finished_at)}</td><td><button class="btn tiny" data-act="connector-sync-get" data-id="${esc(r.id)}">Ver evidência</button>${r.has_next?` <button class="btn tiny" data-act="connector-next" data-id="${esc(r.connector_id)}" data-run-id="${esc(r.id)}">Próxima página</button>`:''}</td></tr>`),'Nenhuma leitura nesta loja.')+'<div id="co-out" class="out"></div>')
+  + card('Google Trends — importação de exportação oficial',`<p class="muted small">Exporte interesse ao longo do tempo no Google Trends. A API alfa exige acesso específico; a importação local não usa API. Índices de 0 a 100 são relativos à própria exportação.</p><label class="wide">CSV de interesse ao longo do tempo<input id="trends-file" type="file" accept=".csv"></label><button class="btn" data-act="trends-import">Registrar exportação na loja</button>`)
+  + card('Exportações de serviços autorizados',`<div class="form-grid"><label>Categoria<select id="ex-kind"><option value="seo_service_generic">SEO</option><option value="marketplace_service_generic">Inteligência de marketplace</option></select></label><label>Fornecedor<input id="ex-provider" maxlength="100"></label><label>Nome do relatório<input id="ex-dataset" maxlength="100"></label><label>Data de referência (opcional)<input id="ex-date" type="date"></label><label class="wide">Arquivo exportado CSV/XLSX<input id="ex-file" type="file" accept=".csv,.xlsx"></label></div><button class="btn" data-act="external-import">Registrar evidência externa</button><p class="muted small">Somente exportações permitidas pelo fornecedor. Sem API genérica nem envio do arquivo para terceiros; dados ficam separados dos KPIs.</p>`)
+  + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em','Ação'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td><td><button class="btn tiny" data-act="import-resume" data-id="${esc(job.id)}">${job.status==='PENDENTE_VALIDACAO'?'Reabrir':'Ver'}</button></td></tr>`), 'Nenhuma importação para esta conta.'))
   + card('Importar relatório', `
     <div class="form-grid">
       <label class="wide">Arquivo CSV, XLSX ou PDF digital (máximo 2 MB) <input id="im-file" type="file" accept=".csv,.xlsx,.pdf"></label>
+      <label><input id="im-ocr" type="checkbox"> OCR local de PDF (Poppler + Tesseract por/eng instalados; até 8 páginas)</label>
       <label>Tipo de relatório <select id="im-kind"><option value="ADS">Ads</option><option value="VENDAS">Vendas</option>
         <option value="KEYWORDS">Palavras-chave</option><option value="AVALIACOES">Avaliações</option></select></label>
       <label class="wide">Ou cole um CSV <textarea id="im-csv" rows="4" placeholder="coluna;valor&#10;cliques;120"></textarea></label>
@@ -2348,19 +2381,60 @@ const ACTIONS = {
   },
   'media-delete': async (d) => { if (!confirm('Excluir esta imagem da biblioteca?')) return; await run(() => api('media.delete', { id: d.id, accountId: d.accountId || null }), 'Imagem excluída.'); renderView(); },
   'connector-toggle': async (d) => { await run(() => api('connector.setEnabled', { connectorId: d.id, enabled: d.enabled !== '1' }), 'Conector atualizado.'); renderView(); },
-  'connector-configure': async ({ id }) => {
-    const analytics = id === 'google_analytics4';
-    const property = $(analytics ? '#ga4-property' : '#gsc-property').value.trim();
-    const field = $(analytics ? '#ga4-token' : '#gsc-token');
-    const accessToken = field.value.trim();
-    if (!property || !accessToken) throw new Error('Informe a propriedade e o token de leitura.');
-    await api('connector.configure', {
-      connectorId: id, provider: analytics ? 'GOOGLE_ANALYTICS4' : 'GOOGLE_SEARCH_CONSOLE',
-      publicConfig: analytics ? { propertyId: property } : { siteUrl: property }, secrets: { accessToken },
-    });
-    field.value = '';
-    toast('Conexão configurada. Teste a propriedade.');
-    await renderView();
+  'connector-configure': async () => {
+    const id=$('#co-provider').value,target=$('#co-target').value.trim(),accountId=state.accountId;
+    if(!accountId||!target)throw Error('Selecione a loja e informe a propriedade ou ID autorizado.');
+    const provider=id==='google_analytics4'?'GOOGLE_ANALYTICS4':id==='google_search_console'?'GOOGLE_SEARCH_CONSOLE':'MARKETPLACE_SERVICE';
+    const publicConfig={accountId,...(id==='google_analytics4'?{propertyId:target}:id==='google_search_console'?{siteUrl:target}:id==='shopee_official_api'?{shopId:target,partnerId:$('#co-partner').value.trim()}:{sellerId:target})};
+    const fields={accessToken:'#co-token',refreshToken:'#co-refresh',clientId:'#co-client',clientSecret:'#co-secret',partnerKey:'#co-key'},secrets={};
+    for(const [key,selector] of Object.entries(fields)){const value=$(selector).value.trim();if(value)secrets[key]=value;}
+    if(!confirm('Vincular esta propriedade à loja selecionada e substituir a configuração anterior deste provedor?'))return;
+    await api('connector.configure',{connectorId:id,provider,publicConfig,secrets});
+    Object.values(fields).forEach(selector=>{const input=$(selector);if(input)input.value='';});
+    toast('Configuração salva. Teste a conexão.');await renderView();
+  },
+  'connector-sync':async ({id})=>{
+    const accountId=state.accountId,generation=viewRenderSequence;
+    if(!accountId||!confirm('Consultar a API externa autorizada? Sujeito a limites e condições do provedor.'))return;
+    const google=['google_analytics4','google_search_console'].includes(id);
+    const from=google?($('#co-from')?.value||undefined):undefined,to=google?($('#co-to')?.value||undefined):undefined;
+    const result=await api('connector.sync',{connectorId:id,accountId,from,to,confirmedExternal:true});
+    toast(result.ok?'Leitura registrada: '+result.rowCount+' linhas'+(result.partial?' (parcial)':''):result.message,result.ok?'ok':'bad');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'trends-import':async ()=>{
+    const file=$('#trends-file').files?.[0],accountId=state.accountId,generation=viewRenderSequence;
+    if(!file||!accountId||file.size>2*1024*1024)throw Error('Selecione loja e CSV de até 2 MB.');
+    if(!confirm('Confirma que o arquivo foi exportado do Google Trends e corresponde ao recorte escolhido?'))return;
+    const csvText=await file.text();
+    const result=await api('connector.trends.import',{accountId,csvText,confirmedSource:true});
+    toast(result.duplicate?'Exportação já registrada.':'Exportação registrada: '+result.rowCount+' observações.');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'connector-next':async ({id,runId})=>{
+    const accountId=state.accountId,generation=viewRenderSequence;
+    if(!accountId||!confirm('Consultar a próxima página do mesmo provedor?'))return;
+    const result=await api('connector.sync',{connectorId:id,accountId,continueRunId:runId,confirmedExternal:true});
+    toast(result.ok?'Página registrada: '+result.rowCount+' linhas':result.message,result.ok?'ok':'bad');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'external-import':async ()=>{
+    const file=$('#ex-file').files?.[0],accountId=state.accountId,generation=viewRenderSequence;
+    if(!file||!accountId||file.size>2*1024*1024)throw Error('Selecione loja e arquivo CSV/XLSX de até 2 MB.');
+    const fileType=file.name.toLowerCase().split('.').at(-1);
+    if(!['csv','xlsx'].includes(fileType))throw Error('Formato inválido.');
+    const providerLabel=$('#ex-provider').value.trim(),datasetLabel=$('#ex-dataset').value.trim(),connectorId=$('#ex-kind').value,referenceDate=$('#ex-date').value||undefined;
+    if(!providerLabel||!datasetLabel||!confirm('Confirma que a exportação foi obtida com autorização e corresponde à loja selecionada?'))return;
+    const content=fileType==='csv'?{csvText:await file.text()}:{base64:await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('Falha ao ler arquivo'));reader.readAsDataURL(file);})};
+    const result=await api('connector.external.import',{accountId,connectorId,providerLabel,datasetLabel,fileName:file.name,fileType,referenceDate,confirmedSource:true,...content});
+    toast(result.duplicate?'Exportação já registrada.':'Exportação registrada: '+result.rowCount+' linhas.');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'connector-sync-get':async ({id,offset})=>{
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#co-out');
+    const result=await api('connector.sync.get',{accountId,runId:id,offset:Number(offset||0),limit:100});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#co-out'))return;
+    const pre=document.createElement('pre');pre.className='json';pre.textContent=JSON.stringify(result,null,2);host.replaceChildren(pre);for(const [label,value] of [['Anterior',result.offset>0?Math.max(0,result.offset-100):null],['Próximas 100',result.nextOffset]]){if(value==null)continue;const btn=document.createElement('button');btn.className='btn tiny';btn.dataset.act='connector-sync-get';btn.dataset.id=id;btn.dataset.offset=String(value);btn.textContent=label;host.append(btn);}
   },
   'connector-test': async ({ id }) => {
     const result = await api('connector.test', { connectorId: id });
@@ -2373,6 +2447,7 @@ const ACTIONS = {
     renderView();
   },
   import: async () => {
+    const accountId=state.accountId,generation=viewRenderSequence;
     const file = $('#im-file').files?.[0];
     const pasted = $('#im-csv').value;
     if (!state.accountId) throw new Error('Selecione a conta que receberá os dados antes de importar.');
@@ -2381,7 +2456,7 @@ const ACTIONS = {
     let fileName = file?.name || `${$('#im-kind').value.toLowerCase()}-${Date.now()}.csv`;
     const fileType = fileName.toLowerCase().split('.').at(-1);
     if (!['csv','xlsx','pdf'].includes(fileType)) throw new Error('Selecione CSV, XLSX ou PDF digital.');
-    const payload = { fileName, fileType, accountId: state.accountId || undefined };
+    const payload = { fileName, fileType, accountId: state.accountId || undefined, ...(fileType==='pdf'&&$('#im-ocr').checked?{ocr:true}:{}) };
     if (fileType !== 'csv' && file) {
       const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('Falha ao ler o arquivo.')); reader.readAsDataURL(file); });
       payload.base64 = dataUrl.split(',')[1] || '';
@@ -2389,26 +2464,21 @@ const ACTIONS = {
       payload.csvText = file ? await file.text() : pasted;
     }
     const r = await run(() => api('connector.import', payload), 'Arquivo interpretado e salvo para validação.');
-    const rows = r?.previewRows || [];
-    const columns = Array.from(rows.reduce((set, row) => { Object.keys(row || {}).forEach((key) => set.add(key)); return set; }, new Set()));
-    const preview = rows.length ? table(columns, rows.map((row) => `<tr>${columns.map((key) => `<td>${esc(row[key] ?? '')}</td>`).join('')}</tr>`), 'Sem linhas de prévia.') : '';
-    if (fileType === 'pdf') {
-      activeImportJobId = '';
-      $('#import-out').innerHTML = `<p>${num(r.rowCount)} linhas de texto guardadas para conferência. Use um CSV ou XLSX com IDs de anúncios para importar métricas.</p>
-        <ul>${(r.warnings ?? []).map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>${preview}`;
-      initializeTables($('#import-out'));
-      return;
-    }
-    activeImportJobId = r?.jobId || '';
-    const options = `<option value="">— não mapear —</option>${columns.map((column) => `<option value="${esc(column)}">${esc(column)}</option>`).join('')}`;
-    const metricFields = [['gmv','Faturamento bruto'],['netRevenue','Receita líquida'],['orders','Pedidos'],['units','Unidades vendidas'],['visits','Visitas'],['impressions','Impressões'],['clicks','Cliques'],['adSpend','Investimento em Ads'],['adClicks','Cliques em Ads'],['adAttributedRevenue','Receita atribuída a Ads'],['stockAvailable','Estoque disponível'],['returnsCount','Devoluções'],['cancellations','Cancelamentos'],['reviewRating','Nota de avaliação'],['reviewCount','Quantidade de avaliações']];
-    const mapping = `<div class="form-grid"><label>ID externo do anúncio<select id="im-map-external"><option value="">— selecione a coluna —</option>${columns.map((column) => `<option value="${esc(column)}">${esc(column)}</option>`).join('')}</select></label><label>Data do registro (opcional)<select id="im-map-date">${options}</select></label>${metricFields.map(([key,label]) => `<label>${esc(label)}<select class="im-map-metric" data-metric="${key}">${options}</select></label>`).join('')}</div><div class="actions"><button class="btn primary" data-act="import-commit" ${state.accountId ? '' : 'disabled'}>Validar mapeamento e importar para KPIs</button></div><p class="muted small">Os anúncios precisam já existir na conta. O sistema rejeita IDs desconhecidos, datas duplicadas e valores inválidos. A origem será registrada como F_USER_INPUT.</p>`;
-    $('#import-out').innerHTML = `<p>${num(r?.rowCount || 0)} linha(s) em staging · status ${esc(r?.status || '—')} · job ${esc(r?.jobId || '—')}</p><p class="muted small">${esc(r?.note || 'Os dados aguardam mapeamento e validação; ainda não alteram KPIs.')}</p>${preview}${mapping}`;
-    initializeTables($('#import-out'));
+    if(generation!==viewRenderSequence||accountId!==state.accountId)return;
+    if(r) renderImportPreview(r,fileType,accountId);
+  },
+  'import-resume':async ({id,offset})=>{
+    const accountId=state.accountId,generation=viewRenderSequence;
+    const job=await api('connector.import.get',{accountId,jobId:id,offset:Number(offset||0),limit:20});
+    if(generation!==viewRenderSequence||accountId!==state.accountId)return;
+    renderImportPreview({jobId:job.id,rowCount:job.rows_total,status:job.status,previewRows:job.rows.map(row=>row.data),warnings:job.report_json?.warnings??[],note:'Prévia do arquivo armazenado. A promoção valida todas as linhas.'},job.file_type,accountId);
+    const host=$('#import-out');
+    for(const [label,value] of [['Anterior',job.offset>0?Math.max(0,job.offset-20):null],['Próximas 20',job.nextOffset]]){if(value==null)continue;const btn=document.createElement('button');btn.className='btn tiny';btn.dataset.act='import-resume';btn.dataset.id=id;btn.dataset.offset=String(value);btn.textContent=label;host.append(btn);}
   },
   'import-commit': async () => {
     if (!activeImportJobId) throw new Error('Não há importação pendente para mapear.');
-    if (!state.accountId) throw new Error('Selecione a mesma conta usada para preparar o arquivo.');
+    if (!state.accountId||state.accountId!==activeImportAccountId) throw new Error('Selecione a mesma conta usada para preparar o arquivo.');
+    const generation=viewRenderSequence,accountId=state.accountId;
     const externalId = $('#im-map-external').value;
     if (!externalId) throw new Error('Selecione a coluna que contém o ID externo do anúncio.');
     const metrics = {};
@@ -2416,6 +2486,7 @@ const ACTIONS = {
     if (!Object.keys(metrics).length) throw new Error('Mapeie pelo menos um indicador.');
     const capturedAt = $('#im-map-date').value || undefined;
     const result = await run(() => api('connector.import.commit', { jobId: activeImportJobId, accountId: state.accountId, mapping: { externalId, capturedAt, metrics } }), 'Dados validados e adicionados ao histórico de KPIs.');
+    if(generation!==viewRenderSequence||accountId!==state.accountId)return;
     $('#import-out').innerHTML = `<p>${num(result?.snapshotsCreated || 0)} snapshots importados · origem ${esc(result?.sourceClass || 'F_USER_INPUT')} · status ${esc(result?.status || '—')}</p><p class="muted small">${esc(result?.note || 'Proveniência registrada.')}</p>`;
     activeImportJobId = '';
   },
@@ -2624,7 +2695,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
