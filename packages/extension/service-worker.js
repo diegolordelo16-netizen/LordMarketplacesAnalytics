@@ -725,7 +725,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   let unsupportedLinks = Boolean(saved.unsupportedLinks) || legacyQueued;
   const supportedQuery = (url) => [...url.searchParams.entries()].every(([key, value]) => /^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value));
   const enqueueLinks = (links, fromRoute) => {
-    const priority=link=>{try{const route=new URL(link.url).pathname;return (learnedRoutes.has(JSON.stringify([route,link.pageKind]))?1:0)+(learnedEdges.has(JSON.stringify([fromRoute,route]))?2:0);}catch{return 0;}};
+    const priority=link=>{try{const route=new URL(link.url).pathname;const routeScore=learnedRoutes.has(JSON.stringify([route,link.pageKind]))?1:0;const edgeScore=learnedEdges.has(JSON.stringify([fromRoute,route]))?2:0;return routeScore+edgeScore;}catch{return 0;}};
     for (const link of (Array.isArray(links) ? [...links] : []).sort((a,b)=>priority(b)-priority(a))) {
       const target = normalizeAuthorizedAreaUrl(link?.url, origin, marketplace);
       if (!target || !AUTHORIZED_AREA_KINDS.has(link?.pageKind)) continue;
