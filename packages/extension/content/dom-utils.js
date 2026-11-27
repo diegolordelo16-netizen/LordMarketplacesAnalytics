@@ -452,6 +452,48 @@
     if(!complete)return initial;
     return {...initial,initialListingIds:initialIds,listings:[...byId.values()].sort((a,b)=>a.index-b.index).map(row=>row.data),details:[...details.values()],coverageWarnings:initial.coverageWarnings.filter(x=>x!=='TABELA_VIRTUALIZADA'),evidence:{...initial.evidence,virtualizedRows:String(byId.size),virtualizedDeclaredRows:String(total)}};
   }
+  // Virtualized feedback: every declared row index must map to one explicit feedback ID.
+  async function collectVirtualizedFeedback(root,initial,readSnapshot,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))){
+    const spec={seller_questions:['QUESTION',['data-question-id']],seller_reputation:['REVIEW',['data-review-id','data-feedback-id']],seller_complaints:['COMPLAINT',['data-claim-id','data-dispute-id']],seller_returns:['RETURN_REASON',['data-return-id','data-refund-id']]}[initial.pageKind];
+    if(!spec||!initial.coverageWarnings?.includes('TABELA_VIRTUALIZADA'))return initial;
+    const grids=Array.from(root.querySelectorAll('table[aria-rowcount],[role="grid"][aria-rowcount]')).filter(isVisible);
+    if(grids.length!==1)return initial;
+    const grid=grids[0],total=Number(grid.getAttribute('aria-rowcount'));
+    if(!Number.isInteger(total)||total<2||total>200||grid.clientHeight<=0||grid.scrollHeight<=grid.clientHeight)return initial;
+    const [kind,attrs]=spec,original=grid.scrollTop,byIndex=new Map(),byId=new Map(),headers=new Set();
+    let valid=true,finished=false;
+    try{
+      grid.scrollTop=0;await wait(350);
+      for(let step=0;step<40;step++){
+        if(hasChallenge(root)||root.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]'))throw Error('login/CAPTCHA durante a rolagem');
+        const snap=readSnapshot();
+        if(snap.accountId!==initial.accountId||snap.marketplace!==initial.marketplace||snap.pageKind!==initial.pageKind||snap.url!==initial.url||snap.spaPage!==initial.spaPage||snap.filterSignature!==initial.filterSignature||snap.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO'))throw Error('contexto mudou durante a rolagem');
+        if(Number(grid.getAttribute('aria-rowcount'))!==total||snap.listings?.length||snap.details?.length){valid=false;break;}
+        const voice=snap.customerVoice??[];
+        if(voice.some(item=>item.kind!==kind||!item.externalRef)||new Set(voice.map(item=>item.externalRef)).size!==voice.length){valid=false;break;}
+        const local=new Map(voice.map(item=>[item.externalRef,item]));
+        const matched=new Set();
+        for(const row of grid.querySelectorAll('[aria-rowindex]')){
+          if(!isVisible(row))continue;
+          const index=Number(row.getAttribute('aria-rowindex'));
+          if(!Number.isInteger(index)||index<1||index>total){valid=false;continue;}
+          if(row.querySelector?.('[role="columnheader"],th')&&!row.querySelector?.('[role="gridcell"],td')){headers.add(index);continue;}
+          const ids=[...new Set(attrs.map(attr=>row.getAttribute(attr)).filter(Boolean))],id=ids.length===1?ids[0]:null;
+          const item=id&&local.get(id);
+          if(!item||matched.has(id)||(byIndex.has(index)&&byIndex.get(index)!==id)||(byId.has(id)&&byId.get(id).index!==index)){valid=false;continue;}
+          matched.add(id);byIndex.set(index,id);byId.set(id,{index,item});
+        }
+        if(matched.size!==local.size){valid=false;break;}
+        const bottom=grid.scrollHeight-grid.clientHeight;
+        if(grid.scrollTop>=bottom-1){finished=true;break;}
+        const before=grid.scrollTop;grid.scrollTop=Math.min(bottom,before+Math.max(1,Math.floor(grid.clientHeight*0.75)));
+        await wait(350);if(grid.scrollTop<=before){valid=false;break;}
+      }
+    }finally{grid.scrollTop=original;}
+    const complete=valid&&finished&&byId.size>0&&Array.from({length:total},(_,i)=>i+1).every(i=>headers.has(i)!==byIndex.has(i));
+    if(!complete)return initial;
+    return {...initial,customerVoice:[...byId.values()].sort((a,b)=>a.index-b.index).map(row=>row.item),coverageWarnings:initial.coverageWarnings.filter(x=>x!=='TABELA_VIRTUALIZADA'),evidence:{...initial.evidence,virtualizedFeedbackRows:String(byId.size),virtualizedDeclaredRows:String(total)}};
+  }
   function observedReputation(root,marketplace){
     const common={
       sellerCancellationRatePct:['taxa de cancelamento pelo vendedor','seller cancellation rate'],
@@ -603,5 +645,5 @@
     }
     return {points,incomplete};
   }
-  window.MI_DOM = { visibleChartPoints, restoreVisibleFilters, observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, advanceSpaPageReactive, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  window.MI_DOM = { visibleChartPoints, restoreVisibleFilters, observedReputation, collectVirtualizedListings, collectVirtualizedFeedback, spaPaginationState, advanceSpaPage, advanceSpaPageReactive, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();
