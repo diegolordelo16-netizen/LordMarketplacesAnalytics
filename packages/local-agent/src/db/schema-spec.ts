@@ -61,6 +61,7 @@ export const TABLE_SPECS: TableSpec[] = [
   { name: 'visibility_share_snapshots', purpose: 'share of visibility observado (não é market share)', scope: ['account_id'], retention: 'permanente' },
 
   // ---------------------------------------------------------------- concorrência & mercado
+  { name: 'competitor_content_observations', purpose: 'descrições, promoções e evidência visual comparável com origem e data', scope: ['account_id','own_product_id','candidate_id'], retention: 'permanente' },
   { name: 'competitor_public_search_observations', purpose: 'cartões públicos observados por produto/conta, sem inferir ranking absoluto', scope: ['account_id','own_product_id','candidate_id'], retention: 'permanente' },
   { name: 'competitors', purpose: 'concorrentes cadastrados/descobertos', scope: ['account_id'], retention: 'permanente' },
   { name: 'competitor_listings', purpose: 'anúncios do concorrente e vínculo ao produto próprio', scope: ['competitor_id'], retention: 'permanente' },
