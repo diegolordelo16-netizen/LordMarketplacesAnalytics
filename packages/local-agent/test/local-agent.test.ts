@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, statSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, chmodSync, statSync, symlinkSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2873,5 +2873,29 @@ describe('Relatórios agendados paginados',()=>{
     const last=(await call('report.schedule.run.get',{runId,page:1})).result as {reportJson:string};
     expect(JSON.parse(last.reportJson).rows).toMatchObject([{id:'paged-0500'}]);
     expect((await call('report.schedule.run.get',{runId,page:2})).ok).toBe(false);
+  });
+});
+
+describe('Migração 052 — preservação do histórico',()=>{
+  it('preserva agendamentos, execuções e páginas de uma base anterior',()=>{
+    const migrationDir=join(dir,'legacy-migrations');mkdirSync(migrationDir);
+    const originalDir=new URL('../migrations/',import.meta.url);
+    const names=readdirSync(originalDir).filter(name=>/^\d+_.*\.sql$/.test(name));
+    for(const name of names.filter(name=>Number(name.split('_')[0])<=51))copyFileSync(new URL(name,originalDir),join(migrationDir,name));
+    const legacy=new LocalDatabase({file:join(dir,'legacy.db'),migrationsDir:migrationDir});
+    try{
+      legacy.migrate();const at=new Date().toISOString();
+      legacy.db.prepare("INSERT INTO report_schedules(id,report_type,format,cadence,enabled,next_run_at,created_at,updated_at,interval_minutes,consecutive_failures) VALUES(?,?,?,?,?,?,?,?,?,?)").run('legacy-schedule','KPIS','json','1h',1,at,at,at,45,2);
+      legacy.db.prepare("INSERT INTO report_schedule_runs(id,schedule_id,generated_at,status,report_json,row_count) VALUES(?,?,?,?,?,?)").run('legacy-run','legacy-schedule',at,'COMPLETED','{}',1);
+      legacy.db.prepare("INSERT INTO report_schedule_pages(run_id,page_index,report_json) VALUES(?,?,?)").run('legacy-run',0,'{"rows":[{"id":"legacy-row"}]}');
+      for(const name of names.filter(name=>Number(name.split('_')[0])===52))copyFileSync(new URL(name,originalDir),join(migrationDir,name));
+      expect(legacy.migrate().applied).toEqual([52]);
+      expect(legacy.row('SELECT report_type,interval_minutes,consecutive_failures FROM report_schedules WHERE id=?','legacy-schedule')).toMatchObject({report_type:'KPIS',interval_minutes:45,consecutive_failures:2});
+      expect(legacy.row('SELECT row_count FROM report_schedule_runs WHERE id=?','legacy-run')).toMatchObject({row_count:1});
+      expect(legacy.row('SELECT report_json FROM report_schedule_pages WHERE run_id=?','legacy-run')).toMatchObject({report_json:'{"rows":[{"id":"legacy-row"}]}'});
+      legacy.db.prepare('UPDATE report_schedules SET report_type=? WHERE id=?').run('ANUNCIO','legacy-schedule');
+      expect(legacy.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(legacy.migrate().applied).toEqual([]);
+    }finally{legacy.close();}
   });
 });

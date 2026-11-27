@@ -23,3 +23,5 @@ Base: etapa 08, 3.17.0, CI 264 aprovada (6a903d03). PR empilhado sobre a branch 
 
 ## Revisão adicional
 Relatórios agendados passaram a armazenar as partes da mesma transação local (até 100 partes e 20 MB, com indicação explícita de parcialidade), em vez de descartar dados acima de 1 MB. O download reúne todas as partes armazenadas; arquivos legados permanecem legíveis.
+
+CI 275 encontrou a restrição CHECK legada do agendamento de ANUNCIO; a migration 052 amplia os tipos sem apagar agendamentos, execuções e páginas, com teste de upgrade de uma base 051 populada.
