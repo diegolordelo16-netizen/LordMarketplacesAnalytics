@@ -413,13 +413,13 @@ export class LocalService {
     function captureOnce<T extends { ok: boolean }>(method: string, payload: unknown, work: () => T): T {
       const raw = payload as Record<string, unknown> | null | undefined;
       if (raw?.captureKey === undefined) return work();
-      const parsed = z.object({ captureKey: z.string().regex(/^[a-f0-9]{64}$/), accountId: z.string().min(1), filterSignature:z.string().max(512).optional() }).passthrough().parse(payload);
+      const parsed = z.object({ captureKey: z.string().regex(/^[a-f0-9]{64}$/), accountId: z.string().min(1), filterSignature:z.string().max(512).optional(),capturePageIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional() }).passthrough().parse(payload);
       const { captureKey, accountId } = parsed;
       const source = new URL(z.string().url().max(2048).parse(method === 'capture.ingest' ? parsed.url : parsed.sourceUrl));
       if (source.protocol !== 'https:' || source.username || source.password) throw new Error('URL do recibo inválida');
       source.hash = ''; source.searchParams.sort();
       // Keep receipts with no filter compatible with the previous protocol; a different visible filter must never be acknowledged as the same capture.
-      const identity = createHash('sha256').update(parsed.filterSignature ? JSON.stringify([source.href,parsed.filterSignature]) : source.href).digest('hex');
+      const identity = createHash('sha256').update(parsed.capturePageIdentity ? JSON.stringify([source.href,parsed.filterSignature??'',parsed.capturePageIdentity]) : parsed.filterSignature ? JSON.stringify([source.href,parsed.filterSignature]) : source.href).digest('hex');
       let rejected: T | undefined;
       const abort = new Error('captura não confirmada');
       try {
@@ -2123,8 +2123,9 @@ export class LocalService {
     });
 
     this.register('sync.createAll', (payload, auth) => {
-      const i = z.object({ scope: z.enum(['ALL_ACTIVE_ACCOUNTS','ALL_ENABLED_MARKETPLACES','ACCOUNT']).default('ALL_ACTIVE_ACCOUNTS'), accountId: z.string().optional(), browserRequest: z.boolean().default(false) }).parse(payload ?? {});
+      const i = z.object({ scope: z.enum(['ALL_ACTIVE_ACCOUNTS','ALL_ENABLED_MARKETPLACES','ACCOUNT']).default('ALL_ACTIVE_ACCOUNTS'), accountId: z.string().optional(), browserRequest: z.boolean().default(false),collectionMode:z.enum(['AUTHORIZED_AREAS','ADVANCED_LISTINGS']).default('AUTHORIZED_AREAS') }).parse(payload ?? {});
       if (i.scope === 'ACCOUNT' && !i.accountId) throw new Error('informe accountId para sincronização por conta');
+      if(i.collectionMode==='ADVANCED_LISTINGS'&&i.scope!=='ACCOUNT')throw new Error('coleta avançada exige uma conta específica');
       const accounts = db.rows<{ id: string; marketplace: string }>(
         `SELECT a.id,a.marketplace FROM accounts a
           WHERE a.is_active=1 AND (? IS NULL OR a.id=?)
@@ -2136,13 +2137,13 @@ export class LocalService {
       const batchId = randomUUID();
       const now = nowIso();
       db.transaction(() => {
-        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request) VALUES (?,?,?,?,?,?,?)')
-          .run(batchId, auth?.userId ?? null, i.scope, 'QUEUED', now, JSON.stringify({ accountCount: accounts.length }), Number(i.browserRequest));
+        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request,collection_mode) VALUES (?,?,?,?,?,?,?,?)')
+          .run(batchId, auth?.userId ?? null, i.scope, 'QUEUED', now, JSON.stringify({ accountCount: accounts.length }), Number(i.browserRequest),i.collectionMode);
         const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status) VALUES (?,?,?,?,?)');
         for (const account of accounts) insert.run(randomUUID(), batchId, account.id, account.marketplace, 'WAITING_BROWSER');
       });
       this.audit(auth, 'SYNC_BATCH_CREATE', 'sync_batch', batchId, 'OK', `${accounts.length} conta(s); aguarda abas autenticadas abertas`);
-      return { ok: true, batchId, status: 'QUEUED', accounts, requiresOpenSellerTabs: true, neverSwitchesAccounts: true };
+      return { ok: true, batchId, status: 'QUEUED', accounts,collectionMode:i.collectionMode, requiresOpenSellerTabs: true, neverSwitchesAccounts: true };
     });
 
     this.register('sync.list', (payload) => {
@@ -2161,8 +2162,8 @@ export class LocalService {
 
     this.register('sync.retryFailed', (payload, auth) => {
       const i = z.object({ batchId: z.string().min(1), browserRequest: z.boolean().default(false) }).parse(payload ?? {});
-      const original = db.row<{ id: string; scope: 'ALL_ACTIVE_ACCOUNTS' | 'ALL_ENABLED_MARKETPLACES' | 'ACCOUNT'; status: string; logical_batch_id: string | null }>(
-        'SELECT id,scope,status,logical_batch_id FROM sync_batches WHERE id=?', i.batchId,
+      const original = db.row<{ id: string; scope: 'ALL_ACTIVE_ACCOUNTS' | 'ALL_ENABLED_MARKETPLACES' | 'ACCOUNT'; status: string; logical_batch_id: string | null;collection_mode:string }>(
+        'SELECT id,scope,status,logical_batch_id,collection_mode FROM sync_batches WHERE id=?', i.batchId,
       );
       if (!original) throw new Error('lote original de sincronização não encontrado');
       if (!['PARTIAL','FAILED'].includes(original.status)) throw new Error('somente lotes parciais ou com falha podem ser repetidos');
@@ -2181,11 +2182,11 @@ export class LocalService {
       if (!failedAccounts.length) throw new Error('nenhuma conta ativa com falha pode ser repetida; confira se já existe um lote em andamento');
       const batchId = randomUUID(); const now = nowIso();
       db.transaction(() => {
-        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request,logical_batch_id) VALUES (?,?,?,?,?,?,?,?)')
-          .run(batchId, auth?.userId ?? null, original.scope, 'QUEUED', now, JSON.stringify({ retryOf: original.id, accountCount: failedAccounts.length }), Number(i.browserRequest), original.logical_batch_id ?? original.id);
+        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request,logical_batch_id,collection_mode) VALUES (?,?,?,?,?,?,?,?,?)')
+          .run(batchId, auth?.userId ?? null, original.scope, 'QUEUED', now, JSON.stringify({ retryOf: original.id, accountCount: failedAccounts.length }), Number(i.browserRequest), original.logical_batch_id ?? original.id,original.collection_mode);
         const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status,progress_json,pages_scanned,pages_succeeded) VALUES (?,?,?,?,?,?,?,?)');
-        const copyPage = db.db.prepare(`INSERT INTO sync_batch_page_runs(id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at)
-          SELECT ?,?,account_id,page_no,page_url,page_kind,status,error,queued,? FROM sync_batch_page_runs WHERE id=?`);
+        const copyPage = db.db.prepare(`INSERT INTO sync_batch_page_runs(id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at,spa_page)
+          SELECT ?,?,account_id,page_no,page_url,page_kind,status,error,queued,?,spa_page FROM sync_batch_page_runs WHERE id=?`);
         for (const account of failedAccounts) {
           insert.run(randomUUID(), batchId, account.account_id, account.marketplace, 'WAITING_BROWSER', account.progress_json, account.pages_scanned, account.pages_succeeded);
           for (const page of db.rows<{ id: string }>('SELECT id FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',original.id,account.account_id)) copyPage.run(randomUUID(),batchId,now,page.id);
@@ -2316,7 +2317,7 @@ export class LocalService {
       const i = z.object({
         batchId: z.string().min(1), accountId: z.string().min(1), leaseToken:z.string().uuid(),
         pagesScanned: z.number().int().min(0).max(500), pagesSucceeded: z.number().int().min(0).max(500),
-        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional(), filterSignature:z.string().max(512).optional(),coverageWarnings:z.array(z.enum(['FILTRO_NAO_RECONHECIDO','TABELA_VIRTUALIZADA','GRAFICO_SEM_DADOS_TEXTUAIS'])).max(10).optional() })).max(500),
+        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, spaPage:z.number().int().min(1).max(9999).optional(),listingFingerprint:z.string().regex(/^[a-f0-9]{64}$/).optional(),listingIds:z.array(z.string().min(1).max(200)).max(500).optional(),ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional(), filterSignature:z.string().max(512).optional(),coverageWarnings:z.array(z.enum(['FILTRO_NAO_RECONHECIDO','TABELA_VIRTUALIZADA','GRAFICO_SEM_DADOS_TEXTUAIS'])).max(10).optional() })).max(500),
         seenUrls: z.array(z.string().max(2048)).max(500),
         pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80), filterSignature:z.string().max(512).optional() })).max(500),
         maxPages: z.number().int().min(1).max(500), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
@@ -2342,16 +2343,29 @@ export class LocalService {
         url.search = safe.toString();
         return url.toString();
       };
+      const mode=db.row<{collection_mode:string}>('SELECT collection_mode FROM sync_batches WHERE id=?',i.batchId)?.collection_mode;
+      const advanced=mode==='ADVANCED_LISTINGS';
+      if(advanced&&(i.maxPages>50||i.pages.some(page=>page.pageKind!=='seller_listings'||!page.listingFingerprint||!page.listingIds?.length||new Set(page.listingIds).size!==page.listingIds.length)))throw new Error('histórico de coleta avançada sem identidade comprovada');
+      if(!advanced&&i.pages.some(page=>page.spaPage!==undefined||page.listingFingerprint!==undefined||page.listingIds!==undefined))throw new Error('identidade SPA reservada à coleta avançada');
+      const completedIds=i.pages.filter(page=>page.ok).flatMap(page=>page.listingIds??[]);
+      if(advanced&&new Set(completedIds).size!==completedIds.length)throw new Error('anúncios repetidos entre páginas concluídas');
       const cleanPages = i.pages.map((page) => ({
-        page_no: page.page, page_url: sanitizeUrl(page.url), page_kind: page.pageKind,
+        page_no: page.page, page_url: sanitizeUrl(page.url), page_kind: page.pageKind,spa_page:page.spaPage??null,
         status: page.ok ? 'COMPLETED' : page.queued ? 'QUEUED' : 'FAILED', error: page.error ?? null, queued: page.queued ? 1 : 0,
       }));
       if (i.pagesScanned < row.pages_scanned || i.pagesSucceeded < row.pages_succeeded) throw new Error('progresso atrasado não pode reduzir contagens');
-      const uniquePageKey = (raw: string) => { const u = new URL(raw); u.searchParams.sort(); return u.href; };
-      if (new Set(cleanPages.map((page) => uniquePageKey(page.page_url))).size !== cleanPages.length) throw new Error('URLs duplicadas no progresso');
-      for (const prev of db.rows<{ page_no: number; page_url: string; status: string }>('SELECT page_no,page_url,status FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',i.batchId,i.accountId)) {
+      const uniquePageKey = (raw: string,spaPage?:number|null) => { const u = new URL(raw); u.searchParams.sort(); return JSON.stringify([u.href,spaPage??null]); };
+      if (new Set(cleanPages.map((page) => uniquePageKey(page.page_url,page.spa_page))).size !== cleanPages.length) throw new Error('URLs duplicadas no progresso');
+      for (const prev of db.rows<{ page_no: number; page_url: string; status: string;spa_page:number|null }>('SELECT page_no,page_url,status,spa_page FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',i.batchId,i.accountId)) {
         const next = cleanPages[prev.page_no - 1];
-        if (!next || uniquePageKey(next.page_url) !== uniquePageKey(prev.page_url) || (prev.status === 'COMPLETED' && next.status !== 'COMPLETED')) throw new Error('progresso anterior não pode ser substituído por outra página ou regredir');
+        if (!next || uniquePageKey(next.page_url,next.spa_page) !== uniquePageKey(prev.page_url,prev.spa_page) || (prev.status === 'COMPLETED' && next.status !== 'COMPLETED')) throw new Error('progresso anterior não pode ser substituído por outra página ou regredir');
+      }
+      if(advanced){
+        const prior=parseJsonObject(String(db.row<{progress_json:string}>('SELECT progress_json FROM sync_batch_accounts WHERE id=?',row.id)?.progress_json??'{}'));
+        for(const page of Array.isArray(prior.pages)?prior.pages:[]){
+          const next=i.pages[Number(page.page)-1];
+          if(!next||next.listingFingerprint!==page.listingFingerprint||next.filterSignature!==page.filterSignature||(page.ok&&JSON.stringify(next.listingIds)!==JSON.stringify(page.listingIds)))throw new Error('identidade do histórico avançado não pode ser alterada');
+        }
       }
       const cleanState = {
         seenUrls: i.seenUrls.map((url) => {
@@ -2364,16 +2378,16 @@ export class LocalService {
           return parsed.toString();
         }),
         pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label, ...(item.filterSignature!==undefined?{filterSignature:item.filterSignature}:{}) })),
-        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued), ...(i.pages[page.page_no-1]?.filterSignature!==undefined?{filterSignature:i.pages[page.page_no-1]!.filterSignature}:{}),...(i.pages[page.page_no-1]?.coverageWarnings?{coverageWarnings:i.pages[page.page_no-1]!.coverageWarnings}:{}) })),
+        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ...(advanced?{...(page.spa_page!==null?{spaPage:page.spa_page}:{}),listingFingerprint:i.pages[page.page_no-1]!.listingFingerprint,listingIds:i.pages[page.page_no-1]!.listingIds}:{}),ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued), ...(i.pages[page.page_no-1]?.filterSignature!==undefined?{filterSignature:i.pages[page.page_no-1]!.filterSignature}:{}),...(i.pages[page.page_no-1]?.coverageWarnings?{coverageWarnings:i.pages[page.page_no-1]!.coverageWarnings}:{}) })),
         maxPages: i.maxPages, unsupportedLinks: i.unsupportedLinks || i.pages.some(page=>Boolean(page.coverageWarnings?.length)), receiptProtocol: i.receiptProtocol, stoppedReason: i.stoppedReason ?? null,
       };
       const now = nowIso();
       db.transaction(() => {
         const upsertPage = db.db.prepare(`INSERT INTO sync_batch_page_runs
-          (id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(batch_id,account_id,page_no) DO UPDATE SET
-          page_url=excluded.page_url,page_kind=excluded.page_kind,status=excluded.status,error=excluded.error,queued=excluded.queued,updated_at=excluded.updated_at`);
-        for (const page of cleanPages) upsertPage.run(randomUUID(), i.batchId, i.accountId, page.page_no, page.page_url, page.page_kind, page.status, page.error, page.queued, now);
+          (id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at,spa_page)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(batch_id,account_id,page_no) DO UPDATE SET
+          page_url=excluded.page_url,page_kind=excluded.page_kind,spa_page=excluded.spa_page,status=excluded.status,error=excluded.error,queued=excluded.queued,updated_at=excluded.updated_at`);
+        for (const page of cleanPages) upsertPage.run(randomUUID(), i.batchId, i.accountId, page.page_no, page.page_url, page.page_kind, page.status, page.error, page.queued, now,page.spa_page);
         const current = cleanPages.at(-1) ?? null;
         db.db.prepare(`UPDATE sync_batch_accounts SET status='RUNNING',pages_scanned=MAX(pages_scanned,?),pages_succeeded=MAX(pages_succeeded,?),
           current_page_no=?,current_url=?,progress_json=?,progress_updated_at=?,lease_expires_at=?,started_at=COALESCE(started_at,?) WHERE id=?`)

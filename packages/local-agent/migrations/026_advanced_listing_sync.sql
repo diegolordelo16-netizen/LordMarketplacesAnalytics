@@ -1,0 +1,2 @@
+ALTER TABLE sync_batches ADD COLUMN collection_mode TEXT NOT NULL DEFAULT 'AUTHORIZED_AREAS' CHECK(collection_mode IN ('AUTHORIZED_AREAS','ADVANCED_LISTINGS'));
+ALTER TABLE sync_batch_page_runs ADD COLUMN spa_page INTEGER CHECK(spa_page IS NULL OR spa_page BETWEEN 1 AND 9999);

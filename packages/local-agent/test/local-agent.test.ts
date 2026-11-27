@@ -175,6 +175,25 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('capture.ingest',{...payload,captureKey:'d'.repeat(64),chartPoints:[point,point]})).ok).toBe(false);
   });
 
+  it('persiste páginas SPA na mesma URL apenas no lote avançado e preserva identidade ao retomar',async()=>{
+    seedImportAccount('acct-spa');
+    const req={scope:'ACCOUNT',accountId:'acct-spa',browserRequest:true,collectionMode:'ADVANCED_LISTINGS'};
+    expect((await call('sync.createAll',{...req,scope:'ALL_ACTIVE_ACCOUNTS'})).ok).toBe(false);
+    const {batchId}=(await call('sync.createAll',req)).result as {batchId:string};
+    const {leaseToken}=(await call('sync.claimAccount',{batchId,accountId:req.accountId})).result as {leaseToken:string};
+    const url='https://vendedores.mercadolivre.com.br/anuncios';
+    const pages=[1,2].map(n=>({page:n,pageKind:'seller_listings',url,spaPage:n,listingFingerprint:String(n).repeat(64),listingIds:['MLB12345'+n],filterSignature:'',ok:true}));
+    const payload={batchId,accountId:req.accountId,leaseToken,pagesScanned:2,pagesSucceeded:2,pages,seenUrls:[url],pendingLinks:[{url,label:'retomada'}],maxPages:5,unsupportedLinks:true};
+    expect((await call('sync.accountProgress',payload)).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:[pages[0],{...pages[1],listingFingerprint:'a'.repeat(64)}]})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:req.accountId,leaseToken,status:'PARTIAL',pagesScanned:2,pagesSucceeded:2})).ok).toBe(true);
+    const retry=(await call('sync.retryFailed',{batchId,browserRequest:true})).result as {batchId:string};
+    const info=(await call('sync.list',{batchId:retry.batchId})).result as any;
+    expect(info.batch.collection_mode).toBe('ADVANCED_LISTINGS');
+    expect(info.pageRuns.map((page:any)=>page.spa_page)).toEqual([1,2]);
+    expect(JSON.parse(info.accounts[0].progress_json).pages[1].listingIds).toEqual(['MLB123452']);
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';

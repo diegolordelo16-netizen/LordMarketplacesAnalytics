@@ -261,7 +261,7 @@
     "permission": "execute_task"
   },
   "sync.createAll": {
-    "payload": "scope | accountId? | browserRequest?",
+    "payload": "scope | accountId? | browserRequest? | collectionMode? (AUTHORIZED_AREAS / ADVANCED_LISTINGS, latter requires ACCOUNT)",
     "permission": "execute_task"
   },
   "sync.claimBrowserRequest": {

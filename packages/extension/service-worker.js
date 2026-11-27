@@ -432,6 +432,7 @@ async function captureTab(tabId, expected = {}) {
     collectedAt: now,
     method: 'content_script_dom',
     ...(expected.captureKey ? { captureKey: expected.captureKey } : {}),
+    ...(expected.bindPageIdentity?{capturePageIdentity:[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([snapshot.spaPage??null,(snapshot.listings??[]).map(row=>String(row.listingId)).sort()]))))].map(v=>v.toString(16).padStart(2,'0')).join('')}:{}),
     ...(typeof snapshot.filterSignature==='string'?{filterSignature:snapshot.filterSignature}:{}),
     listings: snapshot.listings ?? [],
     details: Array.isArray(snapshot.details) ? snapshot.details.slice(0,100) : [],
@@ -516,7 +517,7 @@ async function readCapturePageInfo(tabId) {
  * Só segue links next visíveis, no mesmo origin e na rota atual de anúncios.
  * Limite rígido de cinco páginas; CAPTCHA/login interrompem a operação.
  */
-async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
+async function captureListingPages(sourceTabId, requestedMaxPages = 5,options={}) {
   const source=await chrome.tabs.get(sourceTabId);
   const marketplace=marketplaceOf(source.url||'');
   if(!marketplace)return {ok:false,error:'aba não pertence a marketplace suportado'};
@@ -527,13 +528,24 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
   const validContext=info=>info?.ok&&info.marketplace===marketplace&&info.pageKind==='seller_listings'&&info.accountId===initialInfo.accountId&&!info.loginRequired&&!info.challenge&&!info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO');
   const valid=info=>validContext(info)&&info.filterSignature===initialInfo.filterSignature;
   const maxPages=Math.max(1,Math.min(5,Number.isInteger(requestedMaxPages)?requestedMaxPages:5));
+  const pages=Array.isArray(options.resumeState?.pages)?options.resumeState.pages.map(page=>({...page})):[];
+  const sameUrl=(left,right)=>{const a=new URL(left),b=new URL(right);a.searchParams.sort();b.searchParams.sort();a.hash='';b.hash='';return a.href===b.href;};
+  if(options.expectedAccountId&&options.expectedAccountId!==initialInfo.accountId)return {ok:false,error:'a loja não corresponde ao lote'};
+  if(pages.length&&(!sameUrl(pages[0].url,source.url)||pages[0].spaPage!==initialInfo.spaPagination?.page||pages[0].filterSignature!==initialInfo.filterSignature))return {ok:false,error:'abra a mesma página inicial com os filtros originais para retomar'};
+  const totalLimit=Math.min(50,pages.length+maxPages);
   const temporary=await chrome.tabs.create({url:source.url,active:false,windowId:source.windowId});
-  const pages=[],seenIds=new Set(),seenPages=new Set();
-  let stoppedReason='limite de páginas atingido',complete=false;
+  const seenIds=new Set(pages.filter(page=>page.ok).flatMap(page=>page.listingIds??[])),seenPages=new Set();
+  let stoppedReason='limite de páginas atingido',complete=false,progressError=null,lastUrl=source.url;
+  const persist=async()=>{
+    if(!options.onProgress)return true;
+    try{await options.onProgress({pagesScanned:pages.length,pagesSucceeded:pages.filter(page=>page.ok).length,pages,seenUrls:[...new Set(pages.filter(page=>page.ok).map(page=>page.url))],pendingLinks:complete?[]:[{url:lastUrl,label:'retomada de anúncios',filterSignature:initialInfo.filterSignature}],maxPages:totalLimit,unsupportedLinks:!complete,receiptProtocol:1,stoppedReason:String(stoppedReason).slice(0,300)});return true;}
+    catch(error){progressError=String(error?.message??error);stoppedReason='falha ao persistir progresso avançado';return false;}
+  };
+  const digest=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(v=>v.toString(16).padStart(2,'0')).join('');
   const filterQuery=url=>JSON.stringify([...new URL(url).searchParams.entries()].filter(([key])=>!/^(page|page_number|p|offset|limit)$/i.test(key)).sort());
   try{
     let expectedPage=initialInfo.spaPagination?.page,previousFingerprint=null;
-    for(let index=0;index<maxPages;index++){
+    for(let index=0;index<totalLimit;index++){
       let info,preview,fingerprint,stable=false,reapplied=false;
       // Wait until page marker and rendered listing identities agree twice.
       for(let attempt=0;attempt<12;attempt++){
@@ -562,33 +574,49 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
       if(!stable||!preview||!valid(info)||JSON.stringify(preview.listings.map(row=>String(row.listingId)).sort())!==fingerprint){stoppedReason='não foi possível confirmar uma página estável da mesma loja e filtro';break;}
       const ids=preview.listings.map(row=>String(row.listingId));
       const key=JSON.stringify([info.url,info.spaPagination?.page??null,fingerprint]);
-      if(seenPages.has(key)||ids.some(id=>seenIds.has(id))){stoppedReason='ciclo ou anúncios repetidos: coleta interrompida';break;}
-      const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint,virtualized:true,excludedListingIds:seenIds});
-      pages.push({page:index+1,url:info.url,spaPage:info.spaPagination?.page,ok:Boolean(captured.ok),listings:captured.snapshot?.listings?.length??0,error:captured.error});
-      if(!captured.ok){stoppedReason='captura não confirmada: '+(captured.error??'erro');break;}
-      seenPages.add(key);(captured.snapshot?.listings??preview.listings).forEach(row=>seenIds.add(String(row.listingId)));previousFingerprint=fingerprint;
-      if((captured.snapshot?.coverageWarnings??info.coverageWarnings)?.length){stoppedReason='cobertura parcial da interface';break;}
+      lastUrl=info.url;
+      const listingFingerprint=options.logicalBatchId?await digest(fingerprint):fingerprint;
+      const prior=pages[index];
+      if(prior&&(!sameUrl(prior.url,info.url)||prior.spaPage!==info.spaPagination?.page||prior.filterSignature!==info.filterSignature||prior.listingFingerprint!==listingFingerprint)){stoppedReason='a identidade da página mudou desde o histórico; inicie novo lote';break;}
+      if(seenPages.has(key)){stoppedReason='ciclo de paginação detectado';break;}
+      if(!prior?.ok){
+        if(ids.some(id=>seenIds.has(id))){stoppedReason='anúncios repetidos: coleta interrompida';break;}
+        if(options.beforeCapture)await options.beforeCapture();
+        const base={page:index+1,url:info.url,spaPage:info.spaPagination?.page,pageKind:'seller_listings',filterSignature:info.filterSignature,listingFingerprint,listingIds:ids,ok:false};
+        pages[index]=base;
+        if(!await persist())break;
+        const captureKey=options.logicalBatchId?await digest(JSON.stringify([options.logicalBatchId,info.accountId,info.url,info.spaPagination?.page??null,info.filterSignature])):undefined;
+        const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint,virtualized:true,excludedListingIds:seenIds,...(captureKey?{captureKey,bindPageIdentity:true}:{})});
+        const observedIds=(captured.snapshot?.listings??preview.listings).map(row=>String(row.listingId));
+        pages[index]={...base,ok:Boolean(captured.ok),listingIds:observedIds,listings:observedIds.length,error:captured.error,coverageWarnings:captured.snapshot?.coverageWarnings??info.coverageWarnings};
+        if(!await persist())break;
+        if(!captured.ok){stoppedReason='captura não confirmada: '+(captured.error??'erro');break;}
+        observedIds.forEach(id=>seenIds.add(id));
+      }
+      seenPages.add(key);previousFingerprint=fingerprint;
+      if(pages[index].coverageWarnings?.length){stoppedReason='cobertura parcial da interface; corrija a origem e inicie novo lote';break;}
       if(info.nextPageUrl){
         const next=normalizeAuthorizedAreaUrl(info.nextPageUrl,origin,marketplace);
         if(!next||next.pathname!==new URL(info.url).pathname||filterQuery(next.href)!==filterQuery(info.url)||next.href===info.url){stoppedReason='link de próxima página ou filtro divergente';break;}
-        if(index+1>=maxPages)break;
+        if(index+1>=totalLimit)break;
         expectedPage=undefined;
         const loaded=waitForTabComplete(temporary.id,next.href);
         await Promise.all([loaded,chrome.tabs.update(temporary.id,{url:next.href})]);
       }else if(info.spaPagination?.canAdvance){
-        if(index+1>=maxPages)break;
+        if(index+1>=totalLimit)break;
         const moved=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_ADVANCE_SPA',accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,page:info.spaPagination.page}).catch(()=>null);
         if(!moved?.ok){stoppedReason='controle de paginação não confirmado';break;}
         expectedPage=info.spaPagination.page+1;
       }else{
-        complete=Boolean(info.spaPagination&&!info.spaPagination.canAdvance)||!info.paginationUnsupported;
+        complete=index+1===pages.length&&(Boolean(info.spaPagination&&!info.spaPagination.canAdvance)||!info.paginationUnsupported);
         stoppedReason=complete?'fim dos controles de paginação reconhecidos':'paginação não reconhecida; revisão manual necessária';
         break;
       }
     }
   }catch(error){stoppedReason=String(error?.message??error).slice(0,300);}
   finally{await chrome.tabs.remove(temporary.id).catch(()=>undefined);}
-  return {ok:pages.some(page=>page.ok),complete,marketplace,pagesScanned:pages.length,pagesSucceeded:pages.filter(page=>page.ok).length,totalListings:seenIds.size,stoppedReason,pages};
+  if(!progressError)await persist();
+  return {ok:pages.some(page=>page.ok),complete,marketplace,pagesScanned:pages.length,pagesSucceeded:pages.filter(page=>page.ok).length,totalListings:seenIds.size,pendingPages:complete?0:1,unsupportedLinks:!complete,stoppedReason,pages,...(progressError?{progressError}:{})};
 }
 
 /**
@@ -959,6 +987,7 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
   const batch = await callService('sync.list', { batchId, compact:true });
   const accounts = batch?.result?.accounts;
   if (!Array.isArray(accounts) || !accounts.length) throw new Error('lote sem contas pendentes');
+  const advanced=batch.result.batch?.collection_mode==='ADVANCED_LISTINGS';
   const tabs = await chrome.tabs.query({});
   const outcomes = [];
   const notifyProgress = (detail) => {
@@ -981,7 +1010,8 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
     let matched = null;
     for (const tab of candidates) {
       const info = await chrome.tabs.sendMessage(tab.id, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
-      if (info?.ok && info.accountId === account.account_id && !info.loginRequired && !info.challenge && AUTHORIZED_AREA_KINDS.has(info.pageKind)) {
+      if (info?.ok && info.accountId === account.account_id && !info.loginRequired && !info.challenge && AUTHORIZED_AREA_KINDS.has(info.pageKind) && (!advanced||info.pageKind==='seller_listings')) {
+        if(advanced&&resumeState.pages?.length){const first=resumeState.pages[0];const normalize=raw=>{const url=new URL(raw);url.searchParams.sort();url.hash='';return url.href;};if(normalize(first.url)!==normalize(info.url)||first.filterSignature!==info.filterSignature||first.spaPage!==info.spaPagination?.page)continue;}
         matched = { tab, info }; break;
       }
     }
@@ -999,7 +1029,7 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
       notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, status, message: 'Não há aba autenticada correspondente.' });
       continue;
     }
-    const scan = await captureAuthorizedAreas(matched.tab.id, requestedMaxPages, {
+    const scan = await (advanced?captureListingPages:captureAuthorizedAreas)(matched.tab.id, requestedMaxPages, {
       resumeState,
       logicalBatchId: batch.result.batch?.logical_batch_id || batchId,
       expectedAccountId: account.account_id,

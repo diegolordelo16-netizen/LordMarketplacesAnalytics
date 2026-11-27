@@ -172,6 +172,7 @@ export const captureIngestSchema = z.object({
   details:z.array(capturedDetailSchema).max(100).default([]),
   captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   filterSignature:z.string().max(512).optional(),
+  capturePageIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional(),
   marketplace: marketplaceIdSchema,
   accountId: z.string().min(1).max(128),
   pageKind: pageKindSchema,

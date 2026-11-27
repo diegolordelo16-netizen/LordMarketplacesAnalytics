@@ -201,3 +201,19 @@ test('coleta dedicada reaplica filtro reconhecido na aba temporária e verifica 
   const result=await vm.runInContext('captureListingPages(1,5)',ctx);
   assert.equal(result.pagesSucceeded,1);assert.equal(restores,1);assert.equal(selected,'period=last 7 days');
 });
+
+
+test('retomada avançada revisita marcadores conhecidos e não recaptura páginas concluídas',async()=>{
+  const source='https://seller.shopee.com.br/portal/product/list';
+  let page=1;
+  const info=()=>({ok:true,marketplace:'shopee',pageKind:'seller_listings',accountId:'store-a',url:source,filterSignature:'',spaPagination:{page,canAdvance:page<3}});
+  const snapshot=()=>({accountId:'store-a',url:source,filterSignature:'',spaPage:page,listings:[{listingId:'L'+page}]});
+  const captures=[],progress=[];
+  const digest=async value=>[...new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(v=>v.toString(16).padStart(2,'0')).join('');
+  const known={page:1,pageKind:'seller_listings',url:source,spaPage:1,filterSignature:'',listingFingerprint:await digest(JSON.stringify(['L1'])),listingIds:['L1'],ok:true};
+  const opts={logicalBatchId:'batch-a',expectedAccountId:'store-a',resumeState:{pages:[known]},onProgress:async state=>progress.push(structuredClone(state))};
+  const ctx=vm.createContext({URL,URLSearchParams,crypto:globalThis.crypto,TextEncoder,setTimeout:fn=>fn(),marketplaceOf:()=> 'shopee',readCapturePageInfo:async()=>info(),captureTab:async(_,expected)=>{captures.push(expected.spaPage);return {ok:true,snapshot:snapshot()}},chrome:{tabs:{get:async()=>({url:source,windowId:1}),create:async()=>({id:2}),remove:async()=>{},sendMessage:async(_,msg)=>{if(msg.type==='MI_CAPTURE_ADVANCE_SPA'){page++;return {ok:true}}if(msg.type==='MI_CAPTURE_REQUEST')return {ok:true,snapshot:snapshot()};return info()}}},opts});
+  vm.runInContext(worker.slice(worker.indexOf('async function captureListingPages'),worker.indexOf('async function captureAuthorizedAreas')),ctx);
+  const result=await vm.runInContext('captureListingPages(1,5,opts)',ctx);
+  assert.deepEqual(captures,[2,3]);assert.equal(result.pagesSucceeded,3);assert.equal(result.complete,true);assert.equal(progress.at(-1).unsupportedLinks,false);
+});
