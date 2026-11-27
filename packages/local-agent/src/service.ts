@@ -223,6 +223,10 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'campaign.change.prepare': 'manage_market_intelligence',
   'campaign.change.list': 'view_reports',
   'campaign.change.review': 'manage_accounts',
+  'campaign.budget.claim': 'manage_accounts',
+  'campaign.budget.result': 'manage_accounts',
+  'campaign.budget.verify': 'manage_accounts',
+  'campaign.budget.list': 'view_reports',
   'offer.variation.prepare': 'manage_market_intelligence',
   'offer.variation.list': 'view_reports',
   'offer.variation.review': 'manage_accounts',
@@ -2821,6 +2825,58 @@ export class LocalService {
       if(changed.changes!==1)throw Error('proposta já revisada');
       this.audit(auth, 'CAMPAIGN_CHANGE_REVIEW', 'campaign_change_proposal', i.proposalId, i.decision, i.reason);
       return { ok: true, status: i.decision, execution: 'BLOCKED_UNTIL_MARKETPLACE_ADAPTER_AND_SESSION_ARE_VERIFIED', changedRemotely: false };
+    });
+
+    const budgetContext=z.object({accountId:z.string().min(1),campaignRef:z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/),sourcePath:z.string().min(1).max(1000),documentNonce:z.string().uuid(),budgetCents:z.number().int().min(0).max(100000000)});
+    const budgetSource=(path:string)=>{
+      const url=new URL(path);
+      if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.port||!/(^|\.)mercadolivre\.com\.br$/.test(url.hostname)||!/(publicidade|product-ads|advertising|\/ads(?:\/|$))/.test(url.pathname))throw Error('página de publicidade não reconhecida');
+      return url.origin+url.pathname;
+    };
+    this.register('campaign.budget.claim',(payload,auth)=>db.transaction(()=>{
+      const i=budgetContext.extend({proposalId:z.string().min(1),confirmed:z.literal(true)}).strict().parse(payload);
+      const account=operationAccount(i.accountId);
+      if(auth?.role!=='super_admin'||account.marketplace!=='mercado_livre')throw Error('executor inicial restrito ao Mercado Livre e super_admin');
+      const source=budgetSource(i.sourcePath);
+      const p=db.row<{campaign_ref:string;baseline_json:string;changes_json:string;status:string;marketplace:string}>('SELECT campaign_ref,baseline_json,changes_json,status,marketplace FROM campaign_change_proposals WHERE id=? AND account_id=?',i.proposalId,i.accountId);
+      if(!p||p.status!=='APPROVED'||p.marketplace!==account.marketplace||p.campaign_ref!==i.campaignRef)throw Error('proposta aprovada não corresponde à campanha');
+      const before=parseJsonObject(p.baseline_json),after=parseJsonObject(p.changes_json);
+      const schema=z.object({dailyBudgetCents:z.number().int().min(1).max(100000000)}).strict();
+      const b=schema.parse(before).dailyBudgetCents,t=schema.parse(after).dailyBudgetCents;
+      if(b!==i.budgetCents||b===t)throw Error('orçamento visível diverge do valor aprovado ou não há mudança');
+      if(db.row('SELECT id FROM operation_manual_receipts WHERE proposal_kind=? AND proposal_id=?','CAMPAIGN',i.proposalId))throw Error('já existe relato manual da proposta');
+      if(db.row('SELECT id FROM campaign_budget_executions WHERE proposal_id=?',i.proposalId))throw Error('autorização já utilizada; verifique o resultado sem repetir o clique');
+      const id=randomUUID(),token=randomUUID(),now=nowIso(),expiresAt=new Date(Date.now()+120000).toISOString();
+      db.db.prepare('INSERT INTO campaign_budget_executions(id,proposal_id,account_id,campaign_ref,before_cents,target_cents,source_path,document_nonce,token_hash,status,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,i.proposalId,i.accountId,i.campaignRef,b,t,source,i.documentNonce,createHash('sha256').update(token).digest('hex'),'CLAIMED',now,expiresAt,now);
+      this.audit(auth,'CAMPAIGN_BUDGET_CLAIM','campaign_change_proposal',i.proposalId,'CLAIMED','autorização de clique único; expira em dois minutos');
+      return {id,token,accountId:i.accountId,campaignRef:i.campaignRef,beforeCents:b,targetCents:t,sourcePath:source,documentNonce:i.documentNonce,expiresAt};
+    }));
+    this.register('campaign.budget.result',(payload,auth)=>db.transaction(()=>{
+      const i=z.object({id:z.string().uuid(),token:z.string().uuid(),outcome:z.enum(['CANCELLED','FAILED','NEEDS_VERIFICATION']),message:z.string().max(1000)}).strict().parse(payload);
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário');
+      const e=db.row<{proposal_id:string;account_id:string;status:string;token_hash:string}>('SELECT proposal_id,account_id,status,token_hash FROM campaign_budget_executions WHERE id=?',i.id);
+      if(!e||e.status!=='CLAIMED'||e.token_hash!==createHash('sha256').update(i.token).digest('hex'))throw Error('execução inválida ou já consumida');
+      operationAccount(e.account_id);
+      db.db.prepare('UPDATE campaign_budget_executions SET status=?,updated_at=?,result_json=? WHERE id=? AND status=?').run(i.outcome,nowIso(),JSON.stringify({message:i.message}),i.id,'CLAIMED');
+      this.audit(auth,'CAMPAIGN_BUDGET_RESULT','campaign_change_proposal',e.proposal_id,i.outcome,i.message);
+      return {status:i.outcome,remoteVerified:false};
+    }));
+    this.register('campaign.budget.verify',(payload,auth)=>db.transaction(()=>{
+      const i=budgetContext.extend({proposalId:z.string().min(1)}).strict().parse(payload);
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário');
+      operationAccount(i.accountId);
+      const e=db.row<{id:string;status:string;campaign_ref:string;target_cents:number;source_path:string;document_nonce:string;expires_at:string}>('SELECT id,status,campaign_ref,target_cents,source_path,document_nonce,expires_at FROM campaign_budget_executions WHERE proposal_id=? AND account_id=?',i.proposalId,i.accountId);
+      if(!e||!['CLAIMED','NEEDS_VERIFICATION'].includes(e.status)||e.campaign_ref!==i.campaignRef||e.source_path!==budgetSource(i.sourcePath)||e.document_nonce===i.documentNonce)throw Error('nova leitura em documento recarregado da mesma campanha necessária');
+      if(e.status==='CLAIMED'&&e.expires_at>nowIso())throw Error('aguarde expiração da execução interrompida');
+      if(e.target_cents!==i.budgetCents)return {status:'NEEDS_VERIFICATION',remoteVerified:false,message:'valor observado não corresponde ao aprovado; nenhuma retentativa'};
+      db.db.prepare('UPDATE campaign_budget_executions SET status=?,updated_at=?,result_json=? WHERE id=?').run('UI_READBACK_MATCHED',nowIso(),JSON.stringify({observedBudgetCents:i.budgetCents,sourcePath:i.sourcePath,documentNonce:i.documentNonce}),e.id);
+      db.db.prepare("UPDATE campaign_change_proposals SET status='EXECUTED',updated_at=? WHERE id=? AND account_id=? AND status='APPROVED'").run(nowIso(),i.proposalId,i.accountId);
+      this.audit(auth,'CAMPAIGN_BUDGET_READBACK','campaign_change_proposal',i.proposalId,'UI_READBACK_MATCHED','valor observado em novo documento; não comprova causalidade');
+      return {status:'UI_READBACK_MATCHED',remoteVerified:false,uiReadbackMatched:true};
+    }));
+    this.register('campaign.budget.list',(payload)=>{
+      const i=z.object({accountId:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
+      return db.rows('SELECT id,proposal_id,account_id,campaign_ref,before_cents,target_cents,status,created_at,expires_at,updated_at,result_json FROM campaign_budget_executions WHERE account_id=? ORDER BY created_at DESC LIMIT 200',i.accountId);
     });
 
     this.register('offer.variation.prepare', (payload, auth) => {
