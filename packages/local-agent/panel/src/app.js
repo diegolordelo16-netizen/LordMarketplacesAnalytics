@@ -1042,14 +1042,14 @@ async function viewAdmin() {
       <td><button class="btn tiny" data-act="backup-restore" data-id="${esc(b.id)}">Restaurar</button></td></tr>`), 'Nenhum backup.')}`)
   + card('Auto-upgrade governado', `
     <div class="form-row">
-      <label class="grow">Sintoma observado <input id="au-sym" placeholder="Seletor de preço do Mercado Livre parou de funcionar"></label>
+      <label class="grow">Módulo <input id="au-mod" maxlength="200" placeholder="adapters/mercado-livre"></label><label class="grow">Sintoma observado <input id="au-sym" maxlength="8000" placeholder="Seletor de preço parou de funcionar"></label>
       <button class="btn" data-act="au-propose">Propor diagnóstico</button>
+    </div><label class="wide">Código atual (sem credenciais ou dados pessoais)<textarea id="au-code" maxlength="40000" rows="5"></textarea></label><p class="muted small">A proposta usa Gemini mediante confirmação. Não executa código gerado; exporte e valide o diff em ambiente isolado antes de distribuir uma atualização.</p><div id="au-out" class="out"></div><div hidden>
     </div>
     ${table(['Quando', 'Módulo', 'Risco', 'Status', 'Ações'],
       (upgrades || []).map((u) => `<tr><td>${dt(u.created_at)}</td><td>${esc(u.module || '—')}</td>
-        <td>${badge(u.risk || '—', u.risk === 'ALTO' ? 'bad' : 'warn')}</td><td>${esc(u.status || '—')}</td>
-        <td><button class="btn tiny" data-act="au-apply" data-id="${u.id}">Aplicar</button>
-            <button class="btn tiny ghost" data-act="au-rollback" data-id="${u.id}">Reverter</button></td></tr>`),
+        <td>${badge(u.risk || '—', ['HIGH','CRITICAL'].includes(u.risk) ? 'bad' : 'warn')}</td><td>${esc(u.status || '—')}</td>
+        <td><button class="btn tiny" data-act="au-inspect" data-id="${esc(u.id)}">Revisar diff</button></td></tr>`),
       'Nenhuma proposta de upgrade.')}`)
   + card('Trilha de auditoria', table(['Quando', 'Ação', 'Ator', 'Alvo', 'Resultado'],
     (audit || []).slice(0, 100).map((a) => `<tr><td>${dt(a.created_at)}</td><td>${esc(a.action)}</td>
@@ -2437,19 +2437,23 @@ const ACTIONS = {
     state.token = ''; sessionStorage.removeItem('mi.token');
   },
   'au-propose': async () => {
-    await run(() => api('autoupgrade.propose', {
-      module: $('#au-mod').value.trim() || 'adapters/desconhecido',
-      symptoms: $('#au-sym').value.trim(),
-      currentCode: '',
-    }), 'Proposta gerada (requer aprovação do super_admin).');
-    renderView();
+    const module=$('#au-mod').value.trim(),symptoms=$('#au-sym').value.trim(),currentCode=$('#au-code').value;
+    if(!module||symptoms.length<5||!currentCode.trim())throw Error('Informe módulo, sintoma e código.');
+    if(!confirm('Enviar o código e o sintoma ao Gemini? Confirme que não há credenciais ou dados pessoais.'))return;
+    const result=await api('autoupgrade.propose',{module,symptoms,currentCode,confirmedExternal:true});
+    if(!result?.ok)throw Error(result?.message||'Proposta não gerada.');
+    toast(result.message);renderView();
   },
-  'au-apply': async (d) => {
-    if (!confirm('Aplicar o upgrade? Um backup é criado antes e o rollback fica disponível.')) return;
-    await run(() => api('autoupgrade.apply', { proposalId: d.id, approved: true, approverRole: 'super_admin', superAdminApproved: true }), 'Upgrade aplicado.');
-    renderView();
+  'au-inspect': async d=>{
+    const generation=viewRenderSequence,host=$('#au-out');
+    const result=await api('autoupgrade.inspect',{proposalId:d.id});
+    if(generation!==viewRenderSequence||host!==$('#au-out'))return;
+    host.replaceChildren();
+    const info=document.createElement('p');info.textContent=result.note+' · '+result.checksum+' · '+result.risk+' · sintaxe: '+(result.syntaxValid?'válida':'inválida');
+    const patch=document.createElement('textarea');patch.readOnly=true;patch.rows=12;patch.value=result.diff;
+    const download=document.createElement('button');download.className='btn';download.textContent='Exportar diff para revisão';download.addEventListener('click',()=>{const url=URL.createObjectURL(new Blob([result.diff],{type:'text/plain'}));const a=document.createElement('a');a.href=url;a.download='upgrade-'+result.id+'.diff';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+    host.append(info,patch,download);
   },
-  'au-rollback': async (d) => { await run(() => api('autoupgrade.rollback', { proposalId: d.id, files: [] }), 'Revertido.'); renderView(); },
   'forecast-run': async () => {
     if (!state.accountId) throw new Error('selecione uma conta antes de gerar a previsão');
     const r = await api('forecast.run', { accountId: state.accountId, metric: $('#fcst-metric').value, horizonDays: Number($('#fcst-horizon').value) });
