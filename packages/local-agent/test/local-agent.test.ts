@@ -2708,3 +2708,64 @@ describe('Etapa 08 — conectores oficiais',()=>{
     }finally{vi.unstubAllGlobals();}
   });
 });
+
+describe('Etapa 08 — regressões de conectores e importações',()=>{
+  it('pagina Mercado Livre somente no mesmo escopo, sem replay e sem promover dados comerciais',async()=>{
+    const accountId='ml-api-a',other='ml-api-b',connectorId='mercado_livre_official_api';seedImportAccount(accountId);seedImportAccount(other);
+    const mock=vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({id:123,site_id:'MLB'}))
+      .mockResolvedValueOnce(Response.json({id:123,site_id:'MLB'}))
+      .mockResolvedValueOnce(Response.json({results:Array.from({length:50},(_,i)=>'MLB'+(1000+i)),paging:{total:51}}))
+      .mockResolvedValueOnce(Response.json({id:123,site_id:'MLB'}))
+      .mockResolvedValueOnce(Response.json({results:['MLB1050'],paging:{total:51}}));
+    vi.stubGlobal('fetch',mock);
+    try{
+      expect((await call('connector.configure',{connectorId,provider:'MARKETPLACE_SERVICE',publicConfig:{accountId,sellerId:'123'},secrets:{accessToken:'fixture'}})).ok).toBe(true);
+      expect((await call('connector.test',{connectorId})).result).toMatchObject({ok:true});
+      expect((await call('connector.setEnabled',{connectorId,enabled:true})).ok).toBe(true);
+      const input={connectorId,accountId,confirmedExternal:true};
+      const first=await call('connector.sync',input);expect(first.result).toMatchObject({ok:true,rowCount:50,partial:true});
+      const runId=(first.result as {runId:string}).runId;
+      expect((await call('connector.sync.history',{accountId})).result).toMatchObject([{id:runId,has_next:1}]);
+      expect((await call('connector.sync',{...input,accountId:other,continueRunId:runId})).ok).toBe(false);
+      const second=await call('connector.sync',{...input,continueRunId:runId});expect(second.result).toMatchObject({ok:true,rowCount:1,partial:true});
+      expect((await call('connector.sync',{...input,continueRunId:runId})).ok).toBe(false);
+      expect(mock.mock.calls[4]?.[0]).toContain('offset=50');expect(mock).toHaveBeenCalledTimes(5);
+      expect(db.row('SELECT COUNT(*) n FROM listings WHERE account_id=?',accountId)).toMatchObject({n:0});
+      expect(JSON.stringify((await call('connector.sync.history',{accountId})).result)).not.toContain('next_cursor');
+    }finally{vi.unstubAllGlobals();}
+  });
+  it('bloqueia antes da rede ao atingir quota persistida e preserva histórico',async()=>{
+    const accountId='quota-api',connectorId='google_search_console';seedImportAccount(accountId);
+    const mock=vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({siteUrl:'sc-domain:example.com'}));vi.stubGlobal('fetch',mock);
+    try{
+      expect((await call('connector.configure',{connectorId,provider:'GOOGLE_SEARCH_CONSOLE',publicConfig:{accountId,siteUrl:'sc-domain:example.com'},secrets:{accessToken:'fixture'}})).ok).toBe(true);
+      expect((await call('connector.test',{connectorId})).result).toMatchObject({ok:true});
+      expect((await call('connector.setEnabled',{connectorId,enabled:true})).ok).toBe(true);
+      const insert=db.db.prepare('INSERT INTO connector_request_log(id,connector_id,requested_at,operation) VALUES(?,?,?,?)');
+      for(let i=0;i<29;i++)insert.run('quota-'+i,connectorId,new Date().toISOString(),'SYNC');
+      const result=await call('connector.sync',{connectorId,accountId,confirmedExternal:true});
+      expect(result.result).toMatchObject({ok:false,status:'LIMITE_LOCAL',requests:0});expect(mock).toHaveBeenCalledTimes(1);
+      expect((await call('connector.sync.history',{accountId})).result).toMatchObject([{status:'LIMITE_LOCAL'}]);
+    }finally{vi.unstubAllGlobals();}
+  });
+  it('registra Trends e exportações autorizadas sem duplicação, zero falso ou acesso entre lojas',async()=>{
+    const accountId='export-a',other='export-b';seedImportAccount(accountId);seedImportAccount(other);
+    const csvText='Categoria: Todas as categorias\n\nSemana,capacete: (Brasil)\n2025-11-01,0\n2025-11-08,<1\n2025-11-15,100';
+    const input={accountId,csvText,confirmedSource:true};
+    const a=await call('connector.trends.import',input);expect(a.result).toMatchObject({ok:true,rowCount:3,duplicate:false});
+    const id=(a.result as {runId:string}).runId;
+    expect((await call('connector.trends.import',input)).result).toMatchObject({runId:id,duplicate:true});
+    expect((await call('connector.sync.get',{accountId,runId:id})).result).toMatchObject({rows:[{values:{index:0}},{values:{index:null,qualifier:'LT_1'}},{values:{index:100}}]});
+    expect((await call('connector.sync.get',{accountId:other,runId:id})).ok).toBe(false);
+    const ext={accountId,connectorId:'seo_service_generic',providerLabel:'Fornecedor autorizado',datasetLabel:'Pesquisa',fileName:'dados.csv',fileType:'csv',csvText:'term;volume\ncapacete;0\nluva;123',referenceDate:'2025-11-01',confirmedSource:true};
+    const b=await call('connector.external.import',ext);expect(b.result).toMatchObject({ok:true,rowCount:2,duplicate:false});
+    const runId=(b.result as {runId:string}).runId;
+    expect((await call('connector.external.import',ext)).result).toMatchObject({runId,duplicate:true});
+    const detail=await call('connector.sync.get',{accountId,runId,limit:1});
+    expect(detail.result).toMatchObject({total:2,nextOffset:1,rows:[{values:{term:'capacete',volume:'0'}}]});
+    expect((await call('connector.sync.get',{accountId,runId,limit:1,offset:1})).result).toMatchObject({nextOffset:null,rows:[{values:{term:'luva',volume:'123'}}]});
+    expect((await call('connector.external.import',{...ext,confirmedSource:false})).ok).toBe(false);
+    expect((await call('connector.sync.get',{accountId:other,runId})).ok).toBe(false);
+    expect(db.row('SELECT COUNT(*) n FROM listing_snapshots WHERE account_id=?',accountId)).toMatchObject({n:0});
+  });
+});
