@@ -76,6 +76,11 @@ describe('Plano de busca competitiva',()=>{
     const r=await call('competitor.searchPlan',{accountId,ownProductId:id,marketplaces:['mercado_livre','shopee','amazon']});
     expect(r.result).toMatchObject({links:expect.arrayContaining([{marketplace:'amazon',kind:'TITLE',term:'Capacete teste',url:'https://www.amazon.com.br/s?k=Capacete%20teste',targetResults:20}])});
     expect((await call('competitor.searchPlan',{accountId:other,ownProductId:id,marketplaces:['amazon']})).ok).toBe(false);
+    const capture={accountId,ownProductId:id,marketplace:'amazon',sourceUrl:'https://www.amazon.com.br/s?k=capacete',observedAt:new Date().toISOString(),candidates:[{externalId:'B012345678',title:'Capacete teste',url:'https://www.amazon.com.br/dp/B012345678',priceCents:29900,sponsored:null,observedOrder:1}]};
+    expect((await call('competitor.capturePublicSearch',{...capture,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.capturePublicSearch',{...capture,candidates:[{...capture.candidates[0],url:'https://wrong.com/dp/B012345678'}]})).ok).toBe(false);
+    expect((await call('competitor.capturePublicSearch',capture)).result).toMatchObject({observedCards:1,coverageVerified:false});
+    expect(db.row('SELECT observed_order,price_cents,sponsored FROM competitor_public_search_observations WHERE account_id=?',accountId)).toMatchObject({observed_order:1,price_cents:29900,sponsored:null});
   });
 });
 describe('Pós-venda lexical por conta',()=>{

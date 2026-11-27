@@ -1309,6 +1309,48 @@ async function navigationPage(tabId){
   if(!url||url.port||url.hash)throw Error('rota não autorizada');
   return {tabId,accountId:info.accountId,origin,route:url.pathname,pageKind:info.pageKind,spaPage:Number.isInteger(info.spaPagination?.page)?info.spaPagination.page:null,canAdvance:info.spaPagination?.canAdvance===true,filterSignature:info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')?null:info.filterSignature??''};
 }
+// Executed in the isolated world of the selected public search tab. No network calls.
+function collectPublicCompetitorCards(){
+  const page=new URL(location.href),mp=page.protocol==='https:'&&!page.port?
+    page.hostname==='lista.mercadolivre.com.br'?'mercado_livre':
+    page.hostname==='shopee.com.br'&&page.pathname==='/search'&&page.searchParams.has('keyword')?'shopee':
+    page.hostname==='www.amazon.com.br'&&page.pathname==='/s'&&page.searchParams.has('k')?'amazon':null:null;
+  if(!mp)return {error:'Abra uma busca pública reconhecida.'};
+  const visible=el=>Boolean(el&&el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none');
+  const selector=mp==='mercado_livre'?'.ui-search-layout__item':mp==='shopee'?'.shopee-search-item-result__item, [data-sqe="item"]':'[data-component-type="s-search-result"][data-asin]';
+  const cards=[...document.querySelectorAll(selector)].filter(visible),seen=new Set(),candidates=[];
+  const text=el=>visible(el)?String(el.innerText||el.textContent||'').trim():'';
+  const getPrice=card=>{
+    const price=card.querySelector(mp==='mercado_livre'?'.andes-money-amount:not(.andes-money-amount--previous)':mp==='amazon'?'.a-price:not(.a-text-price) .a-offscreen':'[data-sqe="price"]');
+    if(!price)return null;
+    // Amazon's a-offscreen is visually represented by the containing visible price; only explicit single BRL values.
+    const raw=String(price.textContent||'').trim().replace(/\s+/g,' ');
+    const hit=raw.match(/^R\$\s*(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?$/);
+    if(!hit)return null;
+    const amount=Number(hit[1].replace(/\./g,''))*100+Number(hit[2]||0);
+    return Number.isSafeInteger(amount)?amount:null;
+  };
+  for(const card of cards){
+    if(candidates.length>=20)break;
+    const titleEl=card.querySelector(mp==='mercado_livre'?'.poly-component__title, .ui-search-item__title':mp==='amazon'?'h2':'[data-sqe="name"]');
+    const title=text(titleEl);if(title.length<2||title.length>500)continue;
+    for(const anchor of card.querySelectorAll('a[href]')){
+      if(!visible(anchor))continue;
+      let url;try{url=new URL(anchor.href,page);}catch{continue;}
+      if(url.protocol!=='https:'||url.username||url.password||url.port)continue;
+      const host=mp==='mercado_livre'?/(^|\.)mercadolivre\.com\.br$/i.test(url.hostname):mp==='shopee'?url.hostname==='shopee.com.br':url.hostname==='www.amazon.com.br';
+      if(!host)continue;
+      const raw=mp==='mercado_livre'?url.pathname.match(/(?:MLB-?)(\d{5,17})(?=[^0-9]|$)/i)?.[1]:mp==='shopee'?url.pathname.match(/(?:-i\.|\/product\/)(\d+)[./](\d+)(?:$|\/)/)?.slice(1).join('.'):url.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:$|\/)/i)?.[1]?.toUpperCase();
+      const id=mp==='mercado_livre'&&raw?'MLB'+raw:raw;
+      if(!id||seen.has(id)||(mp==='amazon'&&card.getAttribute('data-asin')!==id))continue;
+      seen.add(id);url.search='';url.hash='';
+      const sponsored=/\b(patrocinado|patrocinada|sponsored)\b/i.test(text(card))?true:null;
+      candidates.push({externalId:id,title,url:url.href,priceCents:getPrice(card),sponsored,observedOrder:candidates.length+1});
+      break;
+    }
+  }
+  return {marketplace:mp,sourceUrl:page.href,observedAt:new Date().toISOString(),candidates};
+}
 /** Ponte para o painel lateral e para o popup. */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== 'MI_CALL') return false;
@@ -1323,6 +1365,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   void (async () => {
     try {
+      if(message.method==='competitor.captureCurrentPublicSearch'){
+        const input=message.payload??{};
+        if(input.confirmed!==true||typeof input.accountId!=='string'||typeof input.ownProductId!=='string')throw Error('Confirme a loja e produto.');
+        const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+        if(!tab?.id||!tab.url)throw Error('Abra a aba pública de busca.');
+        const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func:collectPublicCompetitorCards});
+        const captured=result[0]?.result;
+        const current=await chrome.tabs.get(tab.id);
+        if(!captured||captured.error||!captured.candidates?.length||current.url!==tab.url||captured.sourceUrl!==tab.url)throw Error(captured?.error||'Nenhum cartão reconhecido ou a página mudou. Não foi salvo.');
+        sendResponse(await callService('competitor.capturePublicSearch',{accountId:input.accountId,ownProductId:input.ownProductId,...captured}));return;
+      }
       if (['learning.context','learning.observe','learning.list','learning.clear'].includes(message.method)) {
         const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
         if(!tab?.id)throw Error('nenhuma aba ativa');

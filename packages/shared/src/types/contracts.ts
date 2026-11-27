@@ -154,6 +154,7 @@ export const IPC_METHODS = [
   'competitor.ownProduct.list',
   'competitor.search',
   'competitor.searchPlan',
+  'competitor.capturePublicSearch',
   'competitor.relations',
   'competitor.approve',
   'competitor.reject',

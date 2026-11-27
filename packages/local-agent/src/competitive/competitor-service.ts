@@ -351,23 +351,27 @@ export class CompetitorService {
         );
 
     if (existing) {
+      // Manual evidence must never overwrite a captured candidate or relabel its data.
+      if(sourceClass==='F_USER_INPUT'&&existing.source_class!=='F_USER_INPUT')return existing.id;
+      const sameSource=sourceClass===existing.source_class;
       this.db.db
         .prepare(
           `UPDATE competitor_candidates SET url = ?, title = ?, brand = ?, model = ?, category = ?, attributes_json = ?,
-            price_cents = ?, rating = ?, reviews = ?, seller = ?, image_hash = ?, last_seen_at = ? WHERE id = ?`,
+            price_cents = ?, rating = ?, reviews = ?, seller = ?, image_hash = ?, source_class=?, last_seen_at = ? WHERE id = ?`,
         )
         .run(
-          candidate.url ?? existing.url,
+          candidate.url ?? (sameSource?existing.url:null),
           candidate.title,
-          candidate.brand ?? existing.brand,
-          candidate.model ?? existing.model,
-          candidate.category ?? existing.category,
-          JSON.stringify(candidate.attributes ?? parseJson(existing.attributes_json, {})),
-          candidate.priceCents ?? existing.price_cents,
-          candidate.rating ?? existing.rating,
-          candidate.reviews ?? existing.reviews,
-          candidate.seller ?? existing.seller,
-          candidate.imageHash ?? existing.image_hash,
+          candidate.brand ?? (sameSource?existing.brand:null),
+          candidate.model ?? (sameSource?existing.model:null),
+          candidate.category ?? (sameSource?existing.category:null),
+          JSON.stringify(candidate.attributes ?? (sameSource?parseJson(existing.attributes_json, {}):{})),
+          candidate.priceCents ?? (sameSource?existing.price_cents:null),
+          candidate.rating ?? (sameSource?existing.rating:null),
+          candidate.reviews ?? (sameSource?existing.reviews:null),
+          candidate.seller ?? (sameSource?existing.seller:null),
+          candidate.imageHash ?? (sameSource?existing.image_hash:null),
+          sourceClass,
           now,
           existing.id,
         );

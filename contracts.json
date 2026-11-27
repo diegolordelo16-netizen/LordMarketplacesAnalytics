@@ -607,5 +607,13 @@
     "accountId": "active account",
     "ownProductId": "account own product",
     "marketplaces": "mercado_livre|shopee|amazon"
+  },
+  "competitor.capturePublicSearch": {
+    "accountId": "active account",
+    "ownProductId": "account own product",
+    "marketplace": "mercado_livre|shopee|amazon",
+    "sourceUrl": "recognized public search URL",
+    "observedAt": "ISO datetime",
+    "candidates": "1..20 visible cards"
   }
 }

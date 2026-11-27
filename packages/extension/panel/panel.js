@@ -564,7 +564,39 @@ async function budgetAction(action){
   }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
   finally{budgetBusy=false;$('budget-apply').disabled=false;$('budget-verify').disabled=false;}
 }
+let compLoad=0;
+async function compProducts(){
+  const generation=++compLoad,accountId=$('comp-account').value,select=$('comp-product');select.replaceChildren();
+  if(!accountId)return;
+  const r=await call('competitor.ownProduct.list',{accountId});if(generation!==compLoad||accountId!==$('comp-account').value)return;
+  for(const row of r?.ok?r.result??[]:[]){const o=document.createElement('option');o.value=row.id;o.textContent=row.title;select.append(o);}
+}
+async function compAccounts(){
+  const r=await call('account.list',{}),select=$('comp-account');select.replaceChildren();
+  for(const row of r?.ok?r.result??[]:[]){if(!row.is_active)continue;const o=document.createElement('option');o.value=row.id;o.textContent=row.display_name;select.append(o);}
+  await compProducts();
+}
+async function compCapture(){
+  const accountId=$('comp-account').value,ownProductId=$('comp-product').value,out=$('comp-out'),button=$('comp-capture');
+  if(!accountId||!ownProductId){out.textContent='Selecione uma loja e produto próprio.';return;}
+  if(!confirm('Registrar até 20 cartões públicos como candidatos pendentes deste produto?'))return;
+  button.disabled=true;
+  try{
+    const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+    if(tab?.url&&new URL(tab.url).hostname==='www.amazon.com.br'){
+      const granted=await chrome.permissions.request({origins:['https://www.amazon.com.br/*']});
+      if(!granted){out.textContent='Permissão Amazon pública não concedida.';return;}
+    }
+    const r=await call('competitor.captureCurrentPublicSearch',{accountId,ownProductId,confirmed:true});
+    out.textContent=r?.ok?String(r.result.observedCards)+' cartões registrados; candidatos pendentes no dashboard.':r?.error?.message||'Captura não concluída.';
+  }catch(e){out.textContent=String(e?.message||e);}
+  finally{button.disabled=false;}
+}
 document.addEventListener('DOMContentLoaded', async () => {
+  $('comp-refresh').addEventListener('click',()=>void compAccounts());
+  $('comp-account').addEventListener('change',()=>void compProducts());
+  $('comp-capture').addEventListener('click',()=>void compCapture());
+  void compAccounts();
   $('listing-op-apply').addEventListener('click',()=>void listingOperationApply());
   $('budget-apply').addEventListener('click',()=>void budgetAction('apply'));
   $('budget-verify').addEventListener('click',()=>void budgetAction('verify'));
