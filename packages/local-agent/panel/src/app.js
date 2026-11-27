@@ -741,6 +741,7 @@ async function viewTasks() {
         <button class="btn tiny" data-act="task-run" data-id="${t.id}" ${['PENDING','SCHEDULED','PAUSED','FAILED','WAITING_BROWSER'].includes(t.status) && t.mode === 'DRAFT' ? '' : 'disabled'}>Executar rascunho</button>
         <button class="btn tiny primary" data-act="task-approve-publish" data-id="${t.id}" data-count="${t.items_count}" ${canApprove ? '' : 'disabled'}>Autorizar publicação</button>
         ${published.map((approval) => `<button class="btn tiny ghost" data-act="task-rollback" data-id="${approval.id}">Preparar rollback</button>`).join('')}
+        ${(t.items || []).filter((item) => item.status === 'PROCESSING').map((item) => `<button class="btn tiny" data-act="task-recover-draft" data-id="${esc(item.id)}" data-account-id="${esc(item.account_id)}">Recuperar rascunho ${esc(item.external_id)}</button>`).join('')}
         <button class="btn tiny" data-act="task-pause" data-id="${t.id}" ${['RUNNING','WAITING_BROWSER','PENDING','SCHEDULED'].includes(t.status) ? '' : 'disabled'}>Pausar</button>
         <button class="btn tiny" data-act="task-resume" data-id="${t.id}" ${t.status === 'PAUSED' ? '' : 'disabled'}>Retomar</button>
         <button class="btn tiny" data-act="task-skip" data-id="${t.id}" ${['PENDING','SCHEDULED','WAITING_BROWSER','RUNNING','PAUSED'].includes(t.status) ? '' : 'disabled'}>Pular</button>
@@ -1780,6 +1781,11 @@ const ACTIONS = {
     initializeTables($('#compare-detail-out'));
   },
 
+  'task-recover-draft': async (d) => {
+    if (!confirm('Feche todas as abas anteriores de edição deste anúncio antes de recuperar. Nenhuma publicação será repetida. Confirma que as abas foram fechadas?')) return;
+    await run(() => api('task.recoverDraft', { itemId: d.id, accountId: d.accountId, closedOldTabs: true }), 'Rascunho recuperado. Reabra a aba do anúncio e retome se necessário.');
+    renderView();
+  },
   'task-pause': async (d) => { await run(() => api('task.pause', { taskId: d.id }), 'Pausada.'); renderView(); },
   'task-resume': async (d) => { await run(() => api('task.resume', { taskId: d.id }), 'Retomada.'); renderView(); },
   'task-skip': async (d) => { await run(() => api('task.skipItem', { taskId: d.id }), 'Próximo item pendente pulado.'); renderView(); },

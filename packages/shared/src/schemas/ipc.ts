@@ -170,6 +170,7 @@ export const PRIVILEGED_COMMANDS = new Set<string>([
   'task.runNow',
   'task.claimNext',
   'task.itemResult',
+  'task.recoverDraft',
   'task.approvePublish',
   'task.claimNextPublish',
   'task.publishResult',

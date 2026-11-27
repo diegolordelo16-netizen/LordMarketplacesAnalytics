@@ -873,15 +873,23 @@ describe('tarefas e guard', () => {
     const queued = await call('task.runNow', { taskId: created.taskId });
     expect((queued.result as { status: string }).status).toBe('WAITING_BROWSER');
     const claimed = await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:c', externalListingId: 'MLB1' });
-    const claim = claimed.result as { item: { id: string; title: string }; externalListingId: string };
+    const claim = claimed.result as { item: { id: string; title: string }; externalListingId: string; claimToken: string };
     expect(claim.item.title).toBe('Título novo');
     expect(claim.externalListingId).toBe('MLB1');
     expect((await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:c', externalListingId: 'MLB1' })).result).toBeNull();
     expect(db.row<{ attempts: number }>('SELECT attempts FROM task_items WHERE id=?', claim.item.id)?.attempts).toBe(1);
-    const wrong = await call('task.itemResult', { itemId: claim.item.id, ok: false, accountId: 'outra-loja', externalListingId: 'MLB1' });
+    const wrong = await call('task.itemResult', { itemId: claim.item.id, claimToken: claim.claimToken, ok: false, accountId: 'outra-loja', externalListingId: 'MLB1' });
     expect(wrong.ok).toBe(false);
     expect(db.row<{ status: string }>('SELECT status FROM task_items WHERE id=?', claim.item.id)?.status).toBe('PROCESSING');
-    const completed = await call('task.itemResult', { itemId: claim.item.id, ok: true, accountId: 'ml:c', externalListingId: 'MLB1', message: 'rascunho preenchido e verificado', baseline: { title: 'Título anterior', description: 'Descrição anterior' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1' });
+    expect((await call('task.recoverDraft', { itemId: claim.item.id, accountId: 'ml:c', closedOldTabs: true })).ok).toBe(false);
+    db.db.prepare("UPDATE task_items SET draft_claimed_at=? WHERE id=?").run(new Date(Date.now()-180_000).toISOString(),claim.item.id);
+    expect((await call('task.recoverDraft', { itemId: claim.item.id, accountId: 'outra-loja', closedOldTabs: true })).ok).toBe(false);
+    expect((await call('task.recoverDraft', { itemId: claim.item.id, accountId: 'ml:c', closedOldTabs: false })).ok).toBe(false);
+    expect((await call('task.recoverDraft', { itemId: claim.item.id, accountId: 'ml:c', closedOldTabs: true })).ok).toBe(true);
+    const second = (await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:c', externalListingId: 'MLB1' })).result as typeof claim;
+    expect(second.claimToken).not.toBe(claim.claimToken);
+    expect((await call('task.itemResult', { itemId: claim.item.id, claimToken: claim.claimToken, ok: false, accountId: 'ml:c', externalListingId: 'MLB1' })).ok).toBe(false);
+    const completed = await call('task.itemResult', { itemId: claim.item.id, claimToken: second.claimToken, ok: true, accountId: 'ml:c', externalListingId: 'MLB1', message: 'rascunho preenchido e verificado', baseline: { title: 'Título anterior', description: 'Descrição anterior' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1' });
     expect((completed.result as { taskStatus: string }).taskStatus).toBe('COMPLETED');
     const list = (await call('task.list')).result as Array<{ status: string; listing_id: string }>;
     expect(list[0]?.status).toBe('COMPLETED');
@@ -895,8 +903,8 @@ describe('tarefas e guard', () => {
       .run('listing-no-baseline', 'ml:no-baseline', 'mercado_livre', 'MLBNOSNAPSHOT', 'Título atual', now, now);
     const created = (await call('task.create', { name: 'Sem snapshot', kind: 'edit_title', mode: 'DRAFT', typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true }, items: [{ listingId: 'MLBNOSNAPSHOT', marketplace: 'mercado_livre', accountId: 'ml:no-baseline', title: 'Título proposto' }] })).result as { taskId: string };
     await call('task.runNow', { taskId: created.taskId });
-    const claimed = (await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:no-baseline', externalListingId: 'MLBNOSNAPSHOT' })).result as { item: { id: string } };
-    const result = await call('task.itemResult', { itemId: claimed.item.id, ok: true, accountId: 'ml:no-baseline', externalListingId: 'MLBNOSNAPSHOT', message: 'sem evidência' });
+    const claimed = (await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:no-baseline', externalListingId: 'MLBNOSNAPSHOT' })).result as { item: { id: string }; claimToken: string };
+    const result = await call('task.itemResult', { itemId: claimed.item.id, claimToken: claimed.claimToken, ok: true, accountId: 'ml:no-baseline', externalListingId: 'MLBNOSNAPSHOT', message: 'sem evidência' });
     expect(result.ok).toBe(false);
   });
 
@@ -912,8 +920,8 @@ describe('tarefas e guard', () => {
     })).result as { taskId: string };
     await call('task.runNow', { taskId: created.taskId });
     const draft = await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
-    const draftClaim = draft.result as { item: { id: string } };
-    await call('task.itemResult', { itemId: draftClaim.item.id, ok: true, accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1', message: 'rascunho preenchido', baseline: { title: 'Título original', description: 'Descrição original' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLBPUBLISH1' });
+    const draftClaim = draft.result as { item: { id: string }; claimToken: string };
+    await call('task.itemResult', { itemId: draftClaim.item.id, claimToken: draftClaim.claimToken, ok: true, accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1', message: 'rascunho preenchido', baseline: { title: 'Título original', description: 'Descrição original' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLBPUBLISH1' });
 
     const refused = await call('task.approvePublish', { taskId: created.taskId, confirmation: 'SIM', reason: 'revisão concluída' });
     expect(refused.ok).toBe(false);

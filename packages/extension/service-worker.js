@@ -820,7 +820,7 @@ async function processDraftTasks() {
         externalListingId: claimed.externalListingId,
       }).catch((err) => ({ ok: false, error: err?.message ?? 'aba indisponível' }));
       await callService('task.itemResult', {
-        itemId: claimed.item.id, ok: Boolean(applied?.ok), accountId: context.accountId,
+        itemId: claimed.item.id, claimToken: claimed.claimToken, ok: Boolean(applied?.ok), accountId: context.accountId,
         externalListingId: applied?.externalListingId ?? claimed.externalListingId,
         message: applied?.ok ? `rascunho preenchido: ${(applied.fields ?? []).join(', ')}` : (applied?.error ?? 'não foi possível aplicar rascunho'),
         ...(applied?.baseline ? { baseline: applied.baseline } : {}),

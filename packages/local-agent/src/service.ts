@@ -112,6 +112,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'task.runNow': 'execute_task',
   'task.claimNext': 'execute_task',
   'task.itemResult': 'execute_task',
+  'task.recoverDraft': 'execute_task',
   'task.approvePublish': 'manage_accounts',
   'task.claimNextPublish': 'manage_accounts',
   'task.publishResult': 'manage_accounts',
@@ -1361,7 +1362,7 @@ export class LocalService {
           `SELECT i.*,l.external_id,l.title AS listing_title FROM task_items i
              JOIN listings l ON l.id=i.listing_id WHERE i.task_id=? AND (? IS NULL OR i.account_id=?) ORDER BY i.order_index`,
           task.id, i.accountId ?? null, i.accountId ?? null,
-        );
+        ).map(({ draft_claim_token: _claimToken, ...item }) => item);
         const approvals = db.rows<{ id: string; item_id: string; status: string; expires_at: string }>(
           'SELECT id,item_id,status,expires_at FROM task_publish_approvals WHERE task_id=? AND (? IS NULL OR account_id=?) ORDER BY approved_at', task.id, i.accountId ?? null, i.accountId ?? null,
         );
@@ -1428,15 +1429,23 @@ export class LocalService {
       return tasks.claimNextDraftItem(i.marketplace, i.externalListingId, i.accountId);
     });
 
+    this.register('task.recoverDraft', (payload, auth) => {
+      const i = z.object({ itemId: z.string().min(1), accountId: z.string().min(1), closedOldTabs: z.literal(true) }).parse(payload);
+      const result = tasks.recoverInterruptedDraft(i.itemId, i.accountId);
+      this.audit(auth, 'TASK_DRAFT_RECOVER', 'task_item', i.itemId, 'OK', 'recuperação manual após fechamento das abas anteriores');
+      return result;
+    });
+
     this.register('task.itemResult', (payload, auth) => db.transaction(() => {
       const i = z.object({
-        itemId: z.string().min(1), ok: z.boolean(), message: z.string().max(1000).optional(),
+        itemId: z.string().min(1), claimToken: z.string().uuid(), ok: z.boolean(), message: z.string().max(1000).optional(),
         accountId: z.string().min(1).optional(), externalListingId: z.string().min(1).optional(),
         baseline: z.object({ title: z.string().max(5000).nullable(), description: z.string().max(20000).nullable() }).optional(),
         sourceUrl: z.string().url().optional(),
       }).parse(payload);
-      const current = db.row<{ status: string; task_status: string; active: number; account_id: string; external_id: string }>(`SELECT ti.status,t.status AS task_status,a.is_active AS active,ti.account_id,l.external_id FROM task_items ti JOIN tasks t ON t.id=ti.task_id JOIN listings l ON l.id=ti.listing_id AND l.account_id=ti.account_id AND l.marketplace=ti.marketplace JOIN accounts a ON a.id=ti.account_id AND a.marketplace=ti.marketplace WHERE ti.id=?`, i.itemId);
-      if (!current || current.status !== 'PROCESSING' || !['RUNNING','WAITING_BROWSER'].includes(current.task_status) || !current.active) throw new Error('item não está em execução em uma conta ativa');
+      const current = db.row<{ status: string; task_status: string; active: number; account_id: string; external_id: string; draft_claim_token: string | null }>(`SELECT ti.draft_claim_token,ti.status,t.status AS task_status,a.is_active AS active,ti.account_id,l.external_id FROM task_items ti JOIN tasks t ON t.id=ti.task_id JOIN listings l ON l.id=ti.listing_id AND l.account_id=ti.account_id AND l.marketplace=ti.marketplace JOIN accounts a ON a.id=ti.account_id AND a.marketplace=ti.marketplace WHERE ti.id=?`, i.itemId);
+      if (!current || current.status !== 'PROCESSING' || !['RUNNING','WAITING_BROWSER','PAUSED'].includes(current.task_status) || !current.active) throw new Error('item não está em execução em uma conta ativa');
+      if (i.claimToken !== current.draft_claim_token) throw new Error('resultado de execução anterior ou não reivindicada');
       if (i.accountId !== current.account_id || i.externalListingId !== current.external_id) throw new Error('resultado não corresponde à conta e ao anúncio reivindicados');
       if (i.ok) {
         if (!i.baseline || !i.sourceUrl) throw new Error('snapshot original do anúncio é obrigatório para concluir o rascunho');
@@ -1544,6 +1553,7 @@ export class LocalService {
           JOIN accounts ac ON ac.id=a.account_id AND ac.marketplace=a.marketplace AND ac.is_active=1 AND ac.verified_by_user=1
           WHERE a.status='APPROVED' AND a.expires_at>? AND a.marketplace=? AND a.account_id=? AND a.external_listing_id=?
             AND i.status='APPROVED_TO_PUBLISH' AND l.status<>'CLOSED'
+            AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.id<>i.id AND busy.status IN ('PROCESSING','PUBLISHING'))
           ORDER BY a.approved_at LIMIT 2`, nowIso(), i.marketplace, i.accountId, i.externalListingId);
         if (matches.length > 1) return { ambiguous: true };
         const match = matches[0];

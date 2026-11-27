@@ -287,6 +287,7 @@ export class LocalDatabase {
       // Uma cópia antiga não pode reviver credenciais ou repetir ações remotas já executadas.
       this.transaction(() => {
         const at = new Date().toISOString();
+        this.db.prepare("UPDATE task_items SET draft_claim_token=NULL,draft_claimed_at=NULL WHERE status='PROCESSING'").run();
         this.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE revoked_at IS NULL').run(at);
         this.db.prepare(`UPDATE task_items SET status='UNCERTAIN',last_error='backup restaurado: confira o marketplace antes de qualquer nova publicação'
           WHERE id IN (SELECT item_id FROM task_publish_approvals WHERE status IN ('APPROVED','EXECUTING'))`).run();

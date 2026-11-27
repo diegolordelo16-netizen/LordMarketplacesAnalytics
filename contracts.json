@@ -23,8 +23,9 @@
   "market.opportunities": "accountId?",
   "growth.initiatives": "accountId?",
   "task.runNow": "taskId",
-  "task.claimNext": "marketplace | externalListingId (uso exclusivo da extensão)",
-  "task.itemResult": "itemId | ok | message? | accountId | externalListingId | baseline {title, description} | sourceUrl (obrigatórios quando ok=true)",
+  "task.claimNext": "marketplace | accountId | externalListingId (retorna claimToken de uso único)",
+  "task.recoverDraft": "itemId | accountId | closedOldTabs=true (recuperação manual, nunca publica)",
+  "task.itemResult": "itemId | claimToken | ok | message? | accountId | externalListingId | baseline {title, description} | sourceUrl (obrigatórios quando ok=true)",
   "task.list": {
     "payload": {
       "accountId": "string?",

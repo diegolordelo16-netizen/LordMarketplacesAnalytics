@@ -105,6 +105,7 @@ export const IPC_METHODS = [
   'task.runNow',
   'task.claimNext',
   'task.itemResult',
+  'task.recoverDraft',
   'task.approvePublish',
   'task.claimNextPublish',
   'task.publishResult',

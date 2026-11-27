@@ -63,7 +63,7 @@ const VALID_TRANSITIONS: Record<TaskState, TaskState[]> = {
   SCHEDULED: ['RUNNING', 'WAITING_BROWSER', 'PAUSED', 'CANCELLED', 'FAILED'],
   WAITING_BROWSER: ['RUNNING', 'SCHEDULED', 'PAUSED', 'CANCELLED', 'FAILED'],
   RUNNING: ['COMPLETED', 'FAILED', 'PAUSED', 'WAITING_BROWSER', 'CANCELLED'],
-  PAUSED: ['RUNNING', 'CANCELLED', 'SCHEDULED', 'WAITING_BROWSER'],
+  PAUSED: ['RUNNING', 'CANCELLED', 'SCHEDULED', 'WAITING_BROWSER', 'COMPLETED', 'FAILED'],
   COMPLETED: [],
   FAILED: ['PENDING', 'SCHEDULED', 'CANCELLED'],
   CANCELLED: [],
@@ -276,6 +276,7 @@ export class TaskScheduler {
     task: Pick<TaskRecord, 'id' | 'name' | 'kind' | 'mode' | 'typing_json'>;
     item: TaskItemRecord;
     externalListingId: string;
+    claimToken: string;
   } | { ambiguous: true } | null {
     return this.db.transaction(() => {
       this.db.db.prepare(
@@ -297,7 +298,7 @@ export class TaskScheduler {
           WHERE t.status IN ('RUNNING','WAITING_BROWSER') AND t.mode='DRAFT'
             AND t.kind IN ('edit_title','edit_description')
             AND i.status IN ('PENDING','FAILED') AND i.attempts < 3
-            AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.status='PROCESSING')
+            AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH'))
             AND i.marketplace=? AND l.external_id=? AND i.account_id=?
           ORDER BY t.created_at,i.order_index LIMIT 2`,
         marketplace, externalListingId, accountId,
@@ -305,10 +306,11 @@ export class TaskScheduler {
       if (matches.length > 1) return { ambiguous: true } as const;
       const match = matches[0];
       if (!match) return null;
+      const claimToken = randomUUID();
       const changed = this.db.db.prepare(
-        `UPDATE task_items SET status='PROCESSING',attempts=attempts+1,last_error=NULL
+        `UPDATE task_items SET status='PROCESSING',attempts=attempts+1,last_error=NULL,draft_claim_token=?,draft_claimed_at=?
           WHERE id=? AND status IN ('PENDING','FAILED') AND attempts < 3`,
-      ).run(match.item_id);
+      ).run(claimToken, nowIso(), match.item_id);
       if (Number(changed.changes) !== 1) return null;
       const current = this.get(match.task_id);
       if (current?.status === 'WAITING_BROWSER') this.transition(current.id, 'RUNNING');
@@ -322,8 +324,26 @@ export class TaskScheduler {
       return {
         task: { id: match.task_id, name: match.task_name, kind: match.task_kind, mode: match.task_mode, typing_json: match.typing_json },
         item,
-        externalListingId: match.external_id,
+        externalListingId: match.external_id, claimToken,
       };
+    });
+  }
+
+  /** Recuperação deliberada: invalida respostas da execução anterior sem repetir publicação. */
+  recoverInterruptedDraft(itemId: string, accountId: string): { taskId: string; status: string } {
+    return this.db.transaction(() => {
+      const item = this.db.row<{ task_id: string; status: string; draft_claimed_at: string | null; mode: string; task_status: TaskState }>(
+        `SELECT i.task_id,i.status,i.draft_claimed_at,t.mode,t.status AS task_status
+          FROM task_items i JOIN tasks t ON t.id=i.task_id WHERE i.id=? AND i.account_id=?`, itemId, accountId);
+      if (!item || item.mode !== 'DRAFT' || item.status !== 'PROCESSING') throw new Error('não há rascunho interrompido nesta conta');
+      const started = item.draft_claimed_at ? Date.parse(item.draft_claimed_at) : 0;
+      if (!Number.isFinite(started) || Date.now() - started < 120_000) throw new Error('aguarde o limite de dois minutos antes de recuperar a execução');
+      const status = item.task_status === 'CANCELLED' ? 'SKIPPED' : 'PENDING';
+      if (status === 'PENDING' && !['RUNNING','WAITING_BROWSER','PAUSED'].includes(item.task_status)) throw new Error('estado da tarefa não permite recuperação');
+      this.db.db.prepare(`UPDATE task_items SET status=?,attempts=0,last_error='recuperado manualmente; aba anterior deve estar fechada',
+        draft_claim_token=NULL,draft_claimed_at=NULL,before_title=NULL,before_description=NULL,baseline_source_url=NULL,baseline_captured_at=NULL
+        WHERE id=? AND account_id=? AND status='PROCESSING'`).run(status,itemId,accountId);
+      return { taskId: item.task_id, status };
     });
   }
 
@@ -335,7 +355,7 @@ export class TaskScheduler {
       );
       if (!item) throw new Error('item da tarefa não encontrado');
       if (item.status !== 'PROCESSING') throw new Error('item não está em execução');
-      this.db.db.prepare('UPDATE task_items SET status=?,last_error=? WHERE id=?')
+      this.db.db.prepare('UPDATE task_items SET status=?,last_error=?,draft_claim_token=NULL,draft_claimed_at=NULL WHERE id=?')
         .run(ok ? 'COMPLETED' : 'FAILED', ok ? null : (message ?? 'falha sem detalhe').slice(0, 1000), itemId);
       const counts = this.db.row<{ total: number; done: number; failed: number; open: number }>(
         `SELECT COUNT(*) AS total,
@@ -345,13 +365,13 @@ export class TaskScheduler {
            FROM task_items WHERE task_id=?`, item.task_id,
       )!;
       const current = this.get(item.task_id);
-      if (counts.open === 0 && current && ['RUNNING','WAITING_BROWSER'].includes(current.status)) {
+      if (counts.open === 0 && current && ['RUNNING','WAITING_BROWSER','PAUSED'].includes(current.status)) {
         const finalStatus: TaskState = counts.failed > 0 ? 'FAILED' : 'COMPLETED';
         this.transition(item.task_id, finalStatus, counts.failed > 0 ? `${counts.failed} item(ns) falharam após 3 tentativas` : undefined);
         this.logRun(item.task_id, finalStatus, { total: counts.total, done: counts.done, failed: counts.failed }, []);
         const recurrenceMs: Record<string, number> = { '1h': 3600000, '6h': 21600000, daily: 86400000, weekly: 604800000 };
         const interval = current.recurrence ? recurrenceMs[current.recurrence] : undefined;
-        if (finalStatus === 'COMPLETED' && interval) {
+        if (finalStatus === 'COMPLETED' && interval && current.status !== 'PAUSED') {
           const nextAt = new Date(Date.now() + interval).toISOString();
           this.db.db.prepare("UPDATE task_items SET status='PENDING',attempts=0,last_error=NULL WHERE task_id=?").run(item.task_id);
           this.db.db.prepare("UPDATE tasks SET status='SCHEDULED',schedule_at=?,updated_at=?,last_error=NULL WHERE id=?")
