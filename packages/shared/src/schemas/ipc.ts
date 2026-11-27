@@ -52,6 +52,11 @@ export function assertPayloadSize(
 
 /** Dados capturados da UI. Todos os números são opcionais: ausente = NOT_COLLECTED. */
 export const capturedListingMetricsSchema = z.object({
+  conversionRatePct: z.number().finite().min(0).max(100).optional(),
+  adConversionRatePct: z.number().finite().min(0).max(100).optional(),
+  organicClicks: z.number().int().nonnegative().optional(),
+  originalPrice: z.number().finite().nonnegative().optional(),
+  promotionDiscountPct: z.number().finite().min(0).max(100).optional(),
   listingId: z.string().min(1).max(200),
   sku: z.string().max(200).optional(),
   title: z.string().max(2000).optional(),
@@ -95,6 +100,19 @@ export const capturedListingMetricsSchema = z.object({
 });
 
 export const capturedAccountMetricsSchema = z.object({
+  sellerCancellationRatePct:z.number().finite().min(0).max(100).optional(),
+  complaintRatePct:z.number().finite().min(0).max(100).optional(),
+  onTimeShippingRatePct:z.number().finite().min(0).max(100).optional(),
+  responseRatePct:z.number().finite().min(0).max(100).optional(),
+  orderDefectRatePct:z.number().finite().min(0).max(100).optional(),
+  lateShipmentRatePct:z.number().finite().min(0).max(100).optional(),
+  validTrackingRatePct:z.number().finite().min(0).max(100).optional(),
+  nonFulfillmentRatePct:z.number().finite().min(0).max(100).optional(),
+  chatResponseRatePct:z.number().finite().min(0).max(100).optional(),
+  mediatedComplaintRatePct:z.number().finite().min(0).max(100).optional(),
+  conversionRatePct: z.number().finite().min(0).max(100).optional(),
+  adConversionRatePct: z.number().finite().min(0).max(100).optional(),
+  organicClicks: z.number().int().nonnegative().optional(),
   visits: z.number().finite().nonnegative().optional(),
   orders: z.number().finite().nonnegative().optional(),
   units: z.number().finite().nonnegative().optional(),
@@ -129,7 +147,32 @@ export const capturedAccountMetricsSchema = z.object({
   favorites: z.number().finite().nonnegative().optional(),
 }).partial().refine((metrics) => Object.values(metrics).some((value) => value !== undefined), 'informe ao menos uma métrica de conta');
 
+const capturedDetailSchema=z.object({
+  kind:z.enum(['AD_CAMPAIGN','AD','LISTING_VARIANT','WAREHOUSE_STOCK']),
+  externalId:z.string().trim().min(1).max(200),
+  parentExternalId:z.string().trim().min(1).max(200).optional(),
+  label:z.string().trim().max(300).optional(),
+  metrics:z.object({
+    adSpend:z.number().finite().nonnegative().optional(),adClicks:z.number().int().nonnegative().optional(),
+    paidImpressions:z.number().int().nonnegative().optional(),adAttributedRevenue:z.number().finite().nonnegative().optional(),
+    adAttributedOrders:z.number().int().nonnegative().optional(),adConversionRatePct:z.number().finite().min(0).max(100).optional(),
+    price:z.number().finite().nonnegative().optional(),originalPrice:z.number().finite().nonnegative().optional(),
+    stockAvailable:z.number().int().nonnegative().optional(),promotionDiscountPct:z.number().finite().min(0).max(100).optional(),
+  }).strict().refine(v=>Object.keys(v).length>0,'linha sem indicadores'),
+  evidence:z.record(z.string(),z.string().max(300)).refine(v=>Object.keys(v).length<=15,'evidências excedem limite'),
+}).superRefine((row,ctx)=>{
+  const ads=['AD_CAMPAIGN','AD'].includes(row.kind);
+  if(row.kind!=='AD_CAMPAIGN'&&!row.parentExternalId)ctx.addIssue({code:'custom',message:'identificador pai obrigatório'});
+  const allowed=ads?['adSpend','adClicks','paidImpressions','adAttributedRevenue','adAttributedOrders','adConversionRatePct']:['price','originalPrice','stockAvailable','promotionDiscountPct'];
+  if(Object.keys(row.metrics).some(key=>!allowed.includes(key)||!row.evidence[key]))ctx.addIssue({code:'custom',message:'indicador fora do escopo ou sem evidência'});
+});
+
 export const captureIngestSchema = z.object({
+  chartPoints:z.array(z.object({chartId:z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/),chartTitle:z.string().trim().min(1).max(150),series:z.string().trim().min(1).max(120),dimension:z.string().trim().min(1).max(100),value:z.number().finite(),unit:z.enum(['PERCENT','BRL','UNSPECIFIED']),raw:z.string().trim().min(1).max(80)})).max(200).default([]),
+  details:z.array(capturedDetailSchema).max(100).default([]),
+  captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  filterSignature:z.string().max(512).optional(),
+  capturePageIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional(),
   marketplace: marketplaceIdSchema,
   accountId: z.string().min(1).max(128),
   pageKind: pageKindSchema,
@@ -143,7 +186,11 @@ export const captureIngestSchema = z.object({
   accountMetrics: capturedAccountMetricsSchema.optional(),
   /** Evidências textuais curtas (rótulo → valor lido), para auditoria. */
   evidence: z.record(z.string(), z.string().max(2000)).refine((value) => Object.keys(value).length <= 40 && JSON.stringify(value).length <= 12_000, 'evidências excedem os limites permitidos').optional(),
-}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined, 'captura sem anúncios nem métricas de conta');
+}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined || payload.details.length>0 || payload.chartPoints.length>0, 'captura sem anúncios, detalhes nem métricas de conta ou gráficos').superRefine((payload,ctx)=>{
+  if(payload.chartPoints.length&&!['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(payload.pageKind))ctx.addIssue({code:'custom',message:'gráfico fora da área de leitura'});
+  if(new Set(payload.chartPoints.map(p=>JSON.stringify([p.chartId,p.series,p.dimension]))).size!==payload.chartPoints.length)ctx.addIssue({code:'custom',message:'pontos de gráfico duplicados'});
+  if(payload.details.some(row=>['AD_CAMPAIGN','AD'].includes(row.kind)?payload.pageKind!=='seller_ads':!['seller_listings','seller_inventory','seller_listing_edit'].includes(payload.pageKind)))ctx.addIssue({code:'custom',message:'detalhes fora da área correspondente'});
+});
 
 export type CaptureIngest = z.infer<typeof captureIngestSchema>;
 

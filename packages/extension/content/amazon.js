@@ -8,7 +8,12 @@
 
   function detectPageKind(url) {
     if (/\/(ap\/)?signin|\/login/i.test(url)) return 'login';
+    if (/\/(edit|update|delete|remove)(\/|\?|#|$)/i.test(url)) return 'unknown';
     if (/myinventory|manageinventory|inventory/i.test(url)) return 'seller_listings';
+    if (/return|refund/i.test(url)) return 'seller_returns';
+    if (/\/(questions|question)(\/|\?|#|$)/i.test(url)) return 'seller_questions';
+    if (/feedback|reputation|reviews/i.test(url)) return 'seller_reputation';
+    if (/claims|complaints|disputes/i.test(url)) return 'seller_complaints';
     if (/orders-v3|\/orders/i.test(url)) return 'seller_orders';
     if (/advertising|campaignmanager|\/ads/i.test(url)) return 'seller_ads';
     if (/dashboard|home/i.test(url)) return 'seller_dashboard';
@@ -20,7 +25,7 @@
   function visibleAuthorizedAreaLinks() {
     const allowed = new Set([
       'seller_dashboard', 'seller_orders', 'seller_listings', 'seller_ads',
-      'seller_questions', 'seller_reputation', 'seller_returns', 'seller_inventory',
+      'seller_questions', 'seller_reputation', 'seller_returns', 'seller_complaints', 'seller_inventory',
     ]);
     const current = new URL(location.href);
     const found = new Map();
@@ -47,7 +52,8 @@
   function firstText(root, selectors) {
     for (const selector of selectors) {
       const el = root.querySelector(selector);
-      const value = String(el?.textContent ?? el?.value ?? '').replace(/\s+/g, ' ').trim();
+      if(!el || !window.MI_DOM.isVisible(el)) continue;
+      const value = String(el.textContent ?? el.value ?? '').replace(/\s+/g, ' ').trim();
       if (value) return value;
     }
     return '';
@@ -56,7 +62,8 @@
   function numeric(root, selectors) {
     for (const selector of selectors) {
       const el = root.querySelector(selector);
-      const raw = el?.value ?? el?.textContent;
+      if(!el||!window.MI_DOM.isVisible(el))continue;
+      const raw = el.value ?? el.textContent;
       const value = window.MI_DOM.parseNumberPtBr(raw);
       if (value !== null) return value;
     }
@@ -87,7 +94,7 @@
   function capture() {
     const pageKind = detectPageKind(location.href);
     const evidence = {};
-    const listings = [];
+    const listings = [], accountMetrics = {};
     if (pageKind === 'seller_listings') {
       const rows = document.querySelectorAll('#myitable tbody tr, table tbody tr[data-asin], tr[data-row-key], [data-testid="inventory-row"]');
       for (const row of rows) {
@@ -104,35 +111,113 @@
         if (title) listing.title = title.slice(0, 2000);
         if (price !== null) listing.price = price;
         if (stock !== null) listing.stockAvailable = stock;
+        const extraRow=window.MI_DOM.observedExtraMetrics?.(row,true);
+        if(extraRow) Object.assign(listing,extraRow.metrics);
         listings.push(listing);
       }
       evidence.visibleInventoryRows = String(rows.length);
       evidence.capturedListings = String(listings.length);
     }
+    if (['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints'].includes(pageKind)) {
+      const fields = {
+        orders:['pedidos','orders'], units:['unidades vendidas','units ordered','units sold'],
+        gmv:['vendas de produtos pedidos','ordered product sales','faturamento bruto','gross sales'], netRevenue:['receita líquida','net revenue','net sales'],
+        visits:['visitas','visits'], organicImpressions:['impressões orgânicas','organic impressions'], paidImpressions:['impressões pagas','ad impressions'],
+        adSpend:['gasto com anúncios','ad spend','advertising cost'], adClicks:['cliques em anúncios','ad clicks'],
+        adAttributedRevenue:['vendas atribuídas','ad-attributed sales'], adAttributedOrders:['pedidos atribuídos','ad-attributed orders'],
+        returnsCount:['devoluções','returns'], returnsValue:['valor devolvido','refund amount'], cancellations:['cancelamentos','cancellations'],
+        discounts:['descontos concedidos','discount amount'], commission:['comissões','referral fees'],
+        marketplaceFee:['taxas do marketplace','marketplace fees'], reviewCount:['total de avaliações','total reviews'], reviewRating:['nota média','average rating'],
+      };
+      for (const [field, labels] of Object.entries(fields)) {
+        const found = window.MI_DOM.findValueByLabel(document.body,labels);
+        const value = found && window.MI_DOM.parseNumberPtBr(found.text);
+        if (typeof value === 'number' && value >= 0 && (field !== 'reviewRating' || value <= 5)) {
+          accountMetrics[field] = value; evidence[field] = String(found.label + ': ' + found.text).slice(0,200);
+        }
+      }
+    }
+    if(pageKind!=='seller_listings'){
+      const extra=window.MI_DOM.observedExtraMetrics?.(document.body,false);
+      if(extra){Object.assign(accountMetrics,extra.metrics);Object.assign(evidence,extra.evidence);}
+    }
     return {
       marketplace: 'amazon',
       pageKind,
+      ...(Object.keys(accountMetrics).length ? { accountMetrics } : {}),
       ...visibleAccountIdentity(),
       url: location.href,
       listings,
+      customerVoice: window.MI_DOM.visibleCustomerVoice(document, pageKind, 'amazon'),
       evidence,
       missing: pageKind === 'seller_listings' ? ['sku_or_asin', 'title', 'price', 'stockAvailable'].filter((key) => {
         if (key === 'sku_or_asin') return listings.length === 0;
         const field = key === 'stockAvailable' ? key : key;
         return listings.length > 0 && listings.every((row) => row[field] === undefined);
-      }) : ['inventory_list'],
+      }) : ['orders','units','gmv','netRevenue','visits','adSpend','adClicks','adAttributedRevenue','returnsCount','cancellations'].filter(field => accountMetrics[field] === undefined),
     };
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'MI_CAPTURE_REQUEST') {
-      try { sendResponse({ ok: true, snapshot: capture() }); }
+      if (window.MI_DOM.hasChallenge(document) || document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')) {
+        sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
+        return true;
+      }
+      const readObserved=()=>{
+        const observed=capture();
+        observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
+        if(['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(observed.pageKind)) observed.chartPoints=window.MI_DOM.visibleChartPoints?.(document)?.points??[];
+        if(observed.pageKind==='seller_reputation'){
+          const rep=window.MI_DOM.observedReputation?.(document.body,'amazon');
+          if(rep&&Object.keys(rep.metrics).length){observed.accountMetrics={...observed.accountMetrics,...rep.metrics};observed.evidence={...observed.evidence,...rep.evidence};}
+        }
+        const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
+        observed.filterSignature=filters.signature;
+        observed.spaPage=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(observed.pageKind)?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;
+        observed.coverageWarnings=[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])];
+        if(filters.signature) observed.evidence={...observed.evidence,filtersAndPeriod:filters.signature};
+        return observed;
+      };
+      try {
+        const observed=readObserved();
+        if(message.virtualized===true&&observed.pageKind==='seller_listings'&&window.MI_DOM.collectVirtualizedListings){
+          if(observed.accountId!==message.accountId||observed.url!==message.url||observed.filterSignature!==message.filterSignature||observed.spaPage!==message.spaPage)throw Error('contexto da rolagem não corresponde à aba verificada');
+          window.MI_DOM.collectVirtualizedListings(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
+          return true;
+        }
+        if(message.virtualized===true&&['seller_questions','seller_reputation','seller_returns','seller_complaints'].includes(observed.pageKind)&&window.MI_DOM.collectVirtualizedFeedback){
+          if(observed.accountId!==message.accountId||observed.url!==message.url||observed.filterSignature!==message.filterSignature||observed.spaPage!==message.spaPage)throw Error('contexto da rolagem não corresponde à aba verificada');
+          window.MI_DOM.collectVirtualizedFeedback(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
+          return true;
+        }
+        sendResponse({ok:true,snapshot:observed});
+      }
       catch (err) { sendResponse({ ok: false, error: String(err?.message ?? err) }); }
       return true;
     }
+    if(message?.type==='MI_CAPTURE_REAPPLY_FILTERS'){
+      const verify=()=>['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(detectPageKind(location.href))&&(detectPageKind(location.href)===message.pageKind||(!message.pageKind&&detectPageKind(location.href)==='seller_listings'))&&visibleAccountIdentity().accountId===message.accountId&&location.href===message.url&&!window.MI_DOM.hasChallenge(document)&&!document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]');
+      const ok=Boolean(window.MI_DOM.restoreVisibleFilters?.(document,message.currentSignature,message.targetSignature,verify));
+      sendResponse({ok});return false;
+    }
+    if(message?.type==='MI_CAPTURE_ADVANCE_SPA'){
+      const kind=detectPageKind(location.href);
+      const identity=visibleAccountIdentity();
+      const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
+      const ok=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(kind)&&(message.pageKind===kind||(!message.pageKind&&kind==='seller_listings'))&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length;
+      if(ok&&message.reactive===true){
+        window.MI_DOM.advanceSpaPageReactive(document,message.page).then(advanced=>sendResponse({ok:advanced})).catch(()=>sendResponse({ok:false}));return true;
+      }
+      sendResponse({ok:ok&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page))});return false;
+    }
     if (message?.type === 'MI_CAPTURE_PAGE_INFO') {
       const pageKind = detectPageKind(location.href);
+      const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
       sendResponse({
+        filterSignature:filters.signature,
+        spaPagination: (()=>{const state=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(pageKind)?window.MI_DOM.spaPaginationState?.(document):null;return state?{page:state.page,canAdvance:state.canAdvance}:null;})(),
+        coverageWarnings:[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])],
         ok: true,
         marketplace: 'amazon',
         pageKind,
@@ -140,7 +225,8 @@
         url: location.href,
         loginRequired: challengeDetected() || pageKind === 'login',
         challenge: window.MI_DOM.hasChallenge(document),
-        nextPageUrl: pageKind === 'seller_listings' ? window.MI_DOM.paginationInfo(document, location.href, 'amazon') : null,
+        nextPageUrl: pageKind.startsWith('seller_') && pageKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'amazon') : null,
+        paginationUnsupported: pageKind.startsWith('seller_') && Boolean(window.MI_DOM.paginationUnsupported?.(document,location.href,'amazon')),
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

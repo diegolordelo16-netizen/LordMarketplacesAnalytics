@@ -14,6 +14,9 @@
     if (/\/datacenter|\/business-insights/i.test(url)) return 'seller_dashboard';
     if (/\/(complaint|dispute)/i.test(url)) return 'seller_complaints';
     if (/\/(return|refund)/i.test(url)) return 'seller_returns';
+    if (/\/(questions|question|perguntas)(\/|\?|#|$)/i.test(url)) return 'seller_questions';
+    if (/\/(rating|ratings|reviews|reputation|avaliacoes)(\/|\?|#|$)/i.test(url)) return 'seller_reputation';
+    if (/\/(inventory|stock)(\/|\?|#|$)/i.test(url)) return 'seller_inventory';
     if (/\/order/i.test(url)) return 'seller_orders';
     if (/\/marketing\/ads|\/ads\//i.test(url)) return 'seller_ads';
     return 'unknown';
@@ -66,22 +69,7 @@
   }
 
   function visibleCustomerVoice(pageKind) {
-    const kind = pageKind === 'seller_complaints' ? 'COMPLAINT' : pageKind === 'seller_returns' ? 'RETURN_REASON' : null;
-    if (!kind) return [];
-    const selectors = kind === 'COMPLAINT'
-      ? '[data-testid*="dispute-description"], [data-testid*="complaint-description"], [class*="dispute-description"], [class*="complaint-description"]'
-      : '[data-testid*="return-reason"], [data-testid*="refund-reason"], [class*="return-reason"], [class*="refund-reason"]';
-    const items = [], seen = new Set();
-    for (const element of Array.from(document.querySelectorAll(selectors))) {
-      if (items.length >= 50 || !window.MI_DOM.isVisible(element)) continue;
-      const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
-      if (text.length < 3 || text.length > 5000 || seen.has(text)) continue;
-      seen.add(text);
-      const container = element.closest('[data-id], [data-testid*="dispute"], [data-testid*="return"], tr');
-      const externalRef = container?.getAttribute('data-id') || container?.getAttribute('data-testid') || undefined;
-      items.push({ kind, text, ...(externalRef ? { externalRef: String(externalRef).slice(0, 200) } : {}) });
-    }
-    return items;
+    return window.MI_DOM.visibleCustomerVoice(document, pageKind, 'shopee');
   }
 
   const LABELS = {
@@ -185,9 +173,30 @@
     if (filterContext) evidence.filtersAndPeriod = filterContext;
     const listing = {};
     collectVisibleOfferEvidence(listing, evidence);
-    const accountPage = ['seller_dashboard', 'seller_ads', 'seller_orders', 'seller_inventory'].includes(pageKind);
+    const accountPage = ['seller_dashboard', 'seller_ads', 'seller_orders', 'seller_inventory', 'seller_questions', 'seller_reputation', 'seller_returns', 'seller_complaints'].includes(pageKind);
     const accountMetrics = {};
-
+    if (pageKind === 'seller_listings') {
+      const listings = [], seen = new Set();
+      for (const row of document.querySelectorAll('[data-product-id], tr[data-item-id], [data-testid="product-row"]')) {
+        if (listings.length >= 100 || !window.MI_DOM.isVisible(row)) continue;
+        const id = row.getAttribute('data-product-id') || row.getAttribute('data-item-id');
+        if (!id || !/^\d+$/.test(id) || seen.has(id)) continue;
+        seen.add(id);
+        const item = { listingId: id };
+        const title = row.querySelector('[data-testid="product-title"], [class*="product-name"], h2');
+        if (title && window.MI_DOM.isVisible(title) && title.textContent?.trim()) item.title = title.textContent.trim().slice(0,2000);
+        for (const [field, key] of [['price',null],['stockAvailable','stock'],['units','units'],['visits','visits'],['orders','orders']]) {
+          const el = field === 'price' ? row.querySelector('[data-testid="price"], [class*="price"]') : null;
+          const found = key ? window.MI_DOM.findValueByLabel(row,LABELS[key]) : null;
+          const value = window.MI_DOM.parseNumberPtBr(found?.text ?? (el && window.MI_DOM.isVisible(el) ? el.textContent : null));
+          if (typeof value === 'number' && value >= 0) item[field] = value;
+        }
+      const extraRow=window.MI_DOM.observedExtraMetrics?.(row,true);
+      if(extraRow) Object.assign(item,extraRow.metrics);
+        listings.push(item);
+      }
+      if (listings.length) return { marketplace:'shopee', pageKind, ...visibleAccountIdentity(), url:location.href, listings, evidence:{...evidence, rows:String(listings.length)}, missing:['price','stockAvailable','units','visits','orders'].filter(field=>listings.every(row=>row[field] === undefined)) };
+    }
     const idMatch = location.href.match(/i\.(\d{6,})\.(\d{6,})/);
     if (idMatch) listing.listingId = `${idMatch[1]}.${idMatch[2]}`;
 
@@ -229,6 +238,8 @@
       }
     }
 
+    const extra=window.MI_DOM.observedExtraMetrics?.(document.body,!accountPage);
+    if(extra){Object.assign(accountPage?accountMetrics:listing,extra.metrics);Object.assign(evidence,extra.evidence);}
     return {
       marketplace: 'shopee',
       pageKind,
@@ -423,13 +434,64 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'MI_CAPTURE_REQUEST') {
-      try { sendResponse({ ok: true, snapshot: capture() }); }
+      if (window.MI_DOM.hasChallenge(document) || document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')) {
+        sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
+        return true;
+      }
+      const readObserved=()=>{
+        const observed=capture();
+        observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
+        if(['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(observed.pageKind)) observed.chartPoints=window.MI_DOM.visibleChartPoints?.(document)?.points??[];
+        if(observed.pageKind==='seller_reputation'){
+          const rep=window.MI_DOM.observedReputation?.(document.body,'shopee');
+          if(rep&&Object.keys(rep.metrics).length){observed.accountMetrics={...observed.accountMetrics,...rep.metrics};observed.evidence={...observed.evidence,...rep.evidence};}
+        }
+        const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
+        observed.filterSignature=filters.signature;
+        observed.spaPage=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(observed.pageKind)?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;
+        observed.coverageWarnings=[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])];
+        if(filters.signature) observed.evidence={...observed.evidence,filtersAndPeriod:filters.signature};
+        return observed;
+      };
+      try {
+        const observed=readObserved();
+        if(message.virtualized===true&&observed.pageKind==='seller_listings'&&window.MI_DOM.collectVirtualizedListings){
+          if(observed.accountId!==message.accountId||observed.url!==message.url||observed.filterSignature!==message.filterSignature||observed.spaPage!==message.spaPage)throw Error('contexto da rolagem não corresponde à aba verificada');
+          window.MI_DOM.collectVirtualizedListings(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
+          return true;
+        }
+        if(message.virtualized===true&&['seller_questions','seller_reputation','seller_returns','seller_complaints'].includes(observed.pageKind)&&window.MI_DOM.collectVirtualizedFeedback){
+          if(observed.accountId!==message.accountId||observed.url!==message.url||observed.filterSignature!==message.filterSignature||observed.spaPage!==message.spaPage)throw Error('contexto da rolagem não corresponde à aba verificada');
+          window.MI_DOM.collectVirtualizedFeedback(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
+          return true;
+        }
+        sendResponse({ok:true,snapshot:observed});
+      }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
       return true;
     }
+    if(message?.type==='MI_CAPTURE_REAPPLY_FILTERS'){
+      const verify=()=>['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(detectPageKind(location.href))&&(detectPageKind(location.href)===message.pageKind||(!message.pageKind&&detectPageKind(location.href)==='seller_listings'))&&visibleAccountIdentity().accountId===message.accountId&&location.href===message.url&&!window.MI_DOM.hasChallenge(document)&&!document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]');
+      const ok=Boolean(window.MI_DOM.restoreVisibleFilters?.(document,message.currentSignature,message.targetSignature,verify));
+      sendResponse({ok});return false;
+    }
+    if(message?.type==='MI_CAPTURE_ADVANCE_SPA'){
+      const kind=detectPageKind(location.href);
+      const identity=visibleAccountIdentity();
+      const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
+      const ok=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(kind)&&(message.pageKind===kind||(!message.pageKind&&kind==='seller_listings'))&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length;
+      if(ok&&message.reactive===true){
+        window.MI_DOM.advanceSpaPageReactive(document,message.page).then(advanced=>sendResponse({ok:advanced})).catch(()=>sendResponse({ok:false}));return true;
+      }
+      sendResponse({ok:ok&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page))});return false;
+    }
     if (message?.type === 'MI_CAPTURE_PAGE_INFO') {
       const pageKind = detectPageKind(location.href);
+      const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
       sendResponse({
+        filterSignature:filters.signature,
+        spaPagination: (()=>{const state=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(pageKind)?window.MI_DOM.spaPaginationState?.(document):null;return state?{page:state.page,canAdvance:state.canAdvance}:null;})(),
+        coverageWarnings:[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])],
         ok: true,
         marketplace: 'shopee',
         pageKind,
@@ -437,7 +499,8 @@
         url: location.href,
         loginRequired: pageKind === 'login' || Boolean(document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')),
         challenge: window.MI_DOM.hasChallenge(document),
-        nextPageUrl: pageKind === 'seller_listings' ? window.MI_DOM.paginationInfo(document, location.href, 'shopee') : null,
+        nextPageUrl: pageKind.startsWith('seller_') && pageKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'shopee') : null,
+        paginationUnsupported: pageKind.startsWith('seller_') && Boolean(window.MI_DOM.paginationUnsupported?.(document,location.href,'shopee')),
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

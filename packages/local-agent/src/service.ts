@@ -8,6 +8,7 @@ import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
+  captureIngestSchema,
   evaluateQualityGate,
   ipcRequestSchema,
   protocolCompatible,
@@ -92,6 +93,14 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'media.delete': 'manage_accounts',
   'capture.ingest': 'execute_task',
   'capture.snapshot': 'view_reports',
+  'capture.accountSnapshots': 'view_reports',
+  'capture.details':'view_reports',
+  'capture.chartPoints':'view_reports',
+  'navigation.observe': 'execute_task',
+  'navigation.list': 'execute_task',
+  'navigation.graph': 'execute_task',
+  'navigation.summary': 'view_reports',
+  'navigation.clear': 'execute_task',
   'kpi.listing': 'view_reports',
   'kpi.dashboard': 'view_reports',
   'kpi.history': 'view_reports',
@@ -185,6 +194,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'sync.retryFailed': 'execute_task',
   'sync.completeAccount': 'execute_task',
   'sync.accountProgress': 'execute_task',
+  'sync.claimAccount': 'execute_task',
   'sync.schedule.create': 'execute_task',
   'sync.schedule.list': 'view_reports',
   'sync.schedule.setEnabled': 'execute_task',
@@ -192,6 +202,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'sync.claimScheduled': 'execute_task',
   'sync.claimBrowserRequest': 'execute_task',
   'voc.ingestBatch': 'manage_market_intelligence',
+  'voc.items': 'view_reports',
   'finance.realized.upsert': 'manage_financial_limits',
   'finance.realized.list': 'view_reports',
   'finance.realized.summary': 'view_reports',
@@ -403,6 +414,41 @@ export class LocalService {
 
   private registerAll(): void {
     const { db, secrets, tasks, gemini, knowledge, autoUpgrade, capture } = this.deps;
+    // Receipts are committed together with their writes. A lost HTTP/native reply is safe to replay.
+    function captureOnce<T extends { ok: boolean }>(method: string, payload: unknown, work: () => T): T {
+      const raw = payload as Record<string, unknown> | null | undefined;
+      if (raw?.captureKey === undefined) return work();
+      const parsed = z.object({ captureKey: z.string().regex(/^[a-f0-9]{64}$/), accountId: z.string().min(1), filterSignature:z.string().max(512).optional(),capturePageIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional() }).passthrough().parse(payload);
+      const { captureKey, accountId } = parsed;
+      const source = new URL(z.string().url().max(2048).parse(method === 'capture.ingest' ? parsed.url : parsed.sourceUrl));
+      if (source.protocol !== 'https:' || source.username || source.password) throw new Error('URL do recibo inválida');
+      source.hash = ''; source.searchParams.sort();
+      // Keep receipts with no filter compatible with the previous protocol; a different visible filter must never be acknowledged as the same capture.
+      const identity = createHash('sha256').update(parsed.capturePageIdentity ? JSON.stringify([source.href,parsed.filterSignature??'',parsed.capturePageIdentity]) : parsed.filterSignature ? JSON.stringify([source.href,parsed.filterSignature]) : source.href).digest('hex');
+      let rejected: T | undefined;
+      const abort = new Error('captura não confirmada');
+      try {
+        return db.transaction(() => {
+          const active = db.row<{ is_active: number; marketplace: string }>('SELECT is_active,marketplace FROM accounts WHERE id=?', accountId);
+          if (!active?.is_active) throw new Error('conta inexistente ou inativa');
+          const hosts: Record<string, RegExp> = { mercado_livre: /(^|\.)mercadolivre\.com\.br$/i, shopee: /(^|\.)shopee\.com\.br$/i, amazon: /^sellercentral\.amazon\.com\.br$/i };
+          if (!hosts[active.marketplace]?.test(source.hostname) || (method === 'capture.ingest' && parsed.marketplace !== active.marketplace)) throw new Error('recibo não pertence ao marketplace da conta');
+          const receipt = db.row<{ result_json: string; identity_hash: string }>('SELECT result_json,identity_hash FROM capture_receipts WHERE account_id=? AND method=? AND capture_key=?', accountId, method, captureKey);
+          if (receipt) {
+            if (receipt.identity_hash !== identity) throw new Error('chave de captura reutilizada para outra página ou seleção de filtros');
+            return JSON.parse(receipt.result_json) as T;
+          }
+          const result = work();
+          if (!result.ok) { rejected = result; throw abort; }
+          db.db.prepare('INSERT INTO capture_receipts(account_id,method,capture_key,identity_hash,result_json,created_at) VALUES (?,?,?,?,?,?)')
+            .run(accountId,method,captureKey,identity,JSON.stringify(result),nowIso());
+          return result;
+        });
+      } catch (error) {
+        if (error === abort && rejected) return rejected;
+        throw error;
+      }
+    }
 
     this.register('ping', () => ({ pong: true, version: this.deps.version, at: new Date().toISOString() }));
 
@@ -687,9 +733,82 @@ export class LocalService {
     });
 
     this.register('capture.ingest', (payload, auth) => {
+      if ((payload as { captureKey?: unknown } | null)?.captureKey !== undefined) captureIngestSchema.parse(payload);
+      return captureOnce('capture.ingest', payload, () => {
       const result = capture.ingest(payload);
       this.audit(auth, 'CAPTURE_INGEST', 'listing_snapshot', null, result.ok ? 'OK' : 'PARTIAL', result.errors.join('; '));
       return result;
+      });
+    });
+
+    // Only structural routes; no arbitrary URL, query, fragment, customer text or selectors.
+    const navigationContext=z.object({accountId:z.string().min(1).max(200),origin:z.string().url().max(200)});
+    const navigationAccount=(i:{accountId:string;origin:string})=>{
+      const account=db.row<{marketplace:string;is_active:number;verified_by_user:number}>('SELECT marketplace,is_active,verified_by_user FROM accounts WHERE id=?',i.accountId);
+      const hosts:Record<string,RegExp>={mercado_livre:/(^|\.)mercadolivre\.com\.br$/i,shopee:/(^|\.)shopee\.com\.br$/i,amazon:/^sellercentral\.amazon\.com\.br$/i};
+      const url=new URL(i.origin);
+      if(!account?.is_active||!account.verified_by_user||url.protocol!=='https:'||url.origin!==i.origin||!hosts[account.marketplace]?.test(url.hostname)||url.port)throw new Error('conta ou origem de aprendizado não autorizada');
+      return account;
+    };
+    this.register('navigation.observe',(payload,auth)=>{
+      const i=navigationContext.extend({route:z.string().max(160).regex(/^\/(?:[a-z][a-z_-]{0,39}\/)*[a-z][a-z_-]{0,39}\/?$/i),pageKind:z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']) ,fromRoute:z.string().max(160).optional(),actionKind:z.enum(['SPA_NEXT','FILTER_CHANGE']).optional()}).strict().parse(payload);
+      navigationAccount(i);
+      if(i.actionKind&&i.fromRoute!==i.route)throw new Error('ação interna exige a mesma rota');
+      const segments=i.route.toLowerCase().split('/').filter(Boolean);
+      const allowed=new Set('portal product list manage datacenter business-insights order orders sales dashboard home resumo summary metricas stats performance vendas anuncios publicaciones moderador mis-publicaciones itens items publicidade product_ads ads promocoes promociones perguntas preguntas questions question reputacao reputation avaliacoes reviews opinions rating ratings reclamacoes reclamaciones claims complaints disputas mediacoes devolucoes devoluciones returns return refund estoque inventario inventory stock produtos productos ventas pedidos marketing advertising campaignmanager myinventory manageinventory feedback complaint dispute'.split(' '));
+      if(segments.some(part=>!allowed.has(part)))throw new Error('rota não estrutural ou não reconhecida');
+      const now=nowIso();
+      db.transaction(()=>{
+        const prior=db.row<{page_kind:string}>('SELECT page_kind FROM navigation_memory WHERE account_id=? AND origin=? AND route=?',i.accountId,i.origin,i.route);
+        if(prior&&prior.page_kind!==i.pageKind)throw new Error('classificação da rota mudou; limpe a memória antes de ensinar novamente');
+        if(!prior&&(db.row<{n:number}>('SELECT COUNT(*) n FROM navigation_memory WHERE account_id=?',i.accountId)?.n??0)>=100)throw new Error('limite de 100 rotas por conta atingido');
+        db.db.prepare('INSERT INTO navigation_memory(account_id,origin,route,page_kind,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?) ON CONFLICT(account_id,origin,route) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.route,i.pageKind,now,now);
+        if(i.fromRoute&&i.fromRoute!==i.route){
+          if(!db.row('SELECT 1 FROM navigation_memory WHERE account_id=? AND origin=? AND route=?',i.accountId,i.origin,i.fromRoute))throw new Error('origem da transição não demonstrada');
+          const prior=db.row('SELECT 1 FROM navigation_transitions WHERE account_id=? AND origin=? AND from_route=? AND to_route=?',i.accountId,i.origin,i.fromRoute,i.route);
+          if(!prior&&(db.row<{n:number}>('SELECT COUNT(*) n FROM navigation_transitions WHERE account_id=?',i.accountId)?.n??0)>=500)throw new Error('limite de transições atingido');
+          db.db.prepare('INSERT INTO navigation_transitions(account_id,origin,from_route,to_route,last_seen_at) VALUES(?,?,?,?,?) ON CONFLICT(account_id,origin,from_route,to_route) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.fromRoute,i.route,now);
+        }
+        if(i.actionKind)db.db.prepare('INSERT INTO navigation_actions(account_id,origin,route,action_kind,last_seen_at) VALUES(?,?,?,?,?) ON CONFLICT(account_id,origin,route,action_kind) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.route,i.actionKind,now);
+      });
+      this.audit(auth,'NAVIGATION_OBSERVE','account',i.accountId,'OK','rota estrutural demonstrada');
+      return {ok:true};
+    });
+    this.register('navigation.list',(payload)=>{
+      const i=navigationContext.strict().parse(payload);navigationAccount(i);
+      return db.rows('SELECT route,page_kind,observations,first_seen_at,last_seen_at FROM navigation_memory WHERE account_id=? AND origin=? ORDER BY last_seen_at DESC,route LIMIT 100',i.accountId,i.origin);
+    });
+    this.register('navigation.graph',(payload)=>{
+      const i=navigationContext.strict().parse(payload);navigationAccount(i);
+      return db.rows('SELECT from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? AND origin=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId,i.origin);
+    });
+    this.register('navigation.summary',(payload)=>{
+      const i=z.object({accountId:z.string().min(1).max(200)}).strict().parse(payload);
+      if(!db.row('SELECT 1 FROM accounts WHERE id=? AND is_active=1 AND verified_by_user=1',i.accountId))throw new Error('conta ativa e verificada necessária');
+      return {
+        routes:db.rows('SELECT origin,route,page_kind,observations,last_seen_at FROM navigation_memory WHERE account_id=? ORDER BY last_seen_at DESC,route LIMIT 100',i.accountId),
+        transitions:db.rows('SELECT origin,from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId),
+        actions:db.rows('SELECT origin,route,action_kind,observations,last_seen_at FROM navigation_actions WHERE account_id=? ORDER BY last_seen_at DESC LIMIT 200',i.accountId)
+      };
+    });
+    this.register('navigation.clear',(payload,auth)=>{
+      const i=navigationContext.strict().parse(payload);navigationAccount(i);
+      db.db.prepare('DELETE FROM navigation_memory WHERE account_id=? AND origin=?').run(i.accountId,i.origin);
+      this.audit(auth,'NAVIGATION_CLEAR','account',i.accountId,'OK','memória de navegação limpa');
+      return {ok:true};
+    });
+
+    this.register('capture.chartPoints',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(200).default(100)}).parse(payload);
+      return db.rows('SELECT id,chart_id,chart_title,series,dimension,value,unit,raw_text,page_kind,filter_signature,captured_at,source_class FROM capture_chart_points WHERE account_id=? ORDER BY captured_at DESC,id LIMIT ?',i.accountId,i.limit);
+    });
+    this.register('capture.details',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),kind:z.enum(['AD_CAMPAIGN','AD','LISTING_VARIANT','WAREHOUSE_STOCK']).optional(),limit:z.number().int().min(1).max(100).default(50)}).parse(payload);
+      return db.rows<Record<string,unknown>>('SELECT * FROM capture_detail_snapshots WHERE account_id=? AND (? IS NULL OR kind=?) ORDER BY captured_at DESC,id LIMIT ?',i.accountId,i.kind??null,i.kind??null,i.limit).map(row=>({...row,metrics:parseJsonObject(String(row.metrics_json)),evidence:parseJsonObject(String(row.evidence_json)),context:parseJsonObject(String(row.context_json))}));
+    });
+    this.register('capture.accountSnapshots', (payload) => {
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(50)}).parse(payload);
+      return db.rows<Record<string,unknown>>('SELECT * FROM account_snapshots WHERE account_id=? ORDER BY captured_at DESC LIMIT ?',i.accountId,i.limit).map(row=>({...row,metrics:parseJsonObject(String(row.metrics_json??'')),evidence:parseJsonObject(String(row.evidence_json??''))}));
     });
 
     this.register('capture.snapshot', (payload) => {
@@ -2009,10 +2128,11 @@ export class LocalService {
 
     this.register('voc.ingestBatch', (payload, auth) => {
       const i = z.object({
-        accountId: z.string().min(1),
+        accountId: z.string().min(1), captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), sourceUrl: z.string().url().max(2048).optional(), filterSignature:z.string().max(512).optional(),capturePageIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional(),
         sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']).default('A_PRIMARY_UI'),
         items: z.array(z.object({
           listingId: z.string().nullable().optional(),
+          externalListingId:z.string().trim().min(1).max(200).nullable().optional(),
           kind: z.enum(['REVIEW','QUESTION','COMPLAINT','RETURN_REASON','MESSAGE']),
           text: z.string().trim().min(3).max(5000),
           rating: z.number().int().min(1).max(5).nullable().optional(),
@@ -2020,6 +2140,7 @@ export class LocalService {
           observedAt: z.string().datetime().optional(),
         })).min(1).max(200),
       }).parse(payload ?? {});
+      return captureOnce('voc.ingestBatch', i, () => {
       const account = db.row<{ id: string; is_active: number }>('SELECT id,is_active FROM accounts WHERE id=?', i.accountId);
       if (!account || account.is_active !== 1) throw new Error('conta inexistente ou inativa');
       const listingIds = [...new Set(i.items.map((item) => item.listingId).filter((value): value is string => Boolean(value)))];
@@ -2027,29 +2148,46 @@ export class LocalService {
         if (!db.row('SELECT id FROM listings WHERE id=? AND account_id=?', listingId, i.accountId)) throw new Error(`anúncio ${listingId} não pertence à conta selecionada`);
       }
       const inserted: string[] = [];
+      let linked=0,unresolved=0;
       const duplicates: string[] = [];
       db.transaction(() => {
         for (const item of i.items) {
           const externalRef = item.externalRef ?? null;
+          const resolved=item.externalListingId?db.row<{id:string}>('SELECT id FROM listings WHERE account_id=? AND external_id=?',i.accountId,item.externalListingId)?.id:undefined;
+          if(item.listingId&&item.externalListingId&&item.listingId!==resolved)throw new Error('identificadores de anúncio divergentes');
+          const listingId=item.listingId??resolved??null;
           if (externalRef) {
-            const existing = db.row<{ id: string }>('SELECT id FROM customer_voice_items WHERE account_id=? AND external_ref=? AND kind=? LIMIT 1', i.accountId, externalRef, item.kind);
-            if (existing) { duplicates.push(existing.id); continue; }
+            const existing = db.row<{ id: string;listing_id:string|null;external_listing_id:string|null }>('SELECT id,listing_id,external_listing_id FROM customer_voice_items WHERE account_id=? AND external_ref=? AND kind=? LIMIT 1', i.accountId, externalRef, item.kind);
+            if (existing) {
+              if((existing.listing_id&&listingId&&existing.listing_id!==listingId)||(existing.external_listing_id&&item.externalListingId&&existing.external_listing_id!==item.externalListingId))throw new Error('feedback já associado a outro anúncio');
+              db.db.prepare('UPDATE customer_voice_items SET listing_id=COALESCE(listing_id,?),external_listing_id=COALESCE(external_listing_id,?),rating=COALESCE(rating,?) WHERE id=? AND account_id=?').run(listingId,item.externalListingId??null,item.kind==='REVIEW'?item.rating??null:null,existing.id,i.accountId);
+              duplicates.push(existing.id);continue;
+            }
           }
           const id = randomUUID();
           const redacted = redactPII(item.text);
-          db.db.prepare(`INSERT INTO customer_voice_items (id,account_id,listing_id,kind,source_class,observed_at,text_redacted,rating,verified_purchase,external_ref)
-                         VALUES (?,?,?,?,?,?,?,?,0,?)`)
-            .run(id, i.accountId, item.listingId ?? null, item.kind, i.sourceClass, item.observedAt ?? nowIso(), redacted, item.rating ?? null, externalRef);
+          db.db.prepare(`INSERT INTO customer_voice_items (id,account_id,listing_id,kind,source_class,observed_at,text_redacted,rating,verified_purchase,external_ref,external_listing_id)
+                         VALUES (?,?,?,?,?,?,?,?,0,?,?)`)
+            .run(id, i.accountId, listingId, item.kind, i.sourceClass, item.observedAt ?? nowIso(), redacted, item.rating ?? null, externalRef,item.externalListingId??null);
+          if(listingId)linked++;else if(item.externalListingId)unresolved++;
           inserted.push(id);
         }
       });
       this.audit(auth, 'VOC_INGEST_BATCH', 'customer_voice_item', null, 'OK', `${inserted.length} inseridos; ${duplicates.length} duplicados ignorados`);
-      return { ok: true, inserted: inserted.length, duplicates: duplicates.length, ids: inserted, duplicateIds: duplicates, piiRedacted: true };
+      return { ok: true, inserted: inserted.length, duplicates: duplicates.length, ids: inserted, duplicateIds: duplicates, piiRedacted: true, linked, unresolved };
+      });
+    });
+
+    this.register('voc.items',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(50)}).parse(payload);
+      return db.rows(`SELECT v.id,v.kind,v.text_redacted,v.rating,v.observed_at,v.external_listing_id,v.listing_id,l.external_id AS linked_external_id,l.title AS listing_title
+        FROM customer_voice_items v LEFT JOIN listings l ON l.id=v.listing_id AND l.account_id=v.account_id WHERE v.account_id=? ORDER BY v.observed_at DESC,v.id LIMIT ?`,i.accountId,i.limit);
     });
 
     this.register('sync.createAll', (payload, auth) => {
-      const i = z.object({ scope: z.enum(['ALL_ACTIVE_ACCOUNTS','ALL_ENABLED_MARKETPLACES','ACCOUNT']).default('ALL_ACTIVE_ACCOUNTS'), accountId: z.string().optional(), browserRequest: z.boolean().default(false) }).parse(payload ?? {});
+      const i = z.object({ scope: z.enum(['ALL_ACTIVE_ACCOUNTS','ALL_ENABLED_MARKETPLACES','ACCOUNT']).default('ALL_ACTIVE_ACCOUNTS'), accountId: z.string().optional(), browserRequest: z.boolean().default(false),collectionMode:z.enum(['AUTHORIZED_AREAS','ADVANCED_LISTINGS']).default('AUTHORIZED_AREAS') }).parse(payload ?? {});
       if (i.scope === 'ACCOUNT' && !i.accountId) throw new Error('informe accountId para sincronização por conta');
+      if(i.collectionMode==='ADVANCED_LISTINGS'&&i.scope!=='ACCOUNT')throw new Error('coleta avançada exige uma conta específica');
       const accounts = db.rows<{ id: string; marketplace: string }>(
         `SELECT a.id,a.marketplace FROM accounts a
           WHERE a.is_active=1 AND (? IS NULL OR a.id=?)
@@ -2061,30 +2199,38 @@ export class LocalService {
       const batchId = randomUUID();
       const now = nowIso();
       db.transaction(() => {
-        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request) VALUES (?,?,?,?,?,?,?)')
-          .run(batchId, auth?.userId ?? null, i.scope, 'QUEUED', now, JSON.stringify({ accountCount: accounts.length }), Number(i.browserRequest));
+        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request,collection_mode) VALUES (?,?,?,?,?,?,?,?)')
+          .run(batchId, auth?.userId ?? null, i.scope, 'QUEUED', now, JSON.stringify({ accountCount: accounts.length }), Number(i.browserRequest),i.collectionMode);
         const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status) VALUES (?,?,?,?,?)');
         for (const account of accounts) insert.run(randomUUID(), batchId, account.id, account.marketplace, 'WAITING_BROWSER');
       });
       this.audit(auth, 'SYNC_BATCH_CREATE', 'sync_batch', batchId, 'OK', `${accounts.length} conta(s); aguarda abas autenticadas abertas`);
-      return { ok: true, batchId, status: 'QUEUED', accounts, requiresOpenSellerTabs: true, neverSwitchesAccounts: true };
+      return { ok: true, batchId, status: 'QUEUED', accounts,collectionMode:i.collectionMode, requiresOpenSellerTabs: true, neverSwitchesAccounts: true };
     });
 
     this.register('sync.list', (payload) => {
-      const i = z.object({ batchId: z.string().optional(), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
-      if (i.batchId) return { batch: db.row('SELECT * FROM sync_batches WHERE id=?', i.batchId), accounts: db.rows('SELECT * FROM sync_batch_accounts WHERE batch_id=? ORDER BY marketplace,account_id', i.batchId), pageRuns: db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? ORDER BY account_id,page_no', i.batchId) };
+      const i = z.object({ batchId: z.string().optional(), accountId:z.string().optional(), compact:z.boolean().default(false),includePageRuns:z.boolean().default(true),pageOffset:z.number().int().min(0).max(1000000).default(0),pageLimit:z.number().int().min(1).max(500).optional(), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
+      if (i.batchId) {
+        const accounts = db.rows<Record<string,unknown>>('SELECT * FROM sync_batch_accounts WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY marketplace,account_id',i.batchId,i.accountId??null,i.accountId??null).map(({lease_hash:_leaseHash,...account})=>account);
+        const total=db.row<{total:number}>('SELECT COUNT(*) total FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?)',i.batchId,i.accountId??null,i.accountId??null)?.total??0;
+        const pageRuns=!i.includePageRuns?[]:i.pageLimit!==undefined?db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY account_id,page_no LIMIT ? OFFSET ?',i.batchId,i.accountId??null,i.accountId??null,i.pageLimit,i.pageOffset):i.compact?[]:db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY account_id,page_no',i.batchId,i.accountId??null,i.accountId??null);
+        return { batch:db.row('SELECT * FROM sync_batches WHERE id=?',i.batchId),accounts:i.compact?accounts.map(({progress_json,...account})=>{
+          const progress=parseJsonObject(String(progress_json??'{}'));
+          return {...account,pendingPages:Array.isArray(progress.pendingLinks)?progress.pendingLinks.length:0,unsupportedLinks:progress.unsupportedLinks===true,stoppedReason:progress.stoppedReason??null};
+        }):accounts,pageRuns,totalPageRuns:total };
+      }
       return db.rows('SELECT * FROM sync_batches ORDER BY requested_at DESC LIMIT ?', i.limit);
     });
 
     this.register('sync.retryFailed', (payload, auth) => {
       const i = z.object({ batchId: z.string().min(1), browserRequest: z.boolean().default(false) }).parse(payload ?? {});
-      const original = db.row<{ id: string; scope: 'ALL_ACTIVE_ACCOUNTS' | 'ALL_ENABLED_MARKETPLACES' | 'ACCOUNT'; status: string }>(
-        'SELECT id,scope,status FROM sync_batches WHERE id=?', i.batchId,
+      const original = db.row<{ id: string; scope: 'ALL_ACTIVE_ACCOUNTS' | 'ALL_ENABLED_MARKETPLACES' | 'ACCOUNT'; status: string; logical_batch_id: string | null;collection_mode:string }>(
+        'SELECT id,scope,status,logical_batch_id,collection_mode FROM sync_batches WHERE id=?', i.batchId,
       );
       if (!original) throw new Error('lote original de sincronização não encontrado');
       if (!['PARTIAL','FAILED'].includes(original.status)) throw new Error('somente lotes parciais ou com falha podem ser repetidos');
-      const failedAccounts = db.rows<{ account_id: string; marketplace: string }>(
-        `SELECT ba.account_id,ba.marketplace FROM sync_batch_accounts ba
+      const failedAccounts = db.rows<{ account_id: string; marketplace: string; progress_json: string; pages_scanned: number; pages_succeeded: number }>(
+        `SELECT ba.account_id,ba.marketplace,ba.progress_json,ba.pages_scanned,ba.pages_succeeded FROM sync_batch_accounts ba
            JOIN accounts a ON a.id=ba.account_id
           WHERE ba.batch_id=? AND ba.status IN ('FAILED','PARTIAL','SKIPPED') AND a.is_active=1
             AND NOT EXISTS (
@@ -2098,10 +2244,15 @@ export class LocalService {
       if (!failedAccounts.length) throw new Error('nenhuma conta ativa com falha pode ser repetida; confira se já existe um lote em andamento');
       const batchId = randomUUID(); const now = nowIso();
       db.transaction(() => {
-        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request) VALUES (?,?,?,?,?,?,?)')
-          .run(batchId, auth?.userId ?? null, original.scope, 'QUEUED', now, JSON.stringify({ retryOf: original.id, accountCount: failedAccounts.length }), Number(i.browserRequest));
-        const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status) VALUES (?,?,?,?,?)');
-        for (const account of failedAccounts) insert.run(randomUUID(), batchId, account.account_id, account.marketplace, 'WAITING_BROWSER');
+        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request,logical_batch_id,collection_mode) VALUES (?,?,?,?,?,?,?,?,?)')
+          .run(batchId, auth?.userId ?? null, original.scope, 'QUEUED', now, JSON.stringify({ retryOf: original.id, accountCount: failedAccounts.length }), Number(i.browserRequest), original.logical_batch_id ?? original.id,original.collection_mode);
+        const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status,progress_json,pages_scanned,pages_succeeded) VALUES (?,?,?,?,?,?,?,?)');
+        const copyPage = db.db.prepare(`INSERT INTO sync_batch_page_runs(id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at,spa_page)
+          SELECT ?,?,account_id,page_no,page_url,page_kind,status,error,queued,?,spa_page FROM sync_batch_page_runs WHERE id=?`);
+        for (const account of failedAccounts) {
+          insert.run(randomUUID(), batchId, account.account_id, account.marketplace, 'WAITING_BROWSER', account.progress_json, account.pages_scanned, account.pages_succeeded);
+          for (const page of db.rows<{ id: string }>('SELECT id FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',original.id,account.account_id)) copyPage.run(randomUUID(),batchId,now,page.id);
+        }
       });
       this.audit(auth, 'SYNC_BATCH_RETRY', 'sync_batch', batchId, 'OK', `${failedAccounts.length} conta(s); origem ${original.id}`);
       return { ok: true, batchId, accounts: failedAccounts, retryOf: original.id, requiresOpenSellerTabs: true, neverSwitchesAccounts: true };
@@ -2167,8 +2318,10 @@ export class LocalService {
       const now = nowIso();
       const staleBefore = new Date(Date.now() - 30 * 60_000).toISOString();
       const row = db.row<{ id: string; batch_id: string; schedule_id: string }>(`SELECT id,batch_id,schedule_id FROM sync_schedule_runs
-        WHERE batch_id IS NOT NULL AND (status='QUEUED' OR (status='RUNNING' AND started_at<=?))
-        ORDER BY scheduled_at,id LIMIT 1`, staleBefore);
+        WHERE batch_id IS NOT NULL AND (status='QUEUED' OR (status='RUNNING' AND started_at<=? AND NOT EXISTS (
+          SELECT 1 FROM sync_batch_accounts a WHERE a.batch_id=sync_schedule_runs.batch_id AND a.progress_updated_at>?
+        )))
+        ORDER BY scheduled_at,id LIMIT 1`, staleBefore, staleBefore);
       if (!row) return { claimed: false };
       const pending = db.row<{ total: number }>("SELECT COUNT(*) AS total FROM sync_batch_accounts WHERE batch_id=? AND status IN ('WAITING_BROWSER','RUNNING')", row.batch_id)?.total ?? 0;
       if (Number(pending) === 0) {
@@ -2198,22 +2351,45 @@ export class LocalService {
       return { claimed: true, batchId: row.batch_id, runId: row.id, recoveredStaleLease: true };
     }));
 
+    // One account, one active collector across browser instances and batches.
+    this.register('sync.claimAccount', (payload, auth) => db.transaction(() => {
+      const i = z.object({batchId:z.string().min(1),accountId:z.string().min(1),leaseToken:z.string().uuid().optional()}).parse(payload);
+      const now=nowIso(), expiresAt=new Date(Date.now()+120_000).toISOString();
+      const row=db.row<{id:string;status:string;lease_hash:string|null;lease_expires_at:string|null}>(`SELECT ba.id,ba.status,ba.lease_hash,ba.lease_expires_at
+        FROM sync_batch_accounts ba JOIN accounts a ON a.id=ba.account_id AND a.is_active=1 AND a.marketplace=ba.marketplace
+        JOIN sync_batches b ON b.id=ba.batch_id WHERE ba.batch_id=? AND ba.account_id=? AND b.status IN ('QUEUED','RUNNING')`,i.batchId,i.accountId);
+      if (!row || !['WAITING_BROWSER','RUNNING'].includes(row.status)) return {ok:true,claimed:false,reason:'conta/lote não está disponível'};
+      if (i.leaseToken) {
+        if (row.lease_hash!==sha256(i.leaseToken) || !row.lease_expires_at || row.lease_expires_at<=now) throw new Error('reserva de coleta expirada ou substituída');
+        db.db.prepare('UPDATE sync_batch_accounts SET lease_expires_at=? WHERE id=?').run(expiresAt,row.id);
+        return {ok:true,claimed:true,leaseToken:i.leaseToken,expiresAt};
+      }
+      if (db.row(`SELECT id FROM sync_batch_accounts WHERE account_id=? AND status='RUNNING' AND lease_hash IS NOT NULL AND lease_expires_at>? LIMIT 1`,i.accountId,now)) {
+        return {ok:true,claimed:false,reason:'esta conta já tem coleta em execução'};
+      }
+      const leaseToken=randomUUID();
+      db.db.prepare("UPDATE sync_batch_accounts SET status='RUNNING',lease_hash=?,lease_expires_at=?,started_at=COALESCE(started_at,?) WHERE id=?").run(sha256(leaseToken),expiresAt,now,row.id);
+      db.db.prepare("UPDATE sync_batches SET status='RUNNING',browser_claimed_at=COALESCE(browser_claimed_at,?) WHERE id=?").run(now,i.batchId);
+      this.audit(auth,'SYNC_ACCOUNT_CLAIM','sync_batch_account',row.id,'OK','reserva exclusiva');
+      return {ok:true,claimed:true,leaseToken,expiresAt};
+    }));
+
     this.register('sync.accountProgress', (payload, auth) => {
       const pageKind = z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']);
       const i = z.object({
-        batchId: z.string().min(1), accountId: z.string().min(1),
-        pagesScanned: z.number().int().min(0).max(12), pagesSucceeded: z.number().int().min(0).max(12),
-        pages: z.array(z.object({ page: z.number().int().min(1).max(12), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(12),
-        seenUrls: z.array(z.string().max(2048)).max(12),
-        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80) })).max(100),
-        maxPages: z.number().int().min(1).max(12), stoppedReason: z.string().max(300).optional(),
-      }).refine((v) => v.pagesSucceeded <= v.pagesScanned && v.pages.length === v.pagesScanned, 'contagens do progresso inválidas')
+        batchId: z.string().min(1), accountId: z.string().min(1), leaseToken:z.string().uuid(),
+        pagesScanned: z.number().int().min(0).max(500), pagesSucceeded: z.number().int().min(0).max(500),
+        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, spaPage:z.number().int().min(1).max(9999).optional(),spaFingerprint:z.string().regex(/^[a-f0-9]{64}$/).optional(),listingFingerprint:z.string().regex(/^[a-f0-9]{64}$/).optional(),listingIds:z.array(z.string().min(1).max(200)).max(500).optional(),ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional(), filterSignature:z.string().max(512).optional(),coverageWarnings:z.array(z.enum(['FILTRO_NAO_RECONHECIDO','TABELA_VIRTUALIZADA','GRAFICO_SEM_DADOS_TEXTUAIS'])).max(10).optional() })).max(500),
+        seenUrls: z.array(z.string().max(2048)).max(500),
+        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80), filterSignature:z.string().max(512).optional() })).max(500),
+        maxPages: z.number().int().min(1).max(500), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
+      }).refine((v) => v.pagesSucceeded <= v.pagesScanned && v.pages.length === v.pagesScanned && v.pagesScanned <= v.maxPages, 'contagens do progresso inválidas')
         .refine((v) => v.pages.every((page, index) => page.page === index + 1) && new Set(v.pages.map((page) => page.page)).size === v.pages.length, 'numeração de páginas inválida')
         .refine((v) => v.pages.filter((page) => page.ok).length === v.pagesSucceeded, 'páginas concluídas não correspondem à contagem')
         .parse(payload ?? {});
-      const row = db.row<{ id: string; status: string; marketplace: string }>('SELECT id,status,marketplace FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
+      const row = db.row<{ id: string; status: string; marketplace: string; pages_scanned: number; pages_succeeded: number; lease_hash:string|null;lease_expires_at:string|null }>('SELECT ba.id,ba.status,ba.marketplace,ba.pages_scanned,ba.pages_succeeded,ba.lease_hash,ba.lease_expires_at FROM sync_batch_accounts ba JOIN accounts a ON a.id=ba.account_id AND a.marketplace=ba.marketplace AND a.is_active=1 WHERE ba.batch_id=? AND ba.account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
-      if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) throw new Error('não é permitido atualizar progresso de conta terminal');
+      if (row.status!=='RUNNING' || row.lease_hash!==sha256(i.leaseToken) || !row.lease_expires_at || row.lease_expires_at<=nowIso()) throw new Error('reserva de coleta expirada ou substituída');
       const hosts: Record<string, RegExp> = {
         mercado_livre: /(^|\.)mercadolivre\.com\.br$/i,
         shopee: /(^|\.)shopee\.com\.br$/i,
@@ -2225,56 +2401,77 @@ export class LocalService {
         url.username = ''; url.password = ''; url.hash = '';
         // Só preserva parâmetros de paginação conhecidos; descarta tokens e parâmetros opacos.
         const safe = new URLSearchParams();
-        for (const [key, value] of url.searchParams) if (/^(page|page_number|p|offset|limit|sort|order)$/i.test(key)) safe.append(key, value.slice(0, 80));
+        for (const [key, value] of url.searchParams) if (/^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)) safe.append(key, value.slice(0, 80)); else throw new Error('filtro da URL não suportado para retomada segura');
         url.search = safe.toString();
-        return url.toString().slice(0, 500);
+        return url.toString();
       };
+      const mode=db.row<{collection_mode:string}>('SELECT collection_mode FROM sync_batches WHERE id=?',i.batchId)?.collection_mode;
+      const advanced=mode==='ADVANCED_LISTINGS';
+      if(advanced&&(i.maxPages>50||i.pages.some(page=>page.pageKind!=='seller_listings'||!page.listingFingerprint||!page.listingIds?.length||new Set(page.listingIds).size!==page.listingIds.length)))throw new Error('histórico de coleta avançada sem identidade comprovada');
+      if(!advanced&&i.pages.some(page=>page.listingFingerprint!==undefined||page.listingIds!==undefined||(page.spaPage!==undefined)!==(page.spaFingerprint!==undefined)))throw new Error('identidade SPA geral incompleta ou incompatível');
+      if(advanced&&i.pages.some(page=>page.spaFingerprint!==undefined))throw new Error('identidade SPA geral incompatível com coleta avançada');
+      const completedIds=i.pages.filter(page=>page.ok).flatMap(page=>page.listingIds??[]);
+      if(advanced&&new Set(completedIds).size!==completedIds.length)throw new Error('anúncios repetidos entre páginas concluídas');
       const cleanPages = i.pages.map((page) => ({
-        page_no: page.page, page_url: sanitizeUrl(page.url), page_kind: page.pageKind,
+        page_no: page.page, page_url: sanitizeUrl(page.url), page_kind: page.pageKind,spa_page:page.spaPage??null,
         status: page.ok ? 'COMPLETED' : page.queued ? 'QUEUED' : 'FAILED', error: page.error ?? null, queued: page.queued ? 1 : 0,
       }));
+      if (i.pagesScanned < row.pages_scanned || i.pagesSucceeded < row.pages_succeeded) throw new Error('progresso atrasado não pode reduzir contagens');
+      const uniquePageKey = (raw: string,spaPage?:number|null) => { const u = new URL(raw); u.searchParams.sort(); return JSON.stringify([u.href,spaPage??null]); };
+      if (new Set(cleanPages.map((page) => uniquePageKey(page.page_url,page.spa_page))).size !== cleanPages.length) throw new Error('URLs duplicadas no progresso');
+      for (const prev of db.rows<{ page_no: number; page_url: string; status: string;spa_page:number|null }>('SELECT page_no,page_url,status,spa_page FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',i.batchId,i.accountId)) {
+        const next = cleanPages[prev.page_no - 1];
+        if (!next || uniquePageKey(next.page_url,next.spa_page) !== uniquePageKey(prev.page_url,prev.spa_page) || (prev.status === 'COMPLETED' && next.status !== 'COMPLETED')) throw new Error('progresso anterior não pode ser substituído por outra página ou regredir');
+      }
+      {
+        const prior=parseJsonObject(String(db.row<{progress_json:string}>('SELECT progress_json FROM sync_batch_accounts WHERE id=?',row.id)?.progress_json??'{}'));
+        for(const page of Array.isArray(prior.pages)?prior.pages:[]){
+          const next=i.pages[Number(page.page)-1];
+          if((advanced||page.spaPage!==undefined)&&(!next||next.spaFingerprint!==page.spaFingerprint||next.listingFingerprint!==page.listingFingerprint||next.filterSignature!==page.filterSignature||(page.ok&&JSON.stringify(next.listingIds)!==JSON.stringify(page.listingIds))))throw new Error('identidade do histórico avançado não pode ser alterada');
+        }
+      }
       const cleanState = {
         seenUrls: i.seenUrls.map((url) => {
           const parsed = new URL(url);
           if (parsed.protocol !== 'https:' || !hosts[row.marketplace]?.test(parsed.hostname)) throw new Error('URL visitada fora do domínio autorizado');
           parsed.username = ''; parsed.password = ''; parsed.hash = '';
           const safe = new URLSearchParams();
-          for (const [key, value] of parsed.searchParams) if (/^(page|page_number|p|offset|limit|sort|order)$/i.test(key)) safe.append(key, value.slice(0, 80));
+          for (const [key, value] of parsed.searchParams) if (/^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)) safe.append(key, value.slice(0, 80)); else throw new Error('filtro da URL não suportado para retomada segura');
           parsed.search = safe.toString();
-          return parsed.toString().slice(0, 500);
+          return parsed.toString();
         }),
-        pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label })),
-        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued) })),
-        maxPages: i.maxPages, stoppedReason: i.stoppedReason ?? null,
+        pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label, ...(item.filterSignature!==undefined?{filterSignature:item.filterSignature}:{}) })),
+        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ...(advanced?{...(page.spa_page!==null?{spaPage:page.spa_page}:{}),listingFingerprint:i.pages[page.page_no-1]!.listingFingerprint,listingIds:i.pages[page.page_no-1]!.listingIds}:page.spa_page!==null?{spaPage:page.spa_page,spaFingerprint:i.pages[page.page_no-1]!.spaFingerprint}:{}),ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued), ...(i.pages[page.page_no-1]?.filterSignature!==undefined?{filterSignature:i.pages[page.page_no-1]!.filterSignature}:{}),...(i.pages[page.page_no-1]?.coverageWarnings?{coverageWarnings:i.pages[page.page_no-1]!.coverageWarnings}:{}) })),
+        maxPages: i.maxPages, unsupportedLinks: i.unsupportedLinks || i.pages.some(page=>Boolean(page.coverageWarnings?.length)), receiptProtocol: i.receiptProtocol, stoppedReason: i.stoppedReason ?? null,
       };
       const now = nowIso();
       db.transaction(() => {
         const upsertPage = db.db.prepare(`INSERT INTO sync_batch_page_runs
-          (id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(batch_id,account_id,page_no) DO UPDATE SET
-          page_url=excluded.page_url,page_kind=excluded.page_kind,status=excluded.status,error=excluded.error,queued=excluded.queued,updated_at=excluded.updated_at`);
-        for (const page of cleanPages) upsertPage.run(randomUUID(), i.batchId, i.accountId, page.page_no, page.page_url, page.page_kind, page.status, page.error, page.queued, now);
+          (id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at,spa_page)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(batch_id,account_id,page_no) DO UPDATE SET
+          page_url=excluded.page_url,page_kind=excluded.page_kind,spa_page=excluded.spa_page,status=excluded.status,error=excluded.error,queued=excluded.queued,updated_at=excluded.updated_at`);
+        for (const page of cleanPages) upsertPage.run(randomUUID(), i.batchId, i.accountId, page.page_no, page.page_url, page.page_kind, page.status, page.error, page.queued, now,page.spa_page);
         const current = cleanPages.at(-1) ?? null;
         db.db.prepare(`UPDATE sync_batch_accounts SET status='RUNNING',pages_scanned=MAX(pages_scanned,?),pages_succeeded=MAX(pages_succeeded,?),
-          current_page_no=?,current_url=?,progress_json=?,progress_updated_at=?,started_at=COALESCE(started_at,?) WHERE id=?`)
-          .run(i.pagesScanned, i.pagesSucceeded, current?.page_no ?? null, current?.page_url ?? null, JSON.stringify(cleanState), now, now, row.id);
+          current_page_no=?,current_url=?,progress_json=?,progress_updated_at=?,lease_expires_at=?,started_at=COALESCE(started_at,?) WHERE id=?`)
+          .run(i.pagesScanned, i.pagesSucceeded, current?.page_no ?? null, current?.page_url ?? null, JSON.stringify(cleanState), now, new Date(Date.now()+120_000).toISOString(), now, row.id);
       });
       return { ok: true, pagesScanned: i.pagesScanned, pagesSucceeded: i.pagesSucceeded, currentPage: cleanPages.at(-1)?.page_no ?? null, pendingPages: i.pendingLinks.length, updatedAt: now };
     });
 
     this.register('sync.completeAccount', (payload, auth) => db.transaction(() => {
-      const i = z.object({ batchId: z.string(), accountId: z.string(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(50).default(0), pagesSucceeded: z.number().int().min(0).max(50).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
-      const row = db.row<{ id: string; status: string; progress_json: string }>('SELECT id,status,progress_json FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
+      const i = z.object({ batchId: z.string(), accountId: z.string(), leaseToken:z.string().uuid(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(500).default(0), pagesSucceeded: z.number().int().min(0).max(500).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
+      const row = db.row<{ id: string; status: string; progress_json: string;lease_hash:string|null;lease_expires_at:string|null;pages_scanned:number;pages_succeeded:number }>('SELECT id,status,progress_json,lease_hash,lease_expires_at,pages_scanned,pages_succeeded FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
       if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) {
         if (row.status !== i.status) throw new Error('conta em estado terminal; use a repetição em novo lote');
         const batch = db.row<{ status: string; summary_json: string }>('SELECT status,summary_json FROM sync_batches WHERE id=?', i.batchId)!;
         return { ok: true, batchStatus: batch.status, counts: parseJsonObject(batch.summary_json) };
       }
+      if (row.lease_hash!==sha256(i.leaseToken) || !row.lease_expires_at || row.lease_expires_at<=nowIso()) throw new Error('reserva de coleta expirada ou substituída');
       if (i.status === 'COMPLETED') {
         const progress = parseJsonObject(row.progress_json);
-        if ((Array.isArray(progress.pendingLinks) && progress.pendingLinks.length) ||
-            (Array.isArray(progress.pages) && (!progress.pages.length || progress.pages.some((page) => page?.ok !== true)))) {
+        if (progress.unsupportedLinks === true || !Array.isArray(progress.pendingLinks) || progress.pendingLinks.length || !Array.isArray(progress.pages) || !progress.pages.length || progress.pages.length!==i.pagesScanned || i.pagesScanned!==i.pagesSucceeded || i.pagesScanned!==row.pages_scanned || i.pagesSucceeded!==row.pages_succeeded || progress.pages.some((page) => page?.ok !== true)) {
           throw new Error('a coleta tem páginas pendentes ou sem confirmação');
         }
       }

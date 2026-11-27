@@ -26,7 +26,7 @@ describe('extensão: manifest', () => {
   it('mantém a versão visível do painel alinhada ao manifest', () => {
     const panel = readFileSync(join(ext, 'panel', 'panel.html'), 'utf8');
     expect(panel.match(/id="version">v([^<]+)</)?.[1]).toBe(manifest.version);
-    expect(manifest.version).toBe('3.11.0');
+    expect(manifest.version).toBe('3.12.0');
   });
 
   it('é MV3 e não pede permissões além do necessário', () => {
@@ -187,11 +187,11 @@ describe('extensão: navegação entre áreas autorizadas', () => {
     expect(info.authorizedAreaLinks[0].pageKind).toBe('seller_orders');
   });
 
-  it('o worker exige allowlist, limita a 12 páginas e interrompe em login/CAPTCHA', () => {
+  it('o worker exige allowlist, limita a 500 páginas e interrompe em login/CAPTCHA', () => {
     const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
     expect(worker).toContain('captureAuthorizedAreas');
     expect(worker).toContain("'capture.scanAuthorizedAreas'");
-    expect(worker).toContain('Math.min(12');
+    expect(worker).toContain('Math.min(500');
     expect(worker).toContain("info.loginRequired || info.challenge");
     expect(worker).toContain("url.origin !== expectedOrigin");
     expect(worker).toContain("url.protocol !== 'https:'");
@@ -227,6 +227,9 @@ describe('extensão: leitura de números pt-BR', () => {
     expect(dom.parseNumberPtBr('não disponível')).toBeNull();
     expect(dom.parseNumberPtBr(null)).toBeNull();
     expect(dom.parseNumberPtBr('')).toBeNull();
+    expect(dom.parseNumberPtBr('12 pedidos / 20 visitas')).toBeNull();
+    expect(dom.parseNumberPtBr('01/11/2026')).toBeNull();
+    expect(dom.parseNumberPtBr('1,2 mil')).toBeNull();
   });
 
   it('extrai ID externo do anúncio', () => {
@@ -383,14 +386,17 @@ describe('extensão: classificação de página do Mercado Livre', () => {
   it('captura os anúncios visíveis quando a página é seller_listings', () => {
     let listener: ((message: unknown, sender: unknown, respond: (value: unknown) => void) => unknown) | undefined;
     const row = {
-      innerHTML: 'MLB123456',
-      getAttribute: () => null,
+      getAttribute: (name: string) => name === 'data-item-id' ? 'MLB123456' : null,
+      querySelectorAll: () => [],
       querySelector: (selector: string) => selector.includes('andes-money-amount')
         ? { textContent: '199' }
         : { textContent: 'Fone Bluetooth' },
     };
     const window = {
       MI_DOM: {
+        isVisible: (element: any) => !element.hidden,
+        hasChallenge: () => false,
+        visibleCustomerVoice: () => [],
         extractExternalId: (value: unknown) => String(value).match(/MLB\d+/)?.[0] ?? null,
         parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
         findValueByLabel: () => null,
@@ -399,7 +405,7 @@ describe('extensão: classificação de página do Mercado Livre', () => {
     const context = vm.createContext({
       window,
       location: { href: 'https://vendedores.mercadolivre.com.br/anuncios' },
-      document: { querySelectorAll: (selector: string) => selector.includes('item-row') ? [row] : [], querySelector: () => null, body: {} },
+      document: { querySelectorAll: (selector: string) => selector.includes('item-row') ? [row, { ...row, hidden: true, getAttribute: () => 'MLB999999' }, { ...row, getAttribute: () => null }] : [], querySelector: () => null, body: {} },
       chrome: { runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } } },
       String, Number, Math, RegExp,
     });
@@ -427,6 +433,8 @@ describe('extensão: classificação e diagnóstico da Shopee', () => {
     let listener: ((message: unknown, sender: unknown, respond: (value: unknown) => void) => unknown) | undefined;
     const window = {
       MI_DOM: {
+        hasChallenge: () => false,
+        visibleCustomerVoice: () => [],
         findValueByLabel: (_body: unknown, labels: string[]) =>
           labels.some((label) => label === 'stock') ? { text: '12', label: 'Stock' } : null,
         parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
@@ -471,13 +479,14 @@ describe('extensão: captura financeira com rótulos não ambíguos', () => {
         ['Tarifa fixa', 'R$ 5,00'], ['Frete pago pelo vendedor', 'R$ 12,00'], ['Impostos', 'R$ 8,00'],
         ['Tarifas do marketplace', 'R$ 3,00'],
       ];
-      const nodes = pairs.map(([label, value]) => ({ textContent: label, nextElementSibling: { textContent: value }, parentElement: null }));
+      class VisibleElement { constructor(public textContent: string, public nextElementSibling: VisibleElement | null = null) {} getBoundingClientRect() { return { width: 100, height: 20 }; } }
+      const nodes = pairs.map(([label, value]) => new VisibleElement(label, new VisibleElement(value)));
       const body = { querySelectorAll: () => nodes, innerText: pairs.map(([label, value]) => `${label} ${value}`).join(' ') };
-      const window: Record<string, unknown> = {};
+      const window: Record<string, unknown> = { getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }) };
       const context = vm.createContext({
         window, location: { href: url }, document: { body, querySelector: () => null, querySelectorAll: () => [] },
         chrome: { runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } } },
-        String, Number, Math, RegExp, URL, Element: class {},
+        String, Number, Math, RegExp, URL, Element: VisibleElement,
       });
       vm.runInContext(readFileSync(join(ext, 'content', 'dom-utils.js'), 'utf8'), context);
       vm.runInContext(readFileSync(join(ext, 'content', file), 'utf8'), context);
@@ -487,6 +496,9 @@ describe('extensão: captura financeira com rótulos não ambíguos', () => {
     };
     const ml = captureFinancialPage('mercado-livre.js', 'https://www.mercadolivre.com.br/vendas/metricas', 'Faturamento bruto');
     const shopee = captureFinancialPage('shopee.js', 'https://seller.shopee.com.br/portal/datacenter', 'Vendas brutas (BRL)');
+    const amazon = captureFinancialPage('amazon.js', 'https://sellercentral.amazon.com.br/home', 'Ordered Product Sales');
+    expect(amazon.gmv).toBe(1000);
+    expect(amazon.netRevenue).toBe(910);
     for (const metrics of [ml, shopee]) {
       expect(metrics.gmv).toBe(1000);
       expect(metrics.netRevenue).toBe(910);
@@ -599,11 +611,447 @@ describe('extensão: paginação segura', () => {
 
   it('service worker impõe limite de cinco páginas, aba temporária e parada em CAPTCHA/login', () => {
     const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
-    expect(worker).toContain('Math.min(5, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 5)');
-    expect(worker).toContain("chrome.tabs.create({ url: source.url, active: false");
+    expect(worker.replace(/\s+/g,'')).toContain('Math.min(5,Number.isInteger(requestedMaxPages)?requestedMaxPages:5)');
+    expect(worker.replace(/\s+/g,"")).toContain("chrome.tabs.create({url:source.url,active:false");
     expect(worker).toContain('info.loginRequired || info.challenge');
     expect(worker).toContain('await chrome.tabs.remove(temporary.id)');
     expect(worker).toContain('snapshot.accountMetrics');
     expect(worker).toContain('payload.listings.length === 0 && !payload.accountMetrics');
+  });
+});
+
+
+describe('captura direta: bloqueio de desafios', () => {
+  it.each(['mercado-livre.js', 'shopee.js', 'amazon.js'])('%s rejeita captura quando aparece CAPTCHA', (file) => {
+    let listener: any;
+    const context = vm.createContext({
+      window: { MI_DOM: { hasChallenge: () => true } },
+      location: { href: 'https://example.com/' },
+      document: { querySelector: () => null },
+      chrome: { runtime: { onMessage: { addListener: (fn: any) => { listener = fn; } } } },
+    });
+    vm.runInContext(readFileSync(join(ext, 'content', file), 'utf8'), context);
+    let response: any;
+    listener({ type: 'MI_CAPTURE_REQUEST' }, {}, (value: unknown) => { response = value; });
+    expect(response.ok).toBe(false);
+    expect(response.error).toContain('CAPTCHA');
+    expect(response.snapshot).toBeUndefined();
+  });
+});
+
+
+describe('voz do cliente: campos visíveis e identidade real', () => {
+  it.each([['seller_questions','QUESTION','data-question-id'],['seller_reputation','REVIEW','data-review-id'],['seller_complaints','COMPLAINT','data-claim-id'],['seller_returns','RETURN_REASON','data-return-id']])('lê %s sem confiar em test-id', (pageKind, kind, attr) => {
+    class FakeElement {
+      constructor(public innerText: string, public visible: boolean, public id?: string) {}
+      getBoundingClientRect() { return { width: this.visible ? 20 : 0, height: 10 }; }
+      closest() { return this; }
+      getAttribute(name: string) { return name === attr ? this.id ?? null : name === 'data-testid' ? 'static-test-id' : null; }
+    }
+    const rows = [new FakeElement('Texto igual',true,'A1'),new FakeElement('Texto igual',true,'A2'),new FakeElement('Oculto',false,'A3'),new FakeElement('Outro comentário',true)];
+    const window: any = { getComputedStyle: () => ({ visibility:'visible', display:'block', opacity:'1' }) };
+    const context = vm.createContext({ window, Element: FakeElement });
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),context);
+    const result = window.MI_DOM.visibleCustomerVoice({ querySelectorAll: () => rows }, pageKind);
+    expect(result).toEqual([{kind,text:'Texto igual',externalRef:'A1'},{kind,text:'Texto igual',externalRef:'A2'},{kind,text:'Outro comentário'}]);
+  });
+});
+
+
+describe('DOM: percentuais explícitos e paginação sem URL', () => {
+  it('distingue porcentagem observada de número sem unidade e detecta botão de paginação',()=>{
+    class E {
+      constructor(public innerText:string,public nextElementSibling:E|null=null,public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(name:string){return this.attrs[name]??null}
+      hasAttribute(name:string){return name in this.attrs}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E,URL});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const pairs=[new E('Taxa de conversão',new E('12,5%')),new E('Ad conversion rate',new E('3')),new E('Preço original',new E('R$ 120,00')),new E('Desconto promocional',new E('25%'))];
+    expect(window.MI_DOM.observedExtraMetrics({querySelectorAll:()=>pairs},true).metrics).toEqual({conversionRatePct:12.5,originalPrice:120,promotionDiscountPct:25});
+    const button=new E('Próxima',null,{'aria-label':'Próxima'});
+    const root={querySelectorAll:(selector:string)=>selector.startsWith('a[')?[]:[button]};
+    expect(window.MI_DOM.paginationUnsupported(root,'https://seller.shopee.com.br/order','shopee')).toBe(true);
+  });
+});
+
+
+describe('captura de detalhes por identidade de entidade',()=>{
+  it('extrai métricas de campanha e ignora linha oculta, sem identidade ou sem evidência',()=>{
+    class E{
+      constructor(public innerText:string,public attrs:Record<string,string>={},public nodes:E[]=[],public nextElementSibling:E|null=null,public visible=true){}
+      getBoundingClientRect(){return {width:this.visible?20:0,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(){return this.nodes}
+      querySelector(){return null}
+      closest(){return this}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const metric=new E('Investimento em publicidade',{},[],new E('R$ 12,50'));
+    const row=new E('',{'data-campaign-id':'C1'},[metric]);
+    const hidden=new E('',{'data-campaign-id':'C2'},[metric],null,false);
+    const root={querySelectorAll:(sel:string)=>sel==='[data-campaign-id]'?[row,hidden,new E('',{},[metric])]:[]};
+    expect(window.MI_DOM.visibleDetailRows(root,'seller_ads')).toEqual([{kind:'AD_CAMPAIGN',externalId:'C1',metrics:{adSpend:12.5},evidence:{adSpend:'Investimento em publicidade: R$ 12,50'}}]);
+  });
+});
+
+
+describe('filtros e cobertura observáveis',()=>{
+  it('registra apenas filtro reconhecido e detecta linhas virtualizadas',()=>{
+    class E{
+      constructor(public attrs:Record<string,string>={},public nodes:E[]=[],public type='',public value='',public innerText=''){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(){return this.nodes}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const date=new E({name:'start_date'},[],'date','2026-11-01');
+    const status=new E({'aria-label':'status'},[],'','','desconhecido');
+    const input=new E({name:'token'},[],'text','segredo');
+    const grid=new E({'aria-rowcount':'20'},[new E(),new E()]);
+    const root={querySelectorAll:(sel:string)=>sel.startsWith('input')?[date,status,input]:sel.startsWith('table')?[grid]:[]};
+    const result=window.MI_DOM.collectionFilterState(root);
+    expect(result.signature).toBe('start_date=2026-11-01');
+    expect(result.warnings).toEqual(['FILTRO_NAO_RECONHECIDO']);
+    expect(window.MI_DOM.collectionCoverage(root)).toEqual(['TABELA_VIRTUALIZADA']);
+  });
+});
+
+
+describe('tabelas e centavos visíveis',()=>{
+  it('usa cabeçalho único e preserva fração monetária sem aceitar centavos ocultos',()=>{
+    class E{
+      constructor(public innerText:string,public parentElement:E|null=null,public hidden=false){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(){return null}
+      querySelectorAll(){return []}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const h1=new E('Cliques'),h2=new E('Gasto com anúncios'),c1=new E('25'),c2=new E('R$ 99,90');
+    const row:any=new E('');
+    row.tagName='TR';row.cells=[c1,c2];row.closest=()=>({tHead:{rows:[{cells:[h1,h2]}]}});
+    expect(window.MI_DOM.findValueByLabel(row,['Gasto com anúncios']).text).toBe('R$ 99,90');
+    row.closest=()=>({tHead:{rows:[{cells:[h2,h2]}]}});
+    expect(window.MI_DOM.findValueByLabel(row,['Gasto com anúncios'])).toBeNull();
+    const cents=new E('90'),fraction:any=new E('1.234');
+    fraction.closest=()=>({querySelector:()=>cents});
+    expect(window.MI_DOM.visibleMoneyParts(fraction)).toEqual({value:1234.9,text:'1.234,90'});
+    cents.hidden=true;
+    expect(window.MI_DOM.visibleMoneyParts(fraction)).toBeNull();
+  });
+});
+
+
+describe('identidade do anúncio no feedback',()=>{
+  it('reconhece ID explícito e rejeita identidade ambígua',()=>{
+    class E{
+      constructor(public innerText:string,public attrs:Record<string,string>){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return this}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const rows=[new E('Ótimo produto',{'data-review-id':'A','data-item-id':'MLB123456'}),new E('Boa compra',{'data-review-id':'B','data-item-id':'MLB123456','data-listing-id':'MLB999999'})];
+    expect(window.MI_DOM.visibleCustomerVoice({querySelectorAll:()=>rows},'seller_reputation','mercado_livre')).toEqual([{kind:'REVIEW',text:'Ótimo produto',externalRef:'A',externalListingId:'MLB123456'},{kind:'REVIEW',text:'Boa compra',externalRef:'B'}]);
+  });
+});
+
+
+describe('paginação SPA com controle explícito',()=>{
+  it('clica somente no botão de paginação único, fora de formulários, com número esperado',()=>{
+    class E{
+      clicked=0;disabled=false;
+      constructor(public innerText:string,public attrs:Record<string,string>={},public nodes:E[]=[],public inForm=false){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      hasAttribute(n:string){return n in this.attrs}
+      closest(){return this.inForm?this:null}
+      querySelectorAll(sel:string){return this.nodes.filter(x=>sel.includes('aria-current')?x.attrs['aria-current']==='page':x.attrs.type==='button')}
+      click(){this.clicked++}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const marker=new E('2',{'aria-current':'page'}),next=new E('Próxima',{type:'button'});
+    const nav=new E('',{'aria-label':'Paginação'},[marker,next]);
+    const root={querySelectorAll:()=>[nav],querySelector:()=>null,body:{innerText:''}};
+    expect(window.MI_DOM.advanceSpaPage(root,1)).toBe(false);
+    expect(window.MI_DOM.advanceSpaPage(root,2)).toBe(true);
+    expect(next.clicked).toBe(1);
+    next.disabled=true;expect(window.MI_DOM.advanceSpaPage(root,2)).toBe(false);
+    next.disabled=false;next.inForm=true;expect(window.MI_DOM.advanceSpaPage(root,2)).toBe(false);
+    expect(next.clicked).toBe(1);
+  });
+});
+
+
+describe('rolagem de tabela virtualizada',()=>{
+  it('reúne todos os índices e restaura a posição, sem confundir linhas repetidas',async()=>{
+    class E{
+      scrollTop=0;clientHeight=100;scrollHeight=200;
+      constructor(public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelector(){return null}
+      querySelectorAll(){return [] as E[]}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const grid=new E({'aria-rowcount':'3'});grid.scrollTop=25;
+    const indices=()=>grid.scrollTop>=100?[2,3]:[1,2];
+    grid.querySelectorAll=()=>indices().map(i=>new E({'aria-rowindex':String(i),'data-product-id':String(i)}));
+    const root={querySelectorAll:()=>[grid],querySelector:()=>null,body:{innerText:''}};
+    const initial={pageKind:'seller_listings',marketplace:'shopee',accountId:'a',url:'https://seller.shopee.com.br/list',filterSignature:'',coverageWarnings:['TABELA_VIRTUALIZADA'],listings:[{listingId:'1'},{listingId:'2'}]};
+    const read=()=>({...initial,listings:indices().map(i=>({listingId:String(i)}))});
+    const result=await window.MI_DOM.collectVirtualizedListings(root,initial,read,async()=>{});
+    expect(result.listings.map((r:any)=>r.listingId)).toEqual(['1','2','3']);
+    expect(result.coverageWarnings).toEqual([]);expect(grid.scrollTop).toBe(25);
+    grid.attrs['aria-rowcount']='4';
+    const partial=await window.MI_DOM.collectVirtualizedListings(root,initial,read,async()=>{});
+    expect(partial.coverageWarnings).toContain('TABELA_VIRTUALIZADA');
+    expect(grid.scrollTop).toBe(25);
+  });
+});
+
+
+describe('reputação explícita por plataforma',()=>{
+  it('preserva métricas específicas sem aceitar números sem porcentagem',()=>{
+    class E{
+      constructor(public innerText:string,public nextElementSibling:E|null=null){}
+      getBoundingClientRect(){return {width:20,height:10}}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const rows=[new E('Order defect rate',new E('0,5%')),new E('Late shipment rate',new E('2%')),new E('Valid tracking rate',new E('99')),new E('Taxa de resposta do chat',new E('98%'))];
+    const root={querySelectorAll:()=>rows};
+    expect(window.MI_DOM.observedReputation(root,'amazon').metrics).toEqual({orderDefectRatePct:0.5,lateShipmentRatePct:2});
+    expect(window.MI_DOM.observedReputation(root,'shopee').metrics).toEqual({lateShipmentRatePct:2,chatResponseRatePct:98});
+  });
+});
+
+
+describe('reaplicação segura de filtros nativos',()=>{
+  it('restaura seleção explícita em região de filtros sem clicar ou submeter formulários',()=>{
+    class E{
+      value='7';type='select-one';tagName='SELECT';events:string[]=[];inForm=false;
+      options=[{value:'7',innerText:'Últimos 7 dias'},{value:'30',innerText:'Últimos 30 dias'}];
+      constructor(public attrs:Record<string,string>={},public nodes:E[]=[]){}
+      get selectedOptions(){return this.options.filter(o=>o.value===this.value)}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(){return this.nodes}
+      closest(){return this.inForm?this:null}
+      dispatchEvent(event:any){this.events.push(event.type)}
+    }
+    class Ev{constructor(public type:string){}}
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E,Event:Ev});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const control=new E({'aria-label':'Período'}),region=new E({'data-testid':'filters'},[control]);
+    const root={querySelectorAll:(sel:string)=>sel.startsWith('input')?[control]:[region]};
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(true);
+    expect(control.value).toBe('30');expect(control.events).toEqual(['input','change']);
+    control.inForm=true;
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 30 dias','período=últimos 7 dias')).toBe(false);
+    expect(control.value).toBe('30');
+  });
+});
+
+
+describe('dados tabulares explícitos de gráficos',()=>{
+  it('extrai série, dimensão, unidade e valor somente de tabela reconhecida',()=>{
+    class E{
+      constructor(public innerText:string='',public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const row=Object.assign(new E(),{cells:[new E('2026-11-26'),new E('R$ 100,50')]});
+    const chart=Object.assign(new E('',{'data-chart-id':'sales'}),{tagName:'TABLE',caption:new E('Vendas por dia'),tHead:{rows:[{cells:[new E('Data'),new E('Receita (R$)')]}]},tBodies:[{rows:[row]}]});
+    const root={querySelectorAll:(sel:string)=>sel==='[data-chart-id]'?[chart]:[]};
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:false,points:[{chartId:'sales',chartTitle:'Vendas por dia',series:'Receita (R$)',dimension:'2026-11-26',value:100.5,unit:'BRL',raw:'R$ 100,50'}]});
+    row.cells[1].innerText='valor não disponível';
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
+  });
+});
+
+describe('nota individual de avaliações',()=>{
+  it('aceita nota explícita e rejeita nota ambígua, oculta ou fracionária',()=>{
+    class E{
+      constructor(public innerText:string,public attrs:Record<string,string>,public children:E[]=[],public hidden=false){}
+      getBoundingClientRect(){return {width:this.hidden?0:20,height:this.hidden?0:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return this}
+      querySelectorAll(){return this.children}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const rows=[
+      new E('Comentário A',{'data-review-id':'A','data-rating':'5'}),
+      new E('Comentário B',{'data-review-id':'B'},[new E('',{'aria-label':'4 de 5 estrelas'})]),
+      new E('Comentário C',{'data-review-id':'C','data-rating':'3'},[new E('',{'data-stars':'4'})]),
+      new E('Comentário D',{'data-review-id':'D','data-rating':'4.5'}),
+      new E('Comentário E',{'data-review-id':'E'},[new E('',{'data-stars':'5'},[],true)]),
+      new E('Comentário F',{'data-rating':'5'})
+    ];
+    const result=window.MI_DOM.visibleCustomerVoice({querySelectorAll:()=>rows},'seller_reputation','amazon');
+    expect(result.map((item:any)=>item.rating??null)).toEqual([5,4,null,null,null,null]);
+  });
+});
+
+describe('marcas explícitas de gráficos sem tabela',()=>{
+  it('coleta somente marcas visíveis com evidência completa, mantendo cobertura parcial',()=>{
+    class E{
+      constructor(public attrs:Record<string,string>,public nodes:E[]=[],public hidden=false){}
+      getBoundingClientRect(){return {width:this.hidden?0:20,height:this.hidden?0:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(s:string){return s==='table'?[]:this.nodes}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const point=new E({'data-series':'Receita','data-dimension':'Dia 1','data-value':'R$ 12,50','aria-label':'Receita Dia 1 R$ 12,50'});
+    const chart=new E({'data-chart-id':'sales','aria-label':'Vendas'},[point]);
+    const root={querySelectorAll:(s:string)=>s==='[data-chart-id]'?[chart]:[]};
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[{chartId:'sales',chartTitle:'Vendas',series:'Receita',dimension:'Dia 1',value:12.5,unit:'BRL',raw:'R$ 12,50'}]});
+    point.attrs['aria-label']='Receita Dia 1';
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
+    point.attrs['aria-label']='Receita Dia 1 R$ 12,50';point.hidden=true;
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
+  });
+});
+
+describe('filtro personalizado sem leitura comprovada',()=>{
+  it('sinaliza combobox de período sem interpretar valores arbitrários',()=>{
+    class E{
+      tagName='DIV';
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return n==='aria-label'?'Período':null}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const root={querySelectorAll:(s:string)=>s.startsWith('[role="combobox"]')?[new E()]:[]};
+    expect(window.MI_DOM.collectionFilterState(root)).toEqual({signature:'',warnings:['FILTRO_NAO_RECONHECIDO']});
+  });
+});
+
+describe('observação reativa da paginação SPA',()=>{
+  it('confirma o próximo marcador e desconecta o observador',async()=>{
+    let callback:()=>void=()=>{},disconnected=0;
+    class Observer{
+      constructor(fn:()=>void){callback=fn}
+      observe(){}
+      disconnect(){disconnected++}
+    }
+    class E{
+      disabled=false;
+      constructor(public innerText:string,public attrs:Record<string,string>={},public nodes:E[]=[]){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      hasAttribute(n:string){return n in this.attrs}
+      closest(){return null}
+      querySelectorAll(s:string){return this.nodes.filter(x=>s.includes('aria-current')?x.attrs['aria-current']==='page':x.attrs.type==='button')}
+      click(){}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E,MutationObserver:Observer,setTimeout,clearTimeout}));
+    const marker=new E('1',{'aria-current':'page'}),next=new E('Próxima',{type:'button'});
+    const nav=new E('',{'aria-label':'Paginação'},[marker,next]);
+    const root={querySelectorAll:()=>[nav],querySelector:()=>null,body:{innerText:''}};
+    next.click=()=>{marker.innerText='2';callback()};
+    expect(await window.MI_DOM.advanceSpaPageReactive(root,1,1000)).toBe(true);
+    expect(disconnected).toBe(1);
+    next.click=()=>{};
+    expect(await window.MI_DOM.advanceSpaPageReactive(root,2,10)).toBe(false);
+    expect(disconnected).toBe(2);
+  });
+});
+
+describe('filtros personalizados acessíveis',()=>{
+  it('reconhece valores inequívocos, mas não aceita seleção conflitante',()=>{
+    class E{
+      tagName='DIV';
+      constructor(public attrs:Record<string,string>,public nodes:E[]=[],public innerText=''){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return null}
+      querySelectorAll(){return this.nodes}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const selected=new E({'aria-selected':'true'},[],'Últimos 7 dias');
+    const control=new E({'aria-label':'Período','aria-valuetext':'Últimos 7 dias'},[selected]);
+    const root={querySelectorAll:(s:string)=>s.startsWith('[role="combobox"]')?[control]:[]};
+    expect(window.MI_DOM.collectionFilterState(root)).toEqual({signature:'período=últimos 7 dias',warnings:[]});
+    control.attrs['aria-valuetext']='Últimos 30 dias';
+    expect(window.MI_DOM.collectionFilterState(root).warnings).toContain('FILTRO_NAO_RECONHECIDO');
+  });
+});
+
+describe('feedback em tabela virtualizada',()=>{
+  it('confirma todas as linhas por ID, preserva posição e não declara sucesso com lacunas',async()=>{
+    class E{
+      scrollTop=0;clientHeight=100;scrollHeight=200;
+      constructor(public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelector(){return null}
+      querySelectorAll(){return [] as E[]}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const grid=new E({'aria-rowcount':'3'});grid.scrollTop=25;
+    const indices=()=>grid.scrollTop>=100?[2,3]:[1,2];
+    grid.querySelectorAll=()=>indices().map(i=>new E({'aria-rowindex':String(i),'data-review-id':'R'+i}));
+    const root={querySelectorAll:()=>[grid],querySelector:()=>null,body:{innerText:''}};
+    const initial={pageKind:'seller_reputation',marketplace:'shopee',accountId:'a',url:'https://seller.shopee.com.br/ratings',filterSignature:'',coverageWarnings:['TABELA_VIRTUALIZADA'],customerVoice:[{kind:'REVIEW',externalRef:'R1',text:'review 1'}]};
+    const read=()=>({...initial,customerVoice:indices().map(i=>({kind:'REVIEW',externalRef:'R'+i,text:'review '+i}))});
+    const result=await window.MI_DOM.collectVirtualizedFeedback(root,initial,read,async()=>{});
+    expect(result.customerVoice.map((row:any)=>row.externalRef)).toEqual(['R1','R2','R3']);
+    expect(result.coverageWarnings).toEqual([]);expect(grid.scrollTop).toBe(25);
+    grid.attrs['aria-rowcount']='4';
+    expect((await window.MI_DOM.collectVirtualizedFeedback(root,initial,read,async()=>{})).coverageWarnings).toContain('TABELA_VIRTUALIZADA');
+    expect(grid.scrollTop).toBe(25);
+  });
+});
+
+describe('restauração de filtro listbox',()=>{
+  it('seleciona uma opção visível e inequívoca sem aceitar opções desabilitadas',()=>{
+    class E{
+      tagName='DIV';disabled=false;
+      constructor(public attrs:Record<string,string>,public nodes:E[]=[],public innerText=''){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return null}
+      querySelectorAll(s:string){return s.includes('aria-selected')?this.nodes.filter(x=>x.attrs['aria-selected']==='true'):this.nodes}
+      contains(n:E){return this.nodes.includes(n)}
+      click(){}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const a=new E({'aria-selected':'true'},[],'Últimos 7 dias');
+    const b=new E({'aria-selected':'false'},[],'Últimos 30 dias');
+    const control=new E({'role':'listbox','aria-label':'Período'},[a,b]);
+    const region=new E({'data-testid':'filters'},[control]);
+    const root={querySelectorAll:(s:string)=>s.startsWith('[role="combobox"]')?[control]:s.startsWith('[data-testid="filters"]')?[region]:[]};
+    b.click=()=>{a.attrs['aria-selected']='false';b.attrs['aria-selected']='true'};
+    b.disabled=true;
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(false);
+    b.disabled=false;
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(true);
+    expect(window.MI_DOM.collectionFilterState(root).signature).toBe('período=últimos 30 dias');
   });
 });

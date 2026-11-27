@@ -69,6 +69,197 @@ function seedImportAccount(id: string): void {
 
 
 describe('capacidades adicionais 3.10.3', () => {
+  it('persiste mais de 200 páginas, mantém filtros e retoma somente pendências no mesmo lote lógico', async () => {
+    seedImportAccount('acct-sync-large');
+    const { batchId } = (await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-sync-large',browserRequest:true})).result as {batchId:string};
+    const url = (n:number) => 'https://vendedores.mercadolivre.com.br/pedidos?page='+n+'&start_date=2026-11-01&end_date=2026-11-30';
+    const pages = Array.from({length:205},(_,i)=>({page:i+1,url:url(i+1),pageKind:'seller_orders',ok:true}));
+    const leaseToken=(await call('sync.claimAccount',{batchId,accountId:'acct-sync-large'})).result as {leaseToken:string};
+    const payload={batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,pagesScanned:205,pagesSucceeded:205,pages,seenUrls:pages.map(p=>p.url),pendingLinks:[{url:url(206),label:'próxima'}],maxPages:205,receiptProtocol:1};
+    expect((await call('sync.accountProgress',payload)).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:pages.slice(0,204),pagesScanned:204,pagesSucceeded:204,seenUrls:pages.slice(0,204).map(p=>p.url)})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'COMPLETED',pagesScanned:205,pagesSucceeded:205})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'PARTIAL',pagesScanned:205,pagesSucceeded:205})).ok).toBe(true);
+    const retried=await call('sync.retryFailed',{batchId,browserRequest:true});
+    expect(retried.ok).toBe(true);
+    const retryId=(retried.result as {batchId:string}).batchId;
+    const info=(await call('sync.list',{batchId:retryId})).result as any;
+    expect(info.batch.logical_batch_id).toBe(batchId);
+    expect(info.accounts[0].pages_succeeded).toBe(205);
+    expect(JSON.parse(info.accounts[0].progress_json).pendingLinks[0].url).toBe(url(206));
+    expect(info.pageRuns).toHaveLength(205);
+    const compact=(await call('sync.list',{batchId:retryId,compact:true,pageLimit:100,pageOffset:100})).result as any;
+    expect(compact.totalPageRuns).toBe(205);
+    expect(compact.pageRuns).toHaveLength(100);
+    expect(compact.pageRuns[0].page_no).toBe(101);
+    expect(compact.accounts[0].progress_json).toBeUndefined();
+    expect(compact.accounts[0].pendingPages).toBe(1);
+  });
+  it('exclui outro navegador e outro lote; depois de expirar rejeita o token antigo', async () => {
+    seedImportAccount('acct-lease');
+    const first=(await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-lease'})).result as {batchId:string};
+    const second=(await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-lease'})).result as {batchId:string};
+    const req={batchId:first.batchId,accountId:'acct-lease'};
+    const claim=(await call('sync.claimAccount',req)).result as {claimed:boolean;leaseToken:string};
+    expect(claim.claimed).toBe(true);
+    expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:false});
+    expect((await call('sync.claimAccount',req)).result).toMatchObject({claimed:false});
+    expect((await call('sync.claimAccount',{...req,leaseToken:claim.leaseToken})).result).toMatchObject({claimed:true});
+    expect(JSON.stringify((await call('sync.list',{batchId:first.batchId})).result)).not.toContain('lease_hash');
+    db.db.prepare("UPDATE sync_batch_accounts SET lease_expires_at='2000-01-01T00:00:00.000Z' WHERE batch_id=?").run(first.batchId);
+    const renewed=(await call('sync.claimAccount',req)).result as {claimed:boolean;leaseToken:string};
+    expect(renewed.claimed).toBe(true);
+    expect(renewed.leaseToken).not.toBe(claim.leaseToken);
+    expect((await call('sync.completeAccount',{...req,leaseToken:claim.leaseToken,status:'FAILED'})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{...req,leaseToken:renewed.leaseToken,status:'FAILED'})).ok).toBe(true);
+    expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:true});
+  });
+
+  it('persiste detalhes de campanha e variação por conta sem somar aos totais e rejeita escopo inválido',async()=>{
+    seedImportAccount('acct-details');
+    seedImportAccount('acct-details-other');
+    const at='2026-11-27T12:00:00.000Z';
+    const base={marketplace:'mercado_livre',accountId:'acct-details',pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[]};
+    const campaign={kind:'AD_CAMPAIGN',externalId:'C1',metrics:{adSpend:12.5},evidence:{adSpend:'Investimento: R$ 12,50'}};
+    const data={...base,captureKey:'b'.repeat(64),details:[campaign]};
+    const first=await call('capture.ingest',data);
+    expect(first.ok).toBe(true);
+    expect((first.result as any).detailRowsIngested).toBe(1);
+    expect((await call('capture.ingest',data)).result).toEqual(first.result);
+    const rows=(await call('capture.details',{accountId:base.accountId})).result as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metrics.adSpend).toBe(12.5);
+    expect((await call('capture.details',{accountId:'acct-details-other'})).result).toEqual([]);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?',base.accountId)?.total).toBe(0);
+    expect((await call('capture.ingest',{...base,captureKey:'c'.repeat(64),details:[{...campaign,kind:'LISTING_VARIANT'}]})).ok).toBe(false);
+    expect((await call('capture.ingest',{...base,captureKey:'d'.repeat(64),details:[{...campaign,evidence:{}}]})).ok).toBe(false);
+    expect((await call('capture.ingest',{...base,pageKind:'seller_listings',captureKey:'e'.repeat(64),details:[campaign]})).ok).toBe(false);
+  });
+
+  it('vincula feedback somente a anúncio da mesma conta e preserva ID externo pendente',async()=>{
+    seedImportAccount('acct-voc-link');seedImportAccount('acct-voc-other');
+    const at='2026-11-27T12:00:00.000Z';
+    const base={marketplace:'mercado_livre',accountId:'acct-voc-link',pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom'};
+    expect((await call('capture.ingest',{...base,listings:[{listingId:'MLB123456',price:20}]})).ok).toBe(true);
+    const payload={accountId:base.accountId,items:[{kind:'REVIEW',text:'Produto excelente',externalRef:'R1',externalListingId:'MLB123456'},{kind:'QUESTION',text:'Tem estoque?',externalRef:'Q1',externalListingId:'MLB999999'}]};
+    expect((await call('voc.ingestBatch',payload)).result).toMatchObject({linked:1,unresolved:1});
+    const rows=(await call('voc.items',{accountId:base.accountId})).result as any[];
+    expect(rows.find(row=>row.kind==='REVIEW').linked_external_id).toBe('MLB123456');
+    expect(rows.find(row=>row.kind==='QUESTION').listing_id).toBeNull();
+    expect((await call('voc.items',{accountId:'acct-voc-other'})).result).toEqual([]);
+    expect((await call('capture.ingest',{...base,listings:[{listingId:'MLB999999',price:10}]})).ok).toBe(true);
+    expect(((await call('voc.items',{accountId:base.accountId})).result as any[]).find(row=>row.kind==='QUESTION').linked_external_id).toBe('MLB999999');
+    expect((await call('voc.ingestBatch',{accountId:base.accountId,items:[{...payload.items[0],externalListingId:'MLB999999'}]})).ok).toBe(false);
+  });
+
+  it('armazena taxas de reputação sem convertê-las em números de pedidos',async()=>{
+    seedImportAccount('acct-reputation');
+    const at='2026-11-27T12:00:00.000Z';
+    const payload={marketplace:'mercado_livre',accountId:'acct-reputation',pageKind:'seller_reputation',url:'https://vendedores.mercadolivre.com.br/reputacao',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',accountMetrics:{complaintRatePct:1.5,lateShipmentRatePct:2}};
+    expect((await call('capture.ingest',payload)).result).toMatchObject({ok:true,accountSnapshotsIngested:1});
+    const rows=(await call('capture.accountSnapshots',{accountId:payload.accountId})).result as any[];
+    expect(rows[0].metrics).toEqual({complaintRatePct:1.5,lateShipmentRatePct:2});
+    expect((await call('capture.ingest',{...payload,accountMetrics:{complaintRatePct:101}})).result).toMatchObject({ok:false});
+  });
+
+  it('persiste gráfico isolado com evidência e conta, sem criar total de loja',async()=>{
+    seedImportAccount('acct-chart');seedImportAccount('acct-chart-other');
+    const at='2026-11-27T12:00:00.000Z';
+    const point={chartId:'sales',chartTitle:'Vendas por dia',series:'Receita (R$)',dimension:'2026-11-26',value:100.5,unit:'BRL',raw:'R$ 100,50'};
+    const payload={marketplace:'mercado_livre',accountId:'acct-chart',pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/resumo',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',captureKey:'c'.repeat(64),chartPoints:[point]};
+    const result=await call('capture.ingest',payload);
+    expect(result.result).toMatchObject({ok:true,chartPointsIngested:1,accountSnapshotsIngested:0});
+    expect((await call('capture.ingest',payload)).result).toEqual(result.result);
+    expect((await call('capture.chartPoints',{accountId:payload.accountId})).result).toEqual([expect.objectContaining({chart_id:'sales',dimension:'2026-11-26',value:100.5,raw_text:'R$ 100,50'})]);
+    expect((await call('capture.chartPoints',{accountId:'acct-chart-other'})).result).toEqual([]);
+    expect((await call('capture.ingest',{...payload,captureKey:'d'.repeat(64),chartPoints:[point,point]})).ok).toBe(false);
+  });
+
+  it('persiste páginas SPA na mesma URL apenas no lote avançado e preserva identidade ao retomar',async()=>{
+    seedImportAccount('acct-spa');
+    const req={scope:'ACCOUNT',accountId:'acct-spa',browserRequest:true,collectionMode:'ADVANCED_LISTINGS'};
+    expect((await call('sync.createAll',{...req,scope:'ALL_ACTIVE_ACCOUNTS'})).ok).toBe(false);
+    const {batchId}=(await call('sync.createAll',req)).result as {batchId:string};
+    const {leaseToken}=(await call('sync.claimAccount',{batchId,accountId:req.accountId})).result as {leaseToken:string};
+    const url='https://vendedores.mercadolivre.com.br/anuncios';
+    const pages=[1,2].map(n=>({page:n,pageKind:'seller_listings',url,spaPage:n,listingFingerprint:String(n).repeat(64),listingIds:['MLB12345'+n],filterSignature:'',ok:true}));
+    const payload={batchId,accountId:req.accountId,leaseToken,pagesScanned:2,pagesSucceeded:2,pages,seenUrls:[url],pendingLinks:[{url,label:'retomada'}],maxPages:5,unsupportedLinks:true};
+    expect((await call('sync.accountProgress',payload)).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:[pages[0],{...pages[1],listingFingerprint:'a'.repeat(64)}]})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:req.accountId,leaseToken,status:'PARTIAL',pagesScanned:2,pagesSucceeded:2})).ok).toBe(true);
+    const retry=(await call('sync.retryFailed',{batchId,browserRequest:true})).result as {batchId:string};
+    const info=(await call('sync.list',{batchId:retry.batchId})).result as any;
+    expect(info.batch.collection_mode).toBe('ADVANCED_LISTINGS');
+    expect(info.pageRuns.map((page:any)=>page.spa_page)).toEqual([1,2]);
+    expect(JSON.parse(info.accounts[0].progress_json).pages[1].listingIds).toEqual(['MLB123452']);
+  });
+
+  it('aprende somente rotas estruturais de contas verificadas, com isolamento e exclusão',async()=>{
+    seedImportAccount('acct-learn-a');seedImportAccount('acct-learn-b');
+    const accountId='acct-learn-a',origin='https://vendedores.mercadolivre.com.br';
+    const payload={accountId,origin,route:'/reputacao',pageKind:'seller_reputation'};
+    expect((await call('navigation.observe',payload)).result).toEqual({ok:true});
+    expect((await call('navigation.observe',payload)).result).toEqual({ok:true});
+    expect((await call('navigation.list',{accountId,origin})).result).toEqual([expect.objectContaining({route:'/reputacao',observations:2})]);
+    expect((await call('navigation.list',{accountId:'acct-learn-b',origin})).result).toEqual([]);
+    for(const invalid of [{...payload,route:'/reputacao/editar'},{...payload,route:'/reputacao?token=secret'},{...payload,route:'/reputacao/cliente'},{...payload,origin:'https://example.com'},{...payload,pageKind:'seller_listing_edit'},{...payload,rawText:'secret'}]){
+      expect((await call('navigation.observe',invalid)).ok).toBe(false);
+    }
+    expect((await call('navigation.observe',{...payload,route:'/orders',pageKind:'seller_orders',fromRoute:'/reputacao'})).ok).toBe(true);
+    expect((await call('navigation.observe',{...payload,route:'/stock',pageKind:'seller_inventory',fromRoute:'/unknown'})).ok).toBe(false);
+    expect((await call('navigation.graph',{accountId,origin})).result).toEqual([expect.objectContaining({from_route:'/reputacao',to_route:'/orders',observations:1})]);
+    expect((await call('navigation.graph',{accountId:'acct-learn-b',origin})).result).toEqual([]);
+    expect((await call('navigation.observe',{...payload,fromRoute:'/reputacao',actionKind:'SPA_NEXT'})).ok).toBe(true);
+    expect((await call('navigation.observe',{...payload,fromRoute:'/orders',actionKind:'FILTER_CHANGE'})).ok).toBe(false);
+    const summary=(await call('navigation.summary',{accountId})).result as any;
+    expect(summary.actions).toEqual([expect.objectContaining({route:'/reputacao',action_kind:'SPA_NEXT',observations:1})]);
+    expect(summary.routes).toHaveLength(2);expect(summary.transitions).toHaveLength(1);
+    expect((await call('navigation.clear',{accountId,origin})).result).toEqual({ok:true});
+    expect((await call('navigation.graph',{accountId,origin})).result).toEqual([]);
+    expect((await call('navigation.list',{accountId,origin})).result).toEqual([]);
+  });
+
+  it('persiste identidade SPA geral e rejeita regressão ou troca de fingerprint',async()=>{
+    seedImportAccount('acct-spa-general');
+    const accountId='acct-spa-general';
+    const {batchId}=(await call('sync.createAll',{scope:'ACCOUNT',accountId,browserRequest:true})).result as {batchId:string};
+    const {leaseToken}=(await call('sync.claimAccount',{batchId,accountId})).result as {leaseToken:string};
+    const url='https://vendedores.mercadolivre.com.br/reputacao';
+    const pages=[1,2].map(n=>({page:n,pageKind:'seller_reputation',url,spaPage:n,spaFingerprint:String(n).repeat(64),filterSignature:'',ok:true}));
+    const payload={batchId,accountId,leaseToken,pagesScanned:2,pagesSucceeded:2,pages,seenUrls:[url],pendingLinks:[],maxPages:5};
+    expect((await call('sync.accountProgress',payload)).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:[pages[0],{...pages[1],spaFingerprint:'a'.repeat(64)}]})).ok).toBe(false);
+    expect((await call('sync.accountProgress',{...payload,pages:[pages[0],{...pages[1],spaFingerprint:undefined}]})).ok).toBe(false);
+    const info=(await call('sync.list',{batchId})).result as any;
+    expect(info.pageRuns.map((p:any)=>p.spa_page)).toEqual([1,2]);
+    expect(JSON.parse(info.accounts[0].progress_json).pages[1].spaFingerprint).toBe('2'.repeat(64));
+  });
+
+  it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
+    seedImportAccount('acct-receipt');
+    const at='2026-11-27T12:00:00.000Z';
+    const payload={captureKey:'a'.repeat(64),marketplace:'mercado_livre',accountId:'acct-receipt',pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/resumo',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],accountMetrics:{orders:12,gmv:200}};
+    const first=await call('capture.ingest',payload);
+    expect(first.ok).toBe(true);
+    expect((first.result as {ok:boolean}).ok).toBe(true);
+    expect((await call('capture.ingest',{...payload,collectedAt:'2026-11-27T12:01:00.000Z'})).result).toEqual(first.result);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?','acct-receipt')?.total).toBe(1);
+    expect((await call('capture.ingest',{...payload,url:'https://vendedores.mercadolivre.com.br/pedidos'})).ok).toBe(false);
+    expect((await call('capture.ingest',{...payload,marketplace:'shopee'})).ok).toBe(false);
+    const filtered={...payload,captureKey:'f'.repeat(64),filterSignature:'period=last 7 days',collectedAt:'2026-11-27T12:03:00.000Z'};
+    const filteredResult=await call('capture.ingest',filtered);
+    expect(filteredResult.ok).toBe(true);
+    expect((await call('capture.ingest',filtered)).result).toEqual(filteredResult.result);
+    expect((await call('capture.ingest',{...filtered,filterSignature:'period=last 30 days'})).ok).toBe(false);
+    expect((await call('capture.ingest',{...payload,filterSignature:'period=last 7 days'})).ok).toBe(false);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?','acct-receipt')?.total).toBe(2);
+    const voice={captureKey:'a'.repeat(64),sourceUrl:payload.url,accountId:payload.accountId,items:[{kind:'QUESTION',text:'O produto está disponível?'}]};
+    expect((await call('voc.ingestBatch',voice)).ok).toBe(true);
+    expect((await call('voc.ingestBatch',voice)).ok).toBe(true);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM customer_voice_items WHERE account_id=?','acct-receipt')?.total).toBe(1);
+    expect((await call('voc.ingestBatch',{...voice,filterSignature:'period=last 30 days'})).ok).toBe(false);
+  });
+
   it('entrega à extensão apenas lotes solicitados pelo dashboard e protege a retomada', async () => {
     seedImportAccount('acct-browser-request');
     const payload = { scope: 'ACCOUNT', accountId: 'acct-browser-request' };
@@ -83,14 +274,17 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(attempts.map((result) => result.result)).toEqual([
       { claimed: true, batchId, recoveredStaleLease: false }, { claimed: false },
     ]);
+    const lease = (await call('sync.claimAccount',{batchId,accountId:payload.accountId})).result as {claimed:boolean;leaseToken:string};
+    expect(lease.claimed).toBe(true);
+    expect((await call('sync.claimAccount',{batchId,accountId:payload.accountId})).result).toMatchObject({claimed:false});
     const firstPage = 'https://vendedores.mercadolivre.com.br/resumo';
     const pending = 'https://vendedores.mercadolivre.com.br/vendas';
     expect((await call('sync.accountProgress', {
-      batchId, accountId: payload.accountId, pagesScanned: 1, pagesSucceeded: 1,
+      batchId, accountId: payload.accountId, leaseToken:lease.leaseToken, pagesScanned: 1, pagesSucceeded: 1,
       pages: [{ page: 1, pageKind: 'seller_dashboard', url: firstPage, ok: true }],
       pendingLinks: [{ url: pending, label: 'Vendas' }], seenUrls: [firstPage], maxPages: 8,
     })).ok).toBe(true);
-    const premature = await call('sync.completeAccount', { batchId, accountId: payload.accountId, status: 'COMPLETED', pagesScanned: 1, pagesSucceeded: 1 });
+    const premature = await call('sync.completeAccount', { batchId, accountId: payload.accountId, leaseToken:lease.leaseToken, status: 'COMPLETED', pagesScanned: 1, pagesSucceeded: 1 });
     expect(premature.error?.message).toContain('páginas pendentes');
     db.db.prepare("UPDATE sync_batches SET browser_claimed_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(batchId);
     expect((await call('sync.claimBrowserRequest', {})).result).toEqual({ claimed: false });
@@ -111,9 +305,14 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(created.ok).toBe(true);
     const result = created.result as { batchId: string; accounts: Array<{ account_id: string; marketplace: string }> };
     expect(result.accounts.map((a) => a.marketplace)).toEqual(['mercado_livre','shopee']);
-    const first = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-ml', status: 'COMPLETED', pagesScanned: 2, pagesSucceeded: 2 });
+    const mlClaim=(await call('sync.claimAccount',{batchId:result.batchId,accountId:'acct-sync-ml'})).result as {leaseToken:string};
+    const mlPages=[1,2].map(page=>({page,pageKind:'seller_orders',url:'https://vendedores.mercadolivre.com.br/pedidos?page='+page,ok:true}));
+    expect((await call('sync.completeAccount',{batchId:result.batchId,accountId:'acct-sync-ml',leaseToken:mlClaim.leaseToken,status:'COMPLETED',pagesScanned:2,pagesSucceeded:2})).ok).toBe(false);
+    expect((await call('sync.accountProgress',{batchId:result.batchId,accountId:'acct-sync-ml',leaseToken:mlClaim.leaseToken,pagesScanned:2,pagesSucceeded:2,pages:mlPages,seenUrls:mlPages.map(p=>p.url),pendingLinks:[],maxPages:50})).ok).toBe(true);
+    const first = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-ml', leaseToken:mlClaim.leaseToken, status: 'COMPLETED', pagesScanned: 2, pagesSucceeded: 2 });
     expect(first.ok).toBe(true);
-    const second = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-shopee', status: 'SKIPPED', pagesScanned: 0, pagesSucceeded: 0, error: 'aba não aberta' });
+    const shClaim=(await call('sync.claimAccount',{batchId:result.batchId,accountId:'acct-sync-shopee'})).result as {leaseToken:string};
+    const second = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-shopee', leaseToken:shClaim.leaseToken, status: 'SKIPPED', pagesScanned: 0, pagesSucceeded: 0, error: 'aba não aberta' });
     expect((second.result as { batchStatus: string }).batchStatus).toBe('PARTIAL');
   });
 
@@ -326,7 +525,7 @@ describe('captura de métricas agregadas da conta', () => {
       url: 'https://www.mercadolivre.com.br/anuncios/publicidade', sourceClass: 'A_PRIMARY_UI',
       referenceAt: '2026-11-26T13:00:00.000Z', collectedAt: '2026-11-26T13:00:00.000Z', method: 'content_script_dom', listings: [],
     });
-    expect(result.result).toMatchObject({ ok: false, errors: [expect.stringContaining('captura sem anúncios nem métricas de conta')] });
+    expect(result.result).toMatchObject({ ok: false, errors: [expect.stringContaining('captura sem anúncios, detalhes nem métricas de conta')] });
   });
 });
 
@@ -501,6 +700,14 @@ describe('banco local', () => {
       });
     });
     expect(db.rows<{ value: string }>('SELECT value FROM nested_tx_probe')).toEqual([{ value: 'commit' }]);
+  });
+
+  it('recupera a profundidade transacional após falha de COMMIT', () => {
+    db.db.exec('CREATE TABLE tx_parent (id TEXT PRIMARY KEY); CREATE TABLE tx_child (id TEXT REFERENCES tx_parent(id) DEFERRABLE INITIALLY DEFERRED)');
+    expect(()=>db.transaction(()=>{db.db.prepare('INSERT INTO tx_child VALUES (?)').run('missing')})).toThrow();
+    db.transaction(()=>{db.db.prepare('INSERT INTO tx_parent VALUES (?)').run('valid')});
+    expect(db.row('SELECT id FROM tx_parent')).toMatchObject({id:'valid'});
+    expect(db.rows('SELECT id FROM tx_child')).toHaveLength(0);
   });
 
   it('gera backup verificável', () => {

@@ -143,7 +143,7 @@ async function capturePages() {
   button.disabled = true;
   button.textContent = 'Coletando páginas…';
   const hint = $('hint');
-  hint.textContent = 'A coleta paginada abre uma aba temporária em segundo plano. Ela para em CAPTCHA/login e nunca envia ou publica alterações.';
+  hint.textContent = 'A coleta usa uma aba temporária, controles reconhecidos de paginação e rolagem de tabelas indexadas. Ela para em CAPTCHA/login e nunca publica alterações.';
   const res = await call('capture.scanListingPages', { maxPages: 5 });
   button.disabled = false;
   button.textContent = 'Coletar até 5 páginas de anúncios';
@@ -152,18 +152,18 @@ async function capturePages() {
     return;
   }
   const r = res.result;
-  hint.textContent = `${r.pagesSucceeded}/${r.pagesScanned} páginas capturadas · ${r.totalListings} anúncios encontrados. Parada: ${r.stoppedReason}`;
+  hint.textContent = `${r.complete?'Fim reconhecido':'Coleta parcial'} · ${r.pagesSucceeded}/${r.pagesScanned} páginas capturadas · ${r.totalListings} anúncios encontrados. Parada: ${r.stoppedReason}`;
 }
 
 async function captureAreas() {
-  if (!window.confirm('Iniciar leitura das áreas do vendedor que estiverem ligadas por links visíveis? A varredura permanece no mesmo domínio, limita-se a 8 páginas e para em login/CAPTCHA. Nenhuma alteração será publicada.')) return;
+  if (!window.confirm('Iniciar leitura das áreas do vendedor que estiverem ligadas por links visíveis? A varredura permanece no mesmo domínio, limita-se inicialmente a 50 páginas, com retomada pelo histórico do lote e para em login/CAPTCHA. Nenhuma alteração será publicada.')) return;
   const button = $('capture-areas');
   button.disabled = true;
   button.textContent = 'Varrendo áreas…';
   const hint = $('hint');
   hint.textContent = 'Lendo somente links visíveis e páginas autorizadas do mesmo marketplace. A operação para em qualquer tela de login ou verificação.';
   try {
-    const res = await call('capture.scanAuthorizedAreas', { maxPages: 8 });
+    const res = await call('capture.scanAuthorizedAreas', { maxPages: 50 });
     if (!res?.ok || !res.result) {
       hint.textContent = `Falha na varredura: ${res?.error?.message ?? 'resposta inválida'}`;
       return;
@@ -196,14 +196,14 @@ async function syncAllAccounts() {
       createPayload.accountId = $('sync-account').value;
       if (!createPayload.accountId) { out.textContent = 'Selecione uma conta ativa para sincronizar.'; return; }
     }
-    const created = await call('sync.createAll', createPayload);
+    const created = await call('sync.createAll', { ...createPayload, browserRequest:true });
     if (!created?.ok || !created.result?.batchId) {
       out.textContent = `Não foi possível criar o lote: ${created?.error?.message ?? 'resposta inválida'}`;
       return;
     }
     const { batchId, accounts } = created.result;
     button.textContent = 'Lendo abas de vendedor…';
-    const scanned = await call('capture.syncAllOpenTabs', { batchId, maxPages: 8 });
+    const scanned = await call('capture.syncAllOpenTabs', { batchId, maxPages: 50 });
     if (!scanned?.ok || !scanned.result) {
       out.textContent = `Lote ${batchId}: criado, mas a extensão não concluiu a varredura: ${scanned?.error?.message ?? 'sem resultado'}`;
       return;
@@ -402,9 +402,9 @@ async function loadSyncAccounts() {
 async function retryFailedSync(batchId, scheduleId, button) {
   button.disabled = true; button.textContent = 'Preparando repetição…';
   try {
-    const created = await call('sync.retryFailed', { batchId });
+    const created = await call('sync.retryFailed', { batchId, browserRequest:true });
     if (!created?.ok || !created.result?.batchId) { $('sync-out').textContent = `Não foi possível repetir: ${created?.error?.message ?? 'erro'}`; return; }
-    const scanned = await call('capture.syncAllOpenTabs', { batchId: created.result.batchId, maxPages: 8 });
+    const scanned = await call('capture.syncAllOpenTabs', { batchId: created.result.batchId, maxPages: 50 });
     if (!scanned?.ok || !scanned.result) { $('sync-out').textContent = `Novo lote ${created.result.batchId} criado; a extensão não concluiu a coleta: ${scanned?.error?.message ?? 'erro'}`; return; }
     const outcomes = scanned.result.outcomes ?? [];
     const completed = outcomes.filter((item) => item.status === 'COMPLETED').length;
@@ -484,7 +484,66 @@ chrome.runtime.onMessage.addListener((message) => {
   out.textContent = `${message.message || 'Coleta em andamento.'} ${total ? `(${current}/${total})` : ''} ${label}${message.pagesScanned !== undefined ? `· páginas ${message.pagesSucceeded ?? 0}/${message.pagesScanned}` : ''}${message.currentPage ? ` · atual ${message.currentPage}` : ''}${message.pendingPages ? ` · pendentes ${message.pendingPages}` : ''}`.trim();
 });
 
+let learningSession=null, learningTimer=null, learningBusy=false;
+function stopLearning(message='Aprendizado desligado.'){
+  learningSession=null;clearInterval(learningTimer);learningTimer=null;
+  $('learning-start').disabled=false;$('learning-stop').disabled=true;
+  $('learning-status').textContent=message;
+}
+async function learningTick(){
+  const session=learningSession;
+  if(!session||learningBusy)return;
+  learningBusy=true;
+  try{
+    const res=await call('learning.context');
+    const ctx=res?.result;
+    if(learningSession!==session)return;
+    if(!res?.ok||!ctx||ctx.tabId!==session.tabId||ctx.accountId!==session.accountId||ctx.origin!==session.origin){stopLearning('Aprendizado pausado: aba, loja ou área mudou.');return;}
+    if(ctx.route===session.lastRoute&&ctx.pageKind===session.lastKind&&ctx.spaPage===session.previous?.spaPage&&ctx.filterSignature===session.previous?.filterSignature)return;
+    const saved=await call('learning.observe',{...session,route:ctx.route,pageKind:ctx.pageKind,spaPage:ctx.spaPage,filterSignature:ctx.filterSignature,fromRoute:session.lastRoute??undefined,previous:session.previous});
+    if(learningSession!==session)return;
+    if(!saved?.ok||saved.result?.ok!==true){stopLearning('Aprendizado pausado: '+(saved?.error?.message??'rota não reconhecida'));return;}
+    session.lastRoute=ctx.route;session.lastKind=ctx.pageKind;session.previous=ctx;
+    $('learning-status').textContent='Página demonstrada: '+ctx.pageKind+'. Continue navegando na mesma aba.';
+  }finally{learningBusy=false;}
+}
+async function learningAction(action){
+  if(learningBusy)return;
+  if(action==='start'){
+    if(learningSession)return;
+    if(!window.confirm('Registrar rotas e mudanças de paginação e filtros desta loja enquanto o painel estiver aberto? Os valores dos filtros não serão armazenados.'))return;
+  }
+  if(action==='clear'&&!window.confirm('Apagar a memória de navegação desta loja e origem?'))return;
+  if(action!=='start'&&learningSession)stopLearning();
+  const res=await call('learning.context'),ctx=res?.result;
+  if(!res?.ok||!ctx){$('learning-status').textContent=res?.error?.message??'Abra uma área de vendedor reconhecida.';return;}
+  if(action==='start'){
+    learningSession={tabId:ctx.tabId,accountId:ctx.accountId,origin:ctx.origin,lastRoute:null,lastKind:null};
+    $('learning-start').disabled=true;$('learning-stop').disabled=false;
+    $('learning-status').textContent='Aprendizado ativo.';
+    learningTimer=setInterval(()=>void learningTick(),2500);
+    await learningTick();return;
+  }
+  const payload={tabId:ctx.tabId,accountId:ctx.accountId,origin:ctx.origin,route:ctx.route,pageKind:ctx.pageKind};
+  const out=await call('learning.'+action,payload);
+  if(!out?.ok){$('learning-status').textContent=out?.error?.message??'Operação recusada.';return;}
+  if(action==='list'){
+    const list=$('learning-routes');list.replaceChildren();
+    for(const route of Array.isArray(out.result)?out.result:[]){
+      const li=document.createElement('li');li.textContent=route.page_kind+' · '+route.route+' · '+route.observations+' demonstração(ões)';list.appendChild(li);
+    }
+    $('learning-status').textContent=list.children.length+' rotas conhecidas nesta loja.';
+  }else{
+    $('learning-routes').replaceChildren();
+    $('learning-status').textContent=action==='clear'?'Memória apagada.':'Página demonstrada e salva.';
+  }
+}
 document.addEventListener('DOMContentLoaded', async () => {
+  $('learning-start').addEventListener('click',()=>void learningAction('start'));
+  $('learning-stop').addEventListener('click',()=>stopLearning());
+  $('learning-observe').addEventListener('click',()=>void learningAction('observe'));
+  $('learning-list').addEventListener('click',()=>void learningAction('list'));
+  $('learning-clear').addEventListener('click',()=>void learningAction('clear'));
   $('capture').addEventListener('click', () => void capture());
   $('capture-pages').addEventListener('click', () => void capturePages());
   $('capture-areas').addEventListener('click', () => void captureAreas());

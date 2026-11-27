@@ -12,7 +12,7 @@
         <span class="dot" id="status-dot" aria-hidden="true"></span>
         <strong>Marketplace Intelligence</strong>
       </div>
-      <span class="version" id="version">v3.11.0</span>
+      <span class="version" id="version">v3.12.0</span>
     </header>
 
     <section class="card">
@@ -30,6 +30,20 @@
         <button id="flush">Enviar fila</button>
       </div>
       <p class="hint" id="hint">A captura lê apenas o que está visível na sua sessão. Nada de cookies, tokens ou endpoints privados.</p>
+    </section>
+
+    <section class="card">
+      <h2>Inteligência de navegação</h2>
+      <p class="hint">Aprenda rotas de leitura enquanto você navega na mesma aba e loja. Não grava cliques, senhas, texto de clientes ou parâmetros de URL.</p>
+      <div class="actions">
+        <button id="learning-start">Iniciar aprendizado</button>
+        <button id="learning-stop" disabled>Parar aprendizado</button>
+        <button id="learning-observe">Ensinar página atual</button>
+        <button id="learning-list">Consultar memória</button>
+        <button id="learning-clear">Apagar memória desta loja</button>
+      </div>
+      <p class="hint" id="learning-status" role="status">Aprendizado desligado.</p>
+      <ul id="learning-routes"></ul>
     </section>
 
     <section class="card">

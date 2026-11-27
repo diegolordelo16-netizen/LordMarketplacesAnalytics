@@ -17,6 +17,8 @@ export interface IngestResult {
   ok: boolean;
   listingsIngested: number;
   accountSnapshotsIngested: number;
+  detailRowsIngested: number;
+  chartPointsIngested:number;
   quality: ReturnType<typeof buildQualityReport>;
   errors: string[];
 }
@@ -32,6 +34,8 @@ export class CaptureService {
         ok: false,
         listingsIngested: 0,
         accountSnapshotsIngested: 0,
+        detailRowsIngested:0,
+        chartPointsIngested:0,
         quality: buildQualityReport([], 0),
         errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
       };
@@ -40,6 +44,7 @@ export class CaptureService {
     const issues: DataQualityIssue[] = [];
     let written = 0;
     let accountSnapshotsWritten = 0;
+    let detailRowsWritten=0,chartPointsWritten=0;
 
     this.db.transaction(() => {
       // A conta precisa existir, estar ativa e pertencer ao marketplace declarado.
@@ -89,7 +94,7 @@ export class CaptureService {
           data.collectedAt,
           new Date().toISOString(),
           'OK',
-          data.listings.length + (data.accountMetrics ? 1 : 0),
+          data.listings.length + data.details.length + data.chartPoints.length + (data.accountMetrics ? 1 : 0),
           0,
           data.method,
         );
@@ -141,10 +146,17 @@ export class CaptureService {
             .run(skuId, new Date().toISOString(), listingId, data.accountId);
         }
 
+        this.db.db.prepare('UPDATE customer_voice_items SET listing_id=? WHERE account_id=? AND external_listing_id=? AND listing_id IS NULL').run(listingId,data.accountId,listing.listingId);
+
         // Snapshot é imutável: histórico nunca é sobrescrito (§8).
         const snapshotId = randomUUID();
         const metrics = {
           price: listing.price,
+          originalPrice:listing.originalPrice,
+          promotionDiscountPct:listing.promotionDiscountPct,
+          conversionRatePct:listing.conversionRatePct,
+          adConversionRatePct:listing.adConversionRatePct,
+          organicClicks:listing.organicClicks,
           visits: listing.visits,
           orders: listing.orders,
           units: listing.units,
@@ -263,9 +275,21 @@ export class CaptureService {
         }
       }
 
-      this.db.db
-        .prepare('UPDATE data_source_runs SET records_written = ? WHERE id = ?')
-        .run(written + accountSnapshotsWritten, runId);
+      const insertDetail=this.db.db.prepare(`INSERT OR IGNORE INTO capture_detail_snapshots
+        (id,account_id,marketplace,kind,external_id,parent_external_id,label,metrics_json,evidence_json,context_json,page_url,captured_at,reference_at,source_class,run_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for(const detail of data.details){
+        const result=insertDetail.run(randomUUID(),data.accountId,data.marketplace,detail.kind,detail.externalId,detail.parentExternalId??'',detail.label??null,JSON.stringify(detail.metrics),JSON.stringify(detail.evidence),JSON.stringify(data.evidence??{}),data.url,data.collectedAt,data.referenceAt,data.sourceClass,runId);
+        detailRowsWritten+=Number(result.changes);
+      }
+      const insertPoint=this.db.db.prepare(`INSERT OR IGNORE INTO capture_chart_points
+        (id,account_id,marketplace,chart_id,chart_title,series,dimension,value,unit,raw_text,page_url,page_kind,filter_signature,captured_at,source_class,run_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for(const point of data.chartPoints){
+        const result=insertPoint.run(randomUUID(),data.accountId,data.marketplace,point.chartId,point.chartTitle,point.series,point.dimension,point.value,point.unit,point.raw,data.url,data.pageKind,data.filterSignature??'',data.collectedAt,data.sourceClass,runId);
+        chartPointsWritten+=Number(result.changes);
+      }
+      this.db.db.prepare('UPDATE data_source_runs SET records_written = ? WHERE id = ?').run(written + accountSnapshotsWritten+detailRowsWritten+chartPointsWritten, runId);
     });
 
     for (const issue of issues) {
@@ -276,11 +300,13 @@ export class CaptureService {
         .run(new Date().toISOString(), data.accountId, issue.kind, issue.severity, issue.field, issue.message);
     }
 
-    const quality = buildQualityReport(issues, data.listings.length + accountSnapshotsWritten);
+    const quality = buildQualityReport(issues, data.listings.length + accountSnapshotsWritten+detailRowsWritten+chartPointsWritten);
     return {
       ok: quality.criticalCount === 0,
       listingsIngested: written,
       accountSnapshotsIngested: accountSnapshotsWritten,
+      detailRowsIngested:detailRowsWritten,
+      chartPointsIngested:chartPointsWritten,
       quality,
       errors: issues.map((i) => i.message),
     };

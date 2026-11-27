@@ -272,19 +272,28 @@ async function viewExec() {
 // ------------------------------------------------------------------ ANÚNCIOS / CAPTURA
 async function viewListings() {
   const snaps = await api('capture.snapshot', state.accountId ? { accountId: state.accountId } : {});
+  const accountSnaps = state.accountId ? await api('capture.accountSnapshots',{accountId:state.accountId,limit:30}) : [];
+  const details=state.accountId?await api('capture.details',{accountId:state.accountId,limit:100}):[];
+  const chartPoints=state.accountId?await api('capture.chartPoints',{accountId:state.accountId,limit:100}):[];
   const listings = new Map();
   for (const snapshot of snaps) if (!listings.has(snapshot.listing_id)) listings.set(snapshot.listing_id, snapshot);
   return card('Snapshots capturados', table(
-    ['Marketplace', 'Anúncio', 'Preço capturado', 'Quando', 'Origem', 'Qualidade'],
+    ['Marketplace', 'Anúncio', 'Preço capturado', 'Promoção observada', 'Conversão observada', 'Quando', 'Origem', 'Qualidade'],
     (snaps || []).slice(0, 100).map((s) => `<tr>
       <td>${esc(s.marketplace || '—')}</td>
       <td>${esc(s.external_id || s.listing_id || '—')}${s.title ? `<div class="muted small">${esc(s.title)}</div>` : ''}</td>
       <td>${typeof s.metrics?.price === 'number' ? brl(Math.round(s.metrics.price * 100)) : '—'}</td>
+      <td>${typeof s.metrics?.originalPrice==='number'?brl(Math.round(s.metrics.originalPrice*100)):'—'}${typeof s.metrics?.promotionDiscountPct==='number'?` · ${num(s.metrics.promotionDiscountPct)}%` : ''}</td>
+      <td>${typeof s.metrics?.conversionRatePct==='number'?`${num(s.metrics.conversionRatePct)}%`:'—'}</td>
       <td>${dt(s.captured_at || s.created_at)}</td>
       <td>${esc(s.source_class || '—')}</td>
       <td>${qualityBadge(s.quality || s.status)}</td></tr>`),
     'Nenhum snapshot. Use a extensão na página do anúncio para capturar.')
     + '<div class="actions"><button class="btn" data-act="nav" data-view="browserSync">Abrir Extensão & Coletas</button></div>')
+  + card('Indicadores observados da loja',table(['Área','Conversão exibida','Conversão Ads exibida','Cliques orgânicos','Período/filtros observados','Capturado em'],(accountSnaps||[]).map(s=>`<tr><td>${esc(s.page_kind)}</td><td>${typeof s.metrics?.conversionRatePct==='number'?num(s.metrics.conversionRatePct)+'%':'—'}</td><td>${typeof s.metrics?.adConversionRatePct==='number'?num(s.metrics.adConversionRatePct)+'%':'—'}</td><td>${typeof s.metrics?.organicClicks==='number'?num(s.metrics.organicClicks):'—'}</td><td>${esc(s.evidence?.filtersAndPeriod||'não informado')}</td><td>${dt(s.captured_at)}</td></tr>`),'Selecione uma loja com capturas. Valores ausentes não são zeros.')+'<p class="muted small">Taxas exibidas na origem; não substituem KPIs calculados nem comprovam períodos compatíveis.</p>')
+  + card('Reputação observada da loja',table(['Indicador','Valor','Evidência','Data'],(accountSnaps||[]).filter(s=>s.page_kind==='seller_reputation').flatMap(s=>Object.entries({"sellerCancellationRatePct":"Cancelamento pelo vendedor","complaintRatePct":"Reclamações","onTimeShippingRatePct":"Envio no prazo","responseRatePct":"Resposta","orderDefectRatePct":"Pedidos com defeito","lateShipmentRatePct":"Envios atrasados","validTrackingRatePct":"Rastreio válido","nonFulfillmentRatePct":"Não cumprimento","chatResponseRatePct":"Resposta do chat","mediatedComplaintRatePct":"Reclamações mediadas"}).filter(([key])=>typeof s.metrics?.[key]==='number').map(([key,label])=>`<tr><td>${esc(label)}</td><td>${num(s.metrics[key])}%</td><td>${esc(s.evidence?.[key]||'—')}</td><td>${dt(s.captured_at)}</td></tr>`)),'Nenhum indicador explícito de reputação capturado.'))
+  + card('Campanhas, anúncios Ads, variações e armazéns capturados',table(['Tipo','Identificador','Entidade pai','Indicadores observados','Origem / filtros','Capturado em'],(details||[]).map(s=>`<tr><td>${esc(s.kind)}</td><td>${esc(s.external_id)}${s.label?`<div class="muted small">${esc(s.label)}</div>`:''}</td><td>${esc(s.parent_external_id||'—')}</td><td>${Object.entries(s.metrics||{}).map(([key,value])=>`${esc(key)}: ${esc(value)}`).join('<br>')}</td><td>${esc(s.context?.filtersAndPeriod||'período não informado')}</td><td>${dt(s.captured_at)}</td></tr>`),'Nenhum detalhe com identidade e dados reconhecidos. Abra uma página correspondente do vendedor.')+'<p class="muted small">Dados capturados por entidade; não são somados aos totais da loja.</p>')
+  + card('Dados textuais de gráficos',table(['Gráfico','Série','Dimensão','Valor observado','Unidade','Filtros','Capturado em'],(chartPoints||[]).map(p=>`<tr><td>${esc(p.chart_title)}</td><td>${esc(p.series)}</td><td>${esc(p.dimension)}</td><td>${esc(p.raw_text)}</td><td>${esc(p.unit==='UNSPECIFIED'?'Não especificada':p.unit)}</td><td>${esc(p.filter_signature||'—')}</td><td>${dt(p.captured_at)}</td></tr>`),'Nenhuma série textual reconhecida. Gráficos somente visuais não são estimados.')+'<p class="muted small">Pontos observados em tabelas visíveis associadas aos gráficos, sem soma automática aos KPIs.</p>')
   + card('Detalhe de KPI por anúncio', `
     <div class="form-row">
       <label class="grow">Anúncio <select id="kpi-listing-id">${listings.size ? [...listings.values()].map((item) =>
@@ -548,6 +557,7 @@ async function viewPricing() {
 // ------------------------------------------------------------------ VOZ DO CLIENTE
 async function viewVoc() {
   const topics = state.accountId ? await api('voc.topics', { accountId: state.accountId }).catch(() => []) : [];
+  const items=state.accountId?await api('voc.items',{accountId:state.accountId,limit:100}):[];
   return card('Registrar item da voz do cliente', `
     <div class="form-grid">
       <label>Tipo <select id="voc-type">
@@ -559,6 +569,7 @@ async function viewVoc() {
     <div class="actions"><button class="btn primary" data-act="voc-add">Registrar</button></div>
     <p class="muted small">Dados pessoais são removidos antes do armazenamento.</p>`)
   + (state.accountId ? '' : '<div class="note warn">Selecione uma conta no topo para ver os temas detectados.</div>')
+  + card('Feedback capturado por anúncio',table(['Tipo','Anúncio','Vínculo','Nota','Texto','Data'],items.map(item=>`<tr><td>${esc(item.kind)}</td><td>${esc(item.linked_external_id||item.external_listing_id||'—')}${item.listing_title?`<div class="muted small">${esc(item.listing_title)}</div>`:''}</td><td>${item.listing_id?'Vinculado':item.external_listing_id?'Aguardando anúncio':'Sem identificação'}</td><td>${esc(item.rating??'—')}</td><td>${esc(item.text_redacted)}</td><td>${dt(item.observed_at)}</td></tr>`),'Nenhum feedback capturado.'))
   + card('Temas detectados', table(['Tema', 'Ocorrências', 'Sentimento', 'Impacto'],
     (topics || []).map((t) => `<tr><td>${esc(t.topic || t.theme)}</td><td>${num(t.count)}</td>
       <td>${esc(t.sentiment || '—')}</td><td>${esc(t.impact || '—')}</td></tr>`),
@@ -996,8 +1007,15 @@ async function viewBrowserSync() {
     api('sync.list', { limit: 30 }),
     api('operation.mode.get', {}),
   ]);
+  const memory=state.accountId?await api('navigation.summary',{accountId:state.accountId}).catch(error=>({error:error.message})):null;
+  const navigationCard=card('Inteligência de navegação',!memory?'<p class="muted">Selecione uma loja para consultar sua memória.</p>':memory.error?'<p>'+esc(memory.error)+'</p>':
+    '<p><strong>'+memory.routes.length+'</strong> rotas demonstradas · <strong>'+memory.transitions.length+'</strong> transições observadas · <strong>'+memory.actions.length+'</strong> tipos de ações internas.</p>'
+    +'<p class="muted small">Use o painel lateral para ensinar ou apagar a memória. A extensão prioriza apenas links de leitura reconhecidos. Contagem de observações não é garantia de cobertura.</p>'
+    +table(['Área','Rota','Demonstrações','Última observação'],memory.routes.map(r=>'<tr><td>'+esc(r.page_kind)+'</td><td>'+esc(r.origin+r.route)+'</td><td>'+esc(r.observations)+'</td><td>'+dt(r.last_seen_at)+'</td></tr>'),'Nenhuma rota demonstrada.')
+    +table(['Origem','Destino','Observações'],memory.transitions.map(r=>'<tr><td>'+esc(r.from_route)+'</td><td>'+esc(r.to_route)+'</td><td>'+esc(r.observations)+'</td></tr>'),'Nenhuma transição observada.')
+    +table(['Rota','Ação observada','Observações'],memory.actions.map(r=>'<tr><td>'+esc(r.route)+'</td><td>'+esc(r.action_kind)+'</td><td>'+esc(r.observations)+'</td></tr>'),'Nenhuma ação interna observada.'));
   const transport = connection.diagnosis;
-  return card('Conexão com a extensão', `
+  return navigationCard + card('Conexão com a extensão', `
     <p>${connection.error ? esc(connection.error) : connection.connected ? 'A extensão respondeu ao serviço local.' : 'Aguardando sinal da extensão.'}</p>
     <dl>
       <dt>Último sinal</dt><dd>${dt(connection.lastSeenAt)}</dd>
@@ -1023,6 +1041,8 @@ async function viewBrowserSync() {
       <label id="browser-sync-interval-wrap" hidden>Intervalo em minutos<input id="browser-sync-interval" type="number" min="15" max="43200" step="1" value="60"></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="browser-sync-request">Solicitar agora</button><button class="btn" data-act="browser-sync-schedule">Agendar coleta</button></div>
+    <p class="muted small">Coleta avançada: selecione uma loja, abra sua lista de anúncios e mantenha a página inicial e os filtros para retomar. Processa até cinco novas páginas por execução, até 50 por lote lógico.</p>
+    <button class="btn" data-act="browser-sync-advanced" ${state.accountId?'':'disabled'}>Solicitar coleta avançada de anúncios</button>
   `)
   + card('Agendamentos de coleta', table(['Escopo','Próxima execução','Último estado','Ações'], schedules.map((schedule) => `<tr>
     <td>${esc(SYNC_SCOPES[schedule.scope])}${schedule.account_id ? `<div class="small muted">${esc(schedule.account_id)}</div>` : ''}</td>
@@ -1030,11 +1050,11 @@ async function viewBrowserSync() {
     <td><div class="actions"><button class="btn tiny" data-act="browser-sync-toggle" data-id="${esc(schedule.id)}" data-enabled="${schedule.enabled}">${schedule.enabled ? 'Pausar' : 'Reativar'}</button>
     <button class="btn tiny ghost" data-act="browser-sync-runs" data-id="${esc(schedule.id)}">Histórico</button></div></td></tr>`), 'Nenhuma coleta agendada.'))
   + '<div id="browser-sync-runs" class="out"></div>'
-  + card('Lotes recentes', table(['Solicitação','Origem','Escopo','Estado','Ações'], batches.map((batch) => `<tr>
+  + card('Lotes recentes', table(['Solicitação','Origem','Escopo','Modo','Estado','Ações'], batches.map((batch) => `<tr>
     <td>${dt(batch.requested_at)}</td><td>${batch.browser_request ? 'Dashboard' : 'Extensão ou agenda'}</td>
-    <td>${esc(SYNC_SCOPES[batch.scope])}</td><td>${esc(syncLabel(batch.status))}</td>
+    <td>${esc(SYNC_SCOPES[batch.scope])}</td><td>${batch.collection_mode==='ADVANCED_LISTINGS'?'Anúncios avançada':'Áreas autorizadas'}</td><td>${esc(syncLabel(batch.status))}</td>
     <td><div class="actions"><button class="btn tiny" data-act="browser-sync-batch" data-id="${esc(batch.id)}">Ver progresso</button>
-    ${['PARTIAL','FAILED'].includes(batch.status) ? `<button class="btn tiny ghost" data-act="browser-sync-retry" data-id="${esc(batch.id)}">Repetir falhas</button>` : ''}</div></td></tr>`), 'Nenhum lote de coleta.'))
+    ${['PARTIAL','FAILED'].includes(batch.status) ? `<button class="btn tiny ghost" data-act="browser-sync-retry" data-id="${esc(batch.id)}">Retomar pendências</button>` : ''}</div></td></tr>`), 'Nenhum lote de coleta.'))
   + '<div id="browser-sync-detail" class="out" aria-live="polite"></div>';
 }
 
@@ -1044,20 +1064,24 @@ function browserSyncScope() {
   return scope === 'ACCOUNT' ? { scope, accountId: state.accountId } : { scope };
 }
 
+let syncPageOffset=0;
+let syncPageBatch='';
 async function showBrowserSyncBatch() {
   const target = $('#browser-sync-detail');
   const batchId = selectedSyncBatch;
   if (!target || !batchId) return;
-  const data = await api('sync.list', { batchId });
-  if (!target.isConnected || selectedSyncBatch !== batchId) return;
+  if(syncPageBatch!==batchId){syncPageBatch=batchId;syncPageOffset=0;}
+  const offset=syncPageOffset;
+  const data = await api('sync.list', { batchId,compact:true,pageLimit:100,pageOffset:offset });
+  if (!target.isConnected || selectedSyncBatch !== batchId || syncPageOffset!==offset) return;
   const rows = data.accounts.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${esc(row.marketplace)}</td>
-    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}</td></tr>`);
-  const pages = data.pageRuns.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${num(row.page_no)}</td>
+    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}<div class="muted small">${num(row.pendingPages??0)} páginas na fila${row.unsupportedLinks?' · cobertura exige revisão manual':''}${row.stoppedReason?` · ${esc(row.stoppedReason)}`:''}</div></td></tr>`);
+  const pages = data.pageRuns.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${num(row.page_no)}${row.spa_page?` · SPA ${num(row.spa_page)}`:''}</td>
     <td>${esc(row.page_kind)}</td><td>${esc(syncLabel(row.status))}</td><td>${esc(row.error ?? '')}</td></tr>`);
   const content = card(`Progresso do lote · ${esc(syncLabel(data.batch?.status))}`,
     table(['Conta','Marketplace','Estado','Páginas concluídas','Observação'], rows) +
-    table(['Conta','Página','Área','Estado','Observação'], pages, 'Nenhuma página registrada.'));
-  const signature = JSON.stringify([batchId, data.batch?.status, rows, pages]);
+    table(['Conta','Página','Área','Estado','Observação'], pages, 'Nenhuma página registrada.')+`<div class="actions"><button class="btn" data-act="browser-sync-prev-page" ${offset===0?'disabled':''}>Anteriores</button><span>${data.totalPageRuns?offset+1:0}–${Math.min(offset+100,data.totalPageRuns??0)} de ${num(data.totalPageRuns??0)}</span><button class="btn" data-act="browser-sync-next-page" ${offset+100>=(data.totalPageRuns??0)?'disabled':''}>Próximas</button></div>`);
+  const signature = JSON.stringify([batchId, data.batch?.status, offset, data.totalPageRuns, rows, pages]);
   target.querySelector('[data-sync-error]')?.remove();
   if (target.dataset.signature === signature) return;
   target.dataset.signature = signature;
@@ -1230,12 +1254,19 @@ const ACTIONS = {
     await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
     await renderView();
   },
+  'browser-sync-prev-page': async()=>{syncPageOffset=Math.max(0,syncPageOffset-100);await showBrowserSyncBatch();},
+  'browser-sync-next-page': async()=>{syncPageOffset+=100;await showBrowserSyncBatch();},
   'browser-sync-refresh': renderView,
   'browser-sync-request': async () => {
     const result = await api('sync.createAll', { ...browserSyncScope(), browserRequest: true });
     selectedSyncBatch = result.batchId;
     toast('Solicitação registrada. Aguardando o navegador.');
     await renderView();
+  },
+  'browser-sync-advanced': async()=>{
+    if(!state.accountId)throw new Error('Selecione uma loja.');
+    const result=await api('sync.createAll',{scope:'ACCOUNT',accountId:state.accountId,browserRequest:true,collectionMode:'ADVANCED_LISTINGS'});
+    selectedSyncBatch=result.batchId;toast('Coleta avançada registrada. Abra a lista de anúncios da loja.');await renderView();
   },
   'browser-sync-schedule': async () => {
     const cadence = $('#browser-sync-cadence').value;
@@ -2069,7 +2100,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-schedule', 'browser-sync-retry'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);

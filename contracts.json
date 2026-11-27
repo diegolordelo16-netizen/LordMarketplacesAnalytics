@@ -114,7 +114,7 @@
   "analysis.schedule.runs": {
     "payload": {
       "scheduleId": "string",
-      "limit": "integer 1..200 default 50"
+      "limit": "integer 1..500 default 50"
     },
     "result": "histórico de execuções, status, duração, resultado limitado e erro"
   },
@@ -165,7 +165,7 @@
   "report.schedule.runs": {
     "payload": {
       "scheduleId": "string",
-      "limit": "integer 1..200 default 50"
+      "limit": "integer 1..500 default 50"
     },
     "result": "metadados de execuções; JSON integral é obtido sob demanda por report.schedule.run.get"
   },
@@ -190,7 +190,7 @@
   "sync.schedule.runs": {
     "payload": {
       "scheduleId": "string",
-      "limit": "integer 1..200 default 50"
+      "limit": "integer 1..500 default 50"
     },
     "result": "scheduled capture run history, batch ID, counts, status and error"
   },
@@ -235,28 +235,76 @@
     "behavior": "activates/deactivates user; revokes sessions on deactivation; disallows self-deactivation and deactivation of the last active super_admin",
     "permission": "manage_users"
   },
+  "sync.claimAccount": {
+    "payload": "batchId | accountId | leaseToken? (renewal)",
+    "permission": "execute_task"
+  },
+  "sync.completeAccount": {
+    "payload": "batchId | accountId | leaseToken | status | pagesScanned | pagesSucceeded",
+    "permission": "execute_task"
+  },
   "sync.accountProgress": {
     "payload": {
       "batchId": "string",
       "accountId": "string",
-      "pagesScanned": "integer 0..12",
+      "leaseToken": "UUID from exclusive claim",
+      "pagesScanned": "integer 0..500",
       "pagesSucceeded": "integer 0..pagesScanned",
-      "pages": "array of per-page URL/kind/result (max 12)",
+      "pages": "array of per-page URL/kind/result (max 500)",
       "seenUrls": "same-origin visited URL list",
-      "pendingLinks": "same-origin queued links (max 100)",
-      "maxPages": "integer 1..12",
+      "pendingLinks": "same-origin queued links (max 500)",
+      "maxPages": "integer 1..500",
+      "unsupportedLinks": "boolean; indicates untraversed links or unsupported filters",
       "stoppedReason": "optional string"
     },
-    "behavior": "Persists per-page capture history and the bounded navigation queue. URLs are restricted to the marketplace host, credentials/hash removed, and only known pagination query parameters retained. Used to resume a stale scheduled batch without revisiting completed pages.",
+    "behavior": "Persists per-page capture history and the bounded navigation queue. URLs are restricted to the marketplace host, credentials/hash removed, and only known pagination and period/filter query parameters retained. Used to resume a stale scheduled batch without revisiting completed pages.",
     "permission": "execute_task"
   },
   "sync.createAll": {
-    "payload": "scope | accountId? | browserRequest?",
+    "payload": "scope | accountId? | browserRequest? | collectionMode? (AUTHORIZED_AREAS / ADVANCED_LISTINGS, latter requires ACCOUNT)",
     "permission": "execute_task"
   },
   "sync.claimBrowserRequest": {
     "payload": "sem parâmetros",
     "permission": "execute_task",
     "result": "Reserva lote do dashboard, com retomada após expiração sem progresso recente."
+  },
+  "capture.accountSnapshots": {
+    "payload": "accountId | limit?",
+    "permission": "view_reports"
+  },
+  "capture.details": {
+    "payload": "accountId | kind? | limit?",
+    "permission": "view_reports"
+  },
+  "voc.items": {
+    "payload": "accountId | limit?",
+    "permission": "view_reports"
+  },
+  "capture.chartPoints": {
+    "payload": "accountId | limit?",
+    "permission": "view_reports"
+  },
+  "navigation.observe": {
+    "payload": "accountId | origin | route | pageKind | fromRoute? | actionKind? (SPA_NEXT/FILTER_CHANGE)",
+    "permission": "execute_task",
+    "behavior": "Record only whitelisted structural routes for a verified active account; no raw DOM or query parameters."
+  },
+  "navigation.list": {
+    "payload": "accountId | origin",
+    "permission": "execute_task"
+  },
+  "navigation.clear": {
+    "payload": "accountId | origin",
+    "permission": "execute_task"
+  },
+  "navigation.graph": {
+    "payload": "accountId | origin",
+    "permission": "execute_task"
+  },
+  "navigation.summary": {
+    "payload": "accountId",
+    "permission": "view_reports",
+    "behavior": "Read learned routes and observed transitions for the selected verified account."
   }
 }

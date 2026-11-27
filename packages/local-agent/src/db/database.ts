@@ -142,18 +142,18 @@ export class LocalDatabase {
     this.txDepth += 1;
     try {
       const result = fn();
-      this.txDepth -= 1;
       if (isOuter) this.db.exec('COMMIT');
       else this.db.exec(`RELEASE ${savepoint}`);
       return result;
     } catch (err) {
-      this.txDepth -= 1;
       if (isOuter) this.db.exec('ROLLBACK');
       else {
         this.db.exec(`ROLLBACK TO ${savepoint}`);
         this.db.exec(`RELEASE ${savepoint}`);
       }
       throw err;
+    } finally {
+      this.txDepth -= 1;
     }
   }
 

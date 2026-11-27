@@ -135,7 +135,7 @@ for (const [file, currentUrl, allowedUrl] of navigationCases) {
   check(info?.authorizedAreaLinks?.length === 1 && info.authorizedAreaLinks[0]?.url === allowedUrl && info.authorizedAreaLinks[0]?.pageKind === 'seller_orders', `navigation links seguros: ${file}`);
 }
 const workerSource = readFileSync(join(root, 'packages/extension/service-worker.js'), 'utf8');
-check(workerSource.includes('Math.min(12') && workerSource.includes("url.protocol !== 'https:'") && workerSource.includes('url.origin !== expectedOrigin'), 'varredura impõe HTTPS, mesmo origin e limite de páginas');
+check(workerSource.includes('Math.min(500') && workerSource.includes("url.protocol !== 'https:'") && workerSource.includes('url.origin !== expectedOrigin'), 'varredura impõe HTTPS, mesmo origin e limite de páginas');
 check(Object.hasOwn(contracts, 'analysis.schedule.runs') && readFileSync(join(root, 'packages/shared/src/types/contracts.ts'), 'utf8').includes("'analysis.schedule.runs'"), 'histórico de análise programada declarado no contrato IPC');
 check(serviceTs.includes("this.register('analysis.schedule.runs'") && serviceTs.includes("this.register('report.schedule.runs'"), 'históricos de execução de análise e relatório registrados');
 check(serviceTs.includes('intervalMinutes: z.number().int().min(15).max(43200)') && serviceTs.includes('retryDecision(schedule.consecutive_failures'), 'agendamentos aceitam intervalo customizado e backoff limitado');
@@ -171,7 +171,7 @@ check(appJs.includes("api('report.schedule.run.get', { runId: d.id })") && appJs
 check(appJs.includes("r.status === 'COMPLETED' ? `<button class=\"btn tiny\" data-act=\"schedule-run-download\"") && !appJs.includes('r.report_json ?'), 'histórico mostra download pelo status sem depender do JSON omitido da listagem');
 check(serviceTs.includes('progress: { ...progress, finished, total: items.length') && serviceTs.includes('pending: items.filter') && appJs.includes('data-act="task-refresh"') && actionKeys.has('task-refresh'), 'fila expõe contagem de progresso e atualização manual');
 check(appJs.includes("card('Controles da fila'") && appJs.includes("card('Fila de tarefas', table(['Status / progresso'"), 'painel separa controle da fila da tabela de tarefas');
-const syncMethods = ['sync.schedule.create','sync.schedule.list','sync.schedule.setEnabled','sync.schedule.runs','sync.claimScheduled','sync.retryFailed','sync.accountProgress'];
+const syncMethods = ['sync.schedule.create','sync.schedule.list','sync.schedule.setEnabled','sync.schedule.runs','sync.claimScheduled','sync.retryFailed','sync.accountProgress','sync.claimAccount'];
 for (const method of syncMethods) check(registered.has(method) && permissionKeys.has(method) && ipcMethods.includes(`'${method}'`) && Object.hasOwn(contracts, method), `agendamento de coleta declarado, registrado e protegido: ${method}`);
 const extensionPanel = readFileSync(join(root, 'packages/extension/panel/panel.js'), 'utf8');
 const extensionHtml = readFileSync(join(root, 'packages/extension/panel/panel.html'), 'utf8');
@@ -190,7 +190,7 @@ check(workerJs.includes('MI_SYNC_PROGRESS') && workerJs.includes('notifyProgress
 check(workerJs.includes("chrome.alarms.create('mi.sync'") && workerJs.includes("if (alarm.name === 'mi.sync') void processScheduledSyncs()") && workerJs.includes("callService('sync.claimScheduled'"), 'alarme periódico da extensão reivindica coletas agendadas');
 check(serviceTs.includes('30 * 60_000') && serviceTs.includes('started_at<=?') && serviceTs.includes('recoveredStaleLease: true'), 'lote agendado pode recuperar lease órfão após 30 minutos sem repetir contas terminais');
 check(serviceTs.includes('reconciled: true') && serviceTs.includes('UPDATE sync_schedule_runs SET status=?,finished_at=COALESCE'), 'claim reconcilia lote já finalizado se o worker cair entre gravações');
-check(workerJs.includes('syncAllOpenSellerTabs(batchId, 8)') && workerJs.includes('nenhuma sessão foi trocada'), 'coleta agendada reusa correspondência exata de contas e abas abertas');
+check(workerJs.includes('syncAllOpenSellerTabs(batchId, 50)') && workerJs.includes('nenhuma sessão foi trocada'), 'coleta agendada reusa correspondência exata de contas e abas abertas');
 const syncProgressMigration = readFileSync(join(root, 'packages/local-agent/migrations/017_sync_page_progress.sql'), 'utf8');
 check(syncProgressMigration.includes('sync_batch_page_runs') && syncProgressMigration.includes('progress_json') && syncProgressMigration.includes('current_page_no'), 'migration de progresso guarda páginas, cursor atual e estado de retomada');
 check(registered.has('sync.accountProgress') && permissionKeys.has('sync.accountProgress') && ipcMethods.includes("'sync.accountProgress'") && Object.hasOwn(contracts, 'sync.accountProgress'), 'API de progresso por página está declarada, registrada e protegida');
@@ -201,7 +201,7 @@ check(workerJs.includes("callService('sync.accountProgress'") && workerJs.includ
 check(workerJs.includes('Number(scan.pendingPages ?? 0) === 0') && workerJs.includes('pendingPages: queue.length'), 'lote com links pendentes termina como PARTIAL e mantém retomada em vez de falso COMPLETED');
 check(extensionPanel.includes('message.currentPage') && extensionPanel.includes('MI_SYNC_PROGRESS'), 'painel exibe página atual e progresso por conta em tempo real');
 check(syncProgressMigration.includes('UNIQUE(batch_id,account_id,page_no)') && serviceTs.includes('ON CONFLICT(batch_id,account_id,page_no) DO UPDATE'), 'retomada evita duplicar registros de página no mesmo lote e conta');
-check(syncProgressMigration.includes("'COMPLETED','FAILED','QUEUED'") && serviceTs.includes("page.queued ? 'QUEUED' : 'FAILED'") && workerJs.includes('captured.ok || captured.queued'), 'página falha permanece pendente e página aceita na fila local não é recapturada indevidamente');
+check(syncProgressMigration.includes("'COMPLETED','FAILED','QUEUED'") && serviceTs.includes("page.queued ? 'QUEUED' : 'FAILED'") && workerJs.includes('captured.ok || (captured.queued && !options.logicalBatchId)'), 'página falha permanece pendente e página aceita na fila local não é recapturada indevidamente');
 
 const ignoredDirectories = new Set(['node_modules', '.git', 'dist']);
 let jsonCount = 0;
