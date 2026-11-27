@@ -28,10 +28,15 @@ function run(file,args,options={}){
   assert.equal(result.status,0,'Processo falhou: '+file+'\n'+String(result.stderr??'').slice(0,2000));
   return result;
 }
+let uninstallCompleted=false;
 function uninstall(){
+  if(uninstallCompleted)return;
   if(!existsSync(root))return;
   const exe=readdirSync(root).find(name=>/^unins\d+\.exe$/i.test(name));
-  if(exe)run(join(root,exe),['/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG='+join(work,'uninstall.log')]);
+  if(exe){
+    run(join(root,exe),['/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG='+join(work,'uninstall.log')]);
+    uninstallCompleted=true;
+  }
 }
 try{
   run(setup,['/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/TASKS=','/DIR='+root,'/LOG='+join(work,'install.log')]);
@@ -78,5 +83,5 @@ try{
   console.log('OK instalador real, registro Chrome/Edge, frame nativo, boot, preservação de dados e desinstalação.');
 }finally{
   try{if(existsSync(join(root,'node.exe')))await windowsQuiesce(root);}
-  finally{try{uninstall();}finally{rmSync(work,{recursive:true,force:true});}}
+  finally{try{uninstall();}finally{rmSync(work,{recursive:true,force:true,maxRetries:20,retryDelay:250});}}
 }

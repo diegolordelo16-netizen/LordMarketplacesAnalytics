@@ -40,3 +40,6 @@ O manifesto anterior atribuía a `path` uma linha de comando Node + argumento JS
 
 ## Validação adicional planejada na CI
 Acrescentado smoke de instalação e desinstalação do EXE em runner Windows descartável: registro Chrome/Edge, manifesto real, frame do host pelo wrapper, inicialização sem autorun obrigatório, health, remoção do runtime/registro e preservação do banco. O teste não executa os navegadores reais; precisa passar no SHA final e não substitui homologação real. Não executar em máquina de produção.
+
+## Debug da CI 280
+Run 46070910239 (PR, head 4481a16): job Linux aprovado integralmente; Windows aprovou build, atualizador, geração do instalador e todas as asserções funcionais do novo smoke, inclusive desinstalação e preservação dos dados. O job falhou depois do OK funcional, em finally, por EBUSY ao remover uninstall.log ainda aberto pelo desinstalador. Correção: não invocar o desinstalador duas vezes após sucesso e permitir retentativas limitadas de limpeza de arquivos temporários; nenhuma asserção funcional removida. Revalidar o novo SHA. Evidência: https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/actions/runs/46070910239/job/140747436925.
