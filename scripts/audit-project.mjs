@@ -228,6 +228,13 @@ inspectJson('.');
 check(jsonCount > 0, 'arquivos JSON encontrados para validação');
 check(serviceTs.includes("i.type==='AUDITORIA'&&auth?.role!=='super_admin'") && serviceTs.includes("report_type<>'AUDITORIA'"), 'auditoria global e agendamentos protegidos');
 check(serviceTs.includes('renderReportPdf(report)') && appJs.includes('atob(r.pdfBase64)'), 'PDF real gerado localmente e baixado pelo painel');
+const finalMatrix = readFileSync(join(root,'docs/MATRIZ-FINAL-365-REQUISITOS.md'),'utf8');
+const originalMatrix = readFileSync(join(root,'docs/AUDITORIA-RECURSIVA-365-REQUISITOS.md'),'utf8');
+const matrixRows = text => [...text.matchAll(/^\|\s*(\d+)\s*\|/gm)].map(m=>Number(m[1]));
+const originalIds = matrixRows(originalMatrix), finalIds = matrixRows(finalMatrix);
+check(originalIds.length===365&&finalIds.length===365&&finalIds.every((id,index)=>id===index+1&&id===originalIds[index]),'matriz final preserva 365 IDs únicos na ordem original');
+check(finalMatrix.includes('Homologação real dispensada; não executada')&&finalMatrix.includes('Não promover para 4.0.0'),'matriz final distingue validação real dispensada de aprovação integral');
+
 const failed = checks.filter((item) => !item.ok);
 console.log(`Auditoria estática: ${checks.length - failed.length}/${checks.length} verificações aprovadas.`);
 for (const item of failed) console.error(`FALHOU: ${item.label}`);

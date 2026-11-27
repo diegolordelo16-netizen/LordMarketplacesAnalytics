@@ -19,6 +19,7 @@ Plataforma Local First para inteligência e operação de marketplaces. A versã
 - [Etapa 08 — conectores e importações](docs/ETAPA-08-AUDITORIA.md)
 - [Etapa 09 — relatórios e administração](docs/ETAPA-09-AUDITORIA.md)
 - [Etapa 10 — auditoria e critérios de release](docs/ETAPA-10-AUDITORIA.md)
+- [Matriz de rastreabilidade dos 365 requisitos da candidata](docs/MATRIZ-FINAL-365-REQUISITOS.md): revisão, fontes e lacunas explícitas.
 - [Matriz histórica dos 365 requisitos](docs/AUDITORIA-RECURSIVA-365-REQUISITOS.md): classificações históricas não são homologação da candidata atual.
 
 ## Desenvolvimento
