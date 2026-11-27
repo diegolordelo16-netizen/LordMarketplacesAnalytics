@@ -1722,7 +1722,13 @@ const ACTIONS = {
     const generation=viewRenderSequence,host=$('#operation-measure-out');
     const result=await api('operation.measure',{accountId:state.accountId,proposalKind:d.kind,proposalId:d.id});
     if(generation!==viewRenderSequence||host!==$('#operation-measure-out')||!host)return;
-    host.innerHTML='<p>'+esc(result.status)+'</p>'+(result.before&&result.after?'<p>'+esc(result.measurementScope==='CAMPAIGN'?'Campanha':'Anúncio inteiro')+' · '+esc(result.before.window.from)+' a '+esc(result.before.window.to)+' × '+esc(result.after.window.from)+' a '+esc(result.after.window.to)+'</p>':'')+table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">Mudança observada; execução e causalidade não verificadas.</p>';
+    const v=result.variationObservation;
+    const variation=v?'<h4>Variação '+esc(v.externalId)+'</h4><p>'+dt(v.before.capturedAt)+' → '+dt(v.after.capturedAt)+'</p>'+
+      table(['Estado observado','Antes','Depois'],[
+        '<tr><td>Preço</td><td>'+brl(v.before.priceCents)+'</td><td>'+brl(v.after.priceCents)+'</td></tr>',
+        '<tr><td>Estoque disponível</td><td>'+num(v.before.stock)+'</td><td>'+num(v.after.stock)+'</td></tr>',
+      ],'Sem capturas comparáveis.'):'';
+    host.innerHTML='<p>'+esc(result.status)+'</p>'+variation+(result.before&&result.after?'<p>'+esc(result.measurementScope==='CAMPAIGN'?'Campanha':'Anúncio inteiro')+' · '+esc(result.before.window.from)+' a '+esc(result.before.window.to)+' × '+esc(result.after.window.from)+' a '+esc(result.after.window.to)+'</p>':'')+table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">Mudança observada; execução e causalidade não verificadas.</p>';
     initializeTables(host);
     host.scrollIntoView({block:'nearest'});
   },

@@ -525,6 +525,39 @@ async function verifyCampaignInFreshTab(tab, grant, proposalId) {
   }
 }
 
+async function verifyVariationInFreshTab(tab, grant, proposalId) {
+  let verificationTab;
+  try {
+    const {accountId,externalListingId,variationId,sourcePath,documentNonce}=grant.context;
+    const {name,priceCents,stock}=grant.plan;
+    verificationTab=await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
+    if (!Number.isInteger(verificationTab.id)) return null;
+    await waitForTabComplete(verificationTab.id,tab.url,8000);
+    const observed=await chrome.tabs.sendMessage(verificationTab.id,{
+      type:'MI_LISTING_OPERATION_CONTEXT',action:'EDIT_VARIATION',externalListingId,variationId,
+    });
+    if (!observed?.ok||observed.action!=='EDIT_VARIATION'||observed.accountId!==accountId||
+        observed.externalListingId!==externalListingId||observed.variationId!==variationId||
+        observed.sourcePath!==sourcePath||!observed.documentNonce||observed.documentNonce===documentNonce||
+        observed.variationLabel!==name||observed.beforePriceCents!==priceCents||observed.beforeStock!==stock) return null;
+    const now=new Date().toISOString();
+    const capture=await callService('capture.ingest',{
+      accountId,marketplace:'mercado_livre',pageKind:'seller_listing_edit',url:sourcePath,
+      sourceClass:'A_PRIMARY_UI',referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[],
+      details:[{kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:observed.variationLabel,
+        metrics:{price:observed.beforePriceCents/100,stockAvailable:observed.beforeStock},
+        evidence:{price:'Preço no editor: R$ '+(observed.beforePriceCents/100).toFixed(2),stockAvailable:'Estoque no editor: '+observed.beforeStock}}],
+    });
+    if (!captureAccepted(capture)||capture.result?.detailRowsIngested!==1) return null;
+    const verified=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:variationId});
+    return verified?.ok&&verified.result?.status==='UI_READBACK_MATCHED'?verified:null;
+  } catch {
+    return null;
+  } finally {
+    if (Number.isInteger(verificationTab?.id)) await chrome.tabs.remove(verificationTab.id).catch(()=>{});
+  }
+}
+
 async function readCapturePageInfo(tabId) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const info = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
@@ -1282,7 +1315,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           result=await chrome.tabs.sendMessage(tab.id,{type:'MI_LISTING_OPERATION_APPLY',grant});
         }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
         const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
-        sendResponse(await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)}));return;
+        const recorded=await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
+        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true&&input.action==='EDIT_VARIATION'
+          ? await verifyVariationInFreshTab(tab,grant,input.proposalId)
+          : null;
+        sendResponse(verified??recorded);return;
       }
       if(['campaign.browser.apply','campaign.browser.verify'].includes(message.method)){
         const input=message.payload??{};

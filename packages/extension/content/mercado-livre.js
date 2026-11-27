@@ -558,7 +558,7 @@
     if(action==='DUPLICATE'){
       if(currentPageKind()!=='seller_listings'||variationId)throw Error('abra a lista de anúncios');
       const row=unique(Array.from(document.querySelectorAll('[data-item-id],[data-listing-id]')).filter(el=>visible(el)&&listingIds(el).length>0&&listingIds(el).every(id=>id===externalListingId)),'linha explícita e única do anúncio necessária');
-      const button=unique(Array.from(row.querySelectorAll('button[type="button"]')).filter(el=>safeButton(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.form&&!el.closest('form')&&/^(duplicar anuncio|duplicar publicacao|duplicate listing)$/.test(operationLabel(el))),'controle explícito de duplicação não encontrado');
+      const button=unique(Array.from(row.querySelectorAll('button[type="button"]')).filter(el=>safeButton(el)&&el.closest('[data-item-id],[data-listing-id]')===row&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.form&&!el.closest('form')&&/^(duplicar anuncio|duplicar publicacao|duplicate listing)$/.test(operationLabel(el))),'controle explícito de duplicação não encontrado');
       return {base,fields:{},button,values:{}};
     }
     if(!['CREATE_VARIATION','EDIT_VARIATION'].includes(action)||currentPageKind()!=='seller_listing_edit'||currentExternalListingId()!==externalListingId)throw Error('abra o editor do anúncio aprovado');
@@ -574,10 +574,10 @@
       base.variationId=variationId;base.variationLabel=name;
     }else if(variationId)throw Error('formulário de nova variação necessário');
     const savePattern=action==='CREATE_VARIATION'?/^(criar variacao|adicionar variacao|salvar nova variacao|create variation|add variation)$/:/^(salvar variacao|atualizar variacao|save variation|update variation)$/;
-    const candidates=Array.from(region.querySelectorAll('form')).filter(form=>visible(form)&&Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).some(el=>safeButton(el)&&savePattern.test(operationLabel(el))));
+    const candidates=Array.from(region.querySelectorAll('form')).filter(form=>visible(form)&&(action!=='EDIT_VARIATION'||form.closest('[data-variation-id]')===region)&&Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).some(el=>el.form===form&&safeButton(el)&&savePattern.test(operationLabel(el))));
     const form=unique(candidates,'formulário dedicado de variação ausente ou ambíguo');
     if(new URL(form.action||location.href,location.href).origin!==location.origin||form.getAttribute('target')&&!['_self',''].includes(form.getAttribute('target')))throw Error('destino do formulário não autorizado');
-    const button=unique(Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>safeButton(el)&&savePattern.test(operationLabel(el))),'controle de salvar ambíguo');
+    const button=unique(Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>el.form===form&&safeButton(el)&&savePattern.test(operationLabel(el))),'controle de salvar ambíguo');
     const definitions=action==='CREATE_VARIATION'?{
       name:['text',/^(nome da variacao|variation name)$/],option:['text',/^(opcao da variacao|valor da variacao|variation option|variation value)$/],
       priceCents:['number',/^(preco|price)( \(r\$\)| r\$)?$/],stock:['number',/^(estoque|stock|quantidade disponivel|available quantity)$/]
@@ -639,7 +639,7 @@
       const ready=listingOperationContext(g.action,g.externalListingId,g.variationId,true);
       if(!contextMatches(ready)||ready.button!==again.button||Object.entries(wanted).some(([k,v])=>ready.fields[k]!==again.fields[k]||ready.values[k]!==v||!ready.fields[k].checkValidity())||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('dados finais ou controle de salvar divergiram; revise manualmente');
       ready.button.click();
-      return {outcome:'NEEDS_VERIFICATION',message:'controle de variação acionado; confira a página e capture novamente. Não repetir automaticamente.'};
+      return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de variação acionado. Confira o resultado antes de qualquer nova tentativa.'};
     }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
   }
 
