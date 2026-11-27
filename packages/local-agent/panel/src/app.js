@@ -245,12 +245,16 @@ async function viewExec() {
   const selectedAccount=state.accountId;
   const filters={...state.execFilters};
   const scope={...(selectedAccount?{accountId:selectedAccount}:{}),...(filters.marketplace?{marketplace:filters.marketplace}:{}),days:filters.days,...(filters.listingId?{listingId:filters.listingId}:{}),...(filters.skuId?{skuId:filters.skuId}:{})};
-  const [kpis, missions, alerts, history, realized] = await Promise.all([
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('7');
+  const diagnosticScope={accountId:scope.accountId,marketplace:scope.marketplace,listingId:scope.listingId,skuId:scope.skuId,primaryFrom,primaryTo,comparisonFrom,comparisonTo,groupBy:'listing'};
+  const [kpis, missions, alerts, history, realized, diagnostic, profitRows] = await Promise.all([
     api('kpi.dashboard', scope).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
     api('alerts.list', {}).catch((e) => ({ error: e.message })),
     api('kpi.history', scope).catch((e) => ({ error: e.message })),
     selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
+    api('kpi.compare.detail',diagnosticScope).catch(e=>({error:e.message})),
+    selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.list',{accountId:selectedAccount,limit:100}).catch(e=>({error:e.message})):Promise.resolve(null),
   ]);
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   if (generation === viewRenderSequence) state.historyPoints = historyPoints;
@@ -274,7 +278,8 @@ async function viewExec() {
     ['Cobertura de estoque', k ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
   ];
 
-  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history] ].filter(([, value]) => value?.error);
+  const signals=(diagnostic?.rows||[]).flatMap(row=>(row.diagnostics||[]).map(d=>({label:row.label,...d})));
+  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history], ['Diagnósticos',diagnostic], ['Registros de lucro',profitRows] ].filter(([, value]) => value?.error);
   return `
     ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
     ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
@@ -283,6 +288,8 @@ async function viewExec() {
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
     ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
+    ${card('Diagnósticos automáticos — 7 dias completos', '<p class="muted small">'+esc(diagnostic?.diagnosticPolicy||'Comparação de snapshots; não comprova causalidade.')+' · '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+' (UTC).</p>'+table(['Anúncio','Indicador','Atual','Anterior','Sinal observado'],signals.slice(0,100).map(d=>'<tr><td>'+esc(d.label)+'</td><td>'+esc(d.metric)+'</td><td>'+num(d.current,2)+'</td><td>'+num(d.previous,2)+'</td><td>'+esc(d.note)+'</td></tr>'),diagnostic?.error?'Falha ao consultar diagnósticos.':'Nenhum sinal com evidência suficiente.')+table(['Campanha','Investimento','Receita atribuída'],(diagnostic?.campaigns||[]).slice(0,100).map(d=>'<tr><td>'+esc(d.label||d.campaignId)+'</td><td>'+brl(d.spend*100)+'</td><td>'+brl(d.attributedRevenue*100)+'</td></tr>'),'Nenhuma campanha com evidência suficiente para revisão.')+'<button class="btn" data-act="nav" data-view="compare">Abrir comparações detalhadas</button>')}
+    ${card('Histórico do lucro registrado',table(['Período inicial','Período final','Escopo','Lucro registrado','Origem'],(Array.isArray(profitRows)?profitRows:[]).map(r=>'<tr><td>'+dt(r.period_start)+'</td><td>'+dt(r.period_end)+'</td><td>'+esc(r.listing_id||'Loja')+'</td><td>'+brl(r.realizedProfitCents)+'</td><td>'+esc(r.source_class)+'</td></tr>'),profitRows?.error?'Falha ao carregar registros.':'Selecione uma loja com registros de lucro.')+'<p class="muted small">Registros individuais; períodos sobrepostos não são somados.</p>')}
     ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
     ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric">${Object.entries(historyMetricConfig()).map(([key,m])=>`<option value="${esc(key)}">${esc(m.label)}</option>`).join('')}</select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
@@ -1308,6 +1315,7 @@ function createXlsxReport(report) {
   return zipStored(files);
 }
 
+let compareRequestSequence=0;
 const ACTIONS = {
   'browser-operation-save': async () => {
     await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
@@ -1857,7 +1865,7 @@ const ACTIONS = {
     renderView();
   },
   'compare-detail': async () => {
-    const generation=viewRenderSequence,originalHost=$('#compare-detail-out');
+    const generation=viewRenderSequence,originalHost=$('#compare-detail-out'),requestId=++compareRequestSequence;
     const value = (id) => $(`#${id}`).value;
     const payload = {
       accountId: value('cmp-account') || undefined,
@@ -1869,7 +1877,7 @@ const ACTIONS = {
       comparisonFrom: value('cmp-previous-from'), comparisonTo: value('cmp-previous-to'),
     };
     const result = await run(() => api('kpi.compare.detail', payload), 'Comparação calculada a partir dos snapshots disponíveis.');
-    if(generation!==viewRenderSequence||originalHost!==$('#compare-detail-out')||!result)return;
+    if(requestId!==compareRequestSequence||generation!==viewRenderSequence||originalHost!==$('#compare-detail-out')||!result)return;
     const rows = result?.rows || [];
     const delta = (n) => n == null ? '—' : `${n >= 0 ? '+' : ''}${num(n,1)}%`;
     const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação observada','Compatibilidade dos filtros','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${row.comparisonQuality?.comparable ? delta(row.verifiedDeltaPct.gmv)+' · cobertura não comprovada' : 'Não comprovada'}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
