@@ -1215,7 +1215,7 @@ async function viewAds(){
   return card('Publicidade — observações por loja','<div class="form-grid">'+operationDateInputs('ads',f)+'<label>Tipo<select id="ads-kind">'+[['','Todos'],['AD_CAMPAIGN','Campanha'],['AD','Anúncio']].map(([v,l])=>'<option value="'+v+'" '+(f.kind===v?'selected':'')+'>'+l+'</option>').join('')+'</select></label><label>Identificador externo<input id="ads-external" maxlength="200" value="'+esc(f.externalId)+'"></label></div><button class="btn" data-act="ads-filter">Aplicar filtros</button><p>TACoS da loja: '+pct(result.tacosPct)+'</p><p class="muted small">Última observação por entidade, até 500 snapshots de origem; não soma campanhas e anúncios. '+(result.truncated?'Limite de consulta atingido. ':'')+'TACoS exige janelas e escopos compatíveis; cobertura integral não comprovada.</p><button class="btn" data-act="nav" data-view="browserSync">Abrir coletas</button>')
     +card('Campanhas',display(result.items.filter(r=>r.kind==='AD_CAMPAIGN')))+card('Anúncios patrocinados',display(result.items.filter(r=>r.kind==='AD')))
     +card('Propor alteração de campanha','<p class="muted small">Rascunho local. Aprovação não executa alteração remota.</p><div class="form-grid"><label>Marketplace<select id="campaign-market"><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label><label>Campanha (ID externo)<input id="campaign-ref" maxlength="200"></label><label>Estado observado (JSON)<textarea id="campaign-baseline" rows="3"></textarea></label><label>Alterações propostas (JSON)<textarea id="campaign-changes" rows="3"></textarea></label><label>Motivo<input id="campaign-reason" maxlength="2000"></label></div><button class="btn" data-act="campaign-prepare">Salvar proposta</button>')
-    +card('Propostas de campanhas',table(['Campanha','Alteração proposta','Status','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.campaign_ref)+'</td><td>'+esc(JSON.stringify(p.changes))+'</td><td>'+esc(p.status)+'</td><td>'+(p.status==='DRAFT'?'<button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="REJECTED">Rejeitar</button>':'—')+'</td></tr>'),'Nenhuma proposta.'));
+    +card('Propostas de campanhas',table(['Campanha','Alteração proposta','Status','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.campaign_ref)+'</td><td>'+esc(JSON.stringify(p.changes))+'</td><td>'+esc(p.status)+'</td><td>'+(p.status==='DRAFT'?'<button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="REJECTED">Rejeitar</button>':p.status==='APPROVED'?operationReceiptAction('CAMPAIGN',p.id):'—')+'</td></tr>'),'Nenhuma proposta.'));
 }
 async function viewProfitability(){
   if(!state.accountId)return card('Rentabilidade','<p class="muted">Selecione uma loja.</p>');
@@ -1232,6 +1232,20 @@ async function viewInventory(){
   return card('Estoque e operação','<label>Recência da captura<select id="inventory-days">'+[1,7,30,90,365].map(d=>'<option value="'+d+'" '+(days===d?'selected':'')+'>'+d+' dias</option>').join('')+'</select></label><button class="btn" data-act="inventory-filter">Aplicar</button><p class="muted small">'+esc(result.method)+'</p>')
     +card('Estoque por anúncio e SKU',table(['Anúncio','SKU','Estoque','Unidades observadas','Cobertura (dias)','Investimento Ads','Perguntas pendentes','Sinais','Captura'],result.items.map(r=>'<tr><td>'+esc(r.title||r.external_id)+'</td><td>'+esc(r.sku_id||'—')+'</td><td>'+num(r.stock)+'</td><td>'+num(r.units)+'</td><td>'+num(r.coverageDays,1)+'</td><td>'+brl(r.adSpend===null?null:Math.round(r.adSpend*100))+'</td><td>'+num(r.questionsPending)+'</td><td>'+esc(r.signals.join(', ')||'—')+'</td><td>'+dt(r.capturedAt)+'</td></tr>'),'Nenhum anúncio.'));
 }
+function operationReceiptAction(kind,id){
+  return '<button class="btn tiny" data-act="operation-receipt" data-kind="'+esc(kind)+'" data-id="'+esc(id)+'">Registrar execução manual</button>';
+}
+async function viewProductOperations(){
+  const accountId=state.accountId;
+  if(!accountId)return card('Anúncios e variações','<p class="muted">Selecione uma loja.</p>');
+  const [proposals,variants,media,receipts]=await Promise.all([api('listing.change.list',{accountId}),api('offer.variation.list',{accountId}),api('media.list',{accountId}),api('operation.receipt.list',{accountId})]);
+  const reviewed=(kind,row)=>row.status==='DRAFT'?'<button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="REJECTED">Rejeitar</button>':row.status==='APPROVED'&&!receipts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)?operationReceiptAction(kind,row.id):'—';
+  return card('Preparar capa ou duplicação','<p class="muted small">Operações exclusivamente locais. Verifique se o marketplace permite duplicar o anúncio antes de executar manualmente. Não existe publicação automática nesta tela.</p><div class="form-grid"><label>ID interno do anúncio<input id="product-listing"></label><label>Operação<select id="product-kind"><option value="COVER">Troca de capa</option><option value="DUPLICATE">Duplicação</option></select></label><label>Imagem da loja<select id="product-media"><option value="">Nenhuma</option>'+media.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.filename)+'</option>').join('')+'</select></label><label>Motivo<input id="product-reason" maxlength="2000"></label></div><button class="btn" data-act="product-preview">Prévia da imagem</button> <button class="btn" data-act="product-prepare">Salvar rascunho</button><div id="product-preview-out" class="out" aria-live="polite"></div><p><button class="btn" data-act="nav" data-view="media">Biblioteca de imagens</button></p>')
+    +card('Propostas de anúncios',table(['Anúncio','Tipo','Imagem','Estado','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.title||p.external_id)+'</td><td>'+esc(p.kind)+'</td><td>'+esc(p.filename||'—')+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('LISTING_CHANGE',p)+'</td></tr>'),'Nenhuma proposta.'))
+    +card('Gerenciar variações e ofertas','<p class="muted small">Rascunhos locais, sem modificação remota. Informe o ID do anúncio e opções reais.</p><div class="form-grid"><label>ID do rascunho para edição (opcional)<input id="variation-id"></label><label>ID interno do anúncio<input id="variation-listing"></label><label>Nome da variação<input id="variation-name" maxlength="120"></label><label>Opções (JSON: lista de objetos)<textarea id="variation-options" rows="4">[]</textarea></label><label>Preço (centavos, opcional)<input type="number" min="0" step="1" id="variation-price"></label><label>Estoque (opcional)<input type="number" min="0" step="1" id="variation-stock"></label></div><button class="btn" data-act="variation-save">Salvar rascunho</button>')
+    +card('Propostas de variações',table(['ID','Anúncio','Nome','Opções','Status','Ações'],variants.map(p=>'<tr><td>'+esc(p.id)+'</td><td>'+esc(p.listing_id)+'</td><td>'+esc(p.variation_name)+'</td><td>'+esc(JSON.stringify(p.options))+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('VARIATION',p)+(p.status==='DRAFT'?' <button class="btn tiny" data-act="variation-delete" data-id="'+esc(p.id)+'">Excluir</button>':'')+'</td></tr>'),'Nenhum rascunho.'))
+    +card('Execuções relatadas e medição',table(['Tipo','Proposta','Data','Referência','Medição'],receipts.map(r=>'<tr><td>'+esc(r.proposal_kind)+'</td><td>'+esc(r.proposal_id)+'</td><td>'+dt(r.performed_at)+'</td><td>'+esc(r.evidence_reference)+'</td><td><button class="btn tiny" data-act="operation-measure" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Medir antes/depois</button></td></tr>'),'Nenhum relato humano.')+'<p class="muted small">Relatos não comprovam execução remota. Medição exige observações com janelas compatíveis e não prova causalidade.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
+}
 const VIEWS = {
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
   prestart: { label: 'Pré-Start & Diagnóstico', icon: '✓', render: viewPrestart },
@@ -1241,6 +1255,7 @@ const VIEWS = {
   ads: { label: 'Publicidade & Ads', icon: '◈', render: viewAds },
   profitability: { label: 'Rentabilidade', icon: '⊞', render: viewProfitability },
   inventory: { label: 'Estoque & Operação', icon: '▤', render: viewInventory },
+  productOperations: { label: 'Anúncios & Variações', icon: '▤', render: viewProductOperations },
   keywords: { label: 'SEO & Keywords', icon: '⌕', render: viewKeywords },
   market: { label: 'Radar de mercado', icon: '◎', render: viewMarket },
   competition: { label: 'Concorrência', icon: '⚔', render: viewCompetition },
@@ -1633,6 +1648,48 @@ const ACTIONS = {
     renderView();
   },
 
+  'product-preview': async()=>{
+    const accountId=state.accountId,id=$('#product-media').value,host=$('#product-preview-out'),generation=viewRenderSequence;
+    if(!id)throw Error('Escolha uma imagem da loja.');
+    const item=await api('media.get',{id,accountId});
+    if(generation!==viewRenderSequence||host!==$('#product-preview-out')||state.accountId!==accountId)return;
+    const image=document.createElement('img');image.alt=item.alt_text||item.filename;image.style.maxWidth='100%';image.style.maxHeight='280px';
+    const note=document.createElement('p');note.className='muted small';note.textContent='Decodificando imagem…';
+    host.replaceChildren(image,note);
+    image.onload=()=>{const w=image.naturalWidth,h=image.naturalHeight;note.textContent=w+' × '+h+' px. '+(Math.min(w,h)<800?'Considere resolução maior para manter detalhes. ':'')+(Math.abs(w/h-1)>0.15?'Considere um enquadramento mais próximo de quadrado, se permitido. ':'')+(!item.alt_text?'Adicione texto alternativo descritivo quando suportado. ':'')+'Confira fundo, legibilidade e fidelidade do produto. Critérios de qualidade são sugestões, não regras oficiais.';};
+    image.onerror=()=>{note.textContent='Não foi possível decodificar a imagem; revise o arquivo.';};
+    image.src='data:'+item.mime_type+';base64,'+item.content_base64;
+  },
+  'product-prepare': async()=>{
+    await run(()=>api('listing.change.prepare',{accountId:state.accountId,listingId:$('#product-listing').value.trim(),kind:$('#product-kind').value,mediaId:$('#product-media').value||undefined,reason:$('#product-reason').value.trim()}),'Rascunho local salvo.');await renderView();
+  },
+  'product-review': async d=>{
+    const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;
+    const p=d.kind==='VARIATION'?{id:d.id,decision:d.decision,reason}:{accountId:state.accountId,id:d.id,decision:d.decision,reason};
+    await run(()=>api(d.kind==='VARIATION'?'offer.variation.review':'listing.change.review',p),'Revisão registrada.');await renderView();
+  },
+  'variation-save': async()=>{
+    const id=$('#variation-id').value.trim(),options=JSON.parse($('#variation-options').value);
+    const optionalInt=id=>{const v=$('#'+id).value.trim();if(!v)return undefined;const n=Number(v);if(!Number.isSafeInteger(n)||n<0)throw Error('Valor inteiro não negativo obrigatório.');return n;};
+    const payload={accountId:state.accountId,variationName:$('#variation-name').value.trim(),options,proposedPriceCents:optionalInt('variation-price'),proposedStock:optionalInt('variation-stock')};
+    await run(()=>api(id?'offer.variation.update':'offer.variation.prepare',id?{...payload,id}:{...payload,listingId:$('#variation-listing').value.trim()}),'Rascunho salvo.');await renderView();
+  },
+  'variation-delete': async d=>{if(!confirm('Excluir este rascunho local?'))return;await run(()=>api('offer.variation.delete',{accountId:state.accountId,id:d.id}),'Rascunho excluído.');await renderView();},
+  'operation-receipt': async d=>{
+    const accountId=state.accountId;
+    const performedAt=prompt('Data e hora reais da execução, com fuso horário (ex.: 2026-11-27T15:00:00-03:00):');
+    if(!performedAt)return;const date=new Date(performedAt);if(!Number.isFinite(date.getTime()))throw Error('Data inválida.');
+    const evidenceReference=prompt('Referência da confirmação ou relatório real, sem credenciais:');if(!evidenceReference)return;
+    if(!confirm('Confirma que você executou manualmente a proposta aprovada na loja? O sistema não verificou o marketplace.'))return;
+    await run(()=>api('operation.receipt.record',{accountId,proposalKind:d.kind,proposalId:d.id,performedAt:date.toISOString(),evidenceReference,confirmedManualExecution:true}),'Relato humano registrado.');await renderView();
+  },
+  'operation-measure': async d=>{
+    const generation=viewRenderSequence,host=$('#operation-measure-out');
+    const result=await api('operation.measure',{accountId:state.accountId,proposalKind:d.kind,proposalId:d.id});
+    if(generation!==viewRenderSequence||host!==$('#operation-measure-out')||!host)return;
+    host.innerHTML='<p>'+esc(result.status)+'</p>'+table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">Mudança observada; execução e causalidade não verificadas.</p>';
+    initializeTables(host);
+  },
   'ads-filter': async()=>{opFilters.ads={...operationInterval('ads'),kind:$('#ads-kind').value,externalId:$('#ads-external').value.trim()};await renderView();},
   'profit-filter': async()=>{opFilters.profit=operationInterval('profit');await renderView();},
   'inventory-filter': async()=>{opFilters.inventory.days=Number($('#inventory-days').value);await renderView();},
