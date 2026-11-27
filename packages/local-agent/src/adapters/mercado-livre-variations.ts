@@ -99,7 +99,8 @@ export class MercadoLivreVariations {
   async matchesStock(item:z.infer<typeof itemSchema>, variation:string, priceCents:number, stock:number) {
     const id=remoteId.parse(variation);
     const rows=item.variations.filter(row=>row.id===id);
-    if(rows.length!==1||rows[0].price===undefined||Math.round(rows[0].price*100)!==priceCents||rows[0].available_quantity!==stock)return false;
+    const row=rows[0];
+    if(rows.length!==1||!row||row.price===undefined||Math.round(row.price*100)!==priceCents||row.available_quantity!==stock)return false;
     const observed=z.object({id:remoteId,price:z.number().positive(),available_quantity:z.number().int().nonnegative()})
       .parse(await this.request('/items/'+item.id+'/variations/'+id));
     return observed.id===id&&Math.round(observed.price*100)===priceCents&&observed.available_quantity===stock;
