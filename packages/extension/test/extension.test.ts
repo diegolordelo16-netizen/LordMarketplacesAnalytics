@@ -888,3 +888,27 @@ describe('dados tabulares explícitos de gráficos',()=>{
     expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
   });
 });
+
+describe('nota individual de avaliações',()=>{
+  it('aceita nota explícita e rejeita nota ambígua, oculta ou fracionária',()=>{
+    class E{
+      constructor(public innerText:string,public attrs:Record<string,string>,public children:E[]=[],public hidden=false){}
+      getBoundingClientRect(){return {width:this.hidden?0:20,height:this.hidden?0:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return this}
+      querySelectorAll(){return this.children}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const rows=[
+      new E('Comentário A',{'data-review-id':'A','data-rating':'5'}),
+      new E('Comentário B',{'data-review-id':'B'},[new E('',{'aria-label':'4 de 5 estrelas'})]),
+      new E('Comentário C',{'data-review-id':'C','data-rating':'3'},[new E('',{'data-stars':'4'})]),
+      new E('Comentário D',{'data-review-id':'D','data-rating':'4.5'}),
+      new E('Comentário E',{'data-review-id':'E'},[new E('',{'data-stars':'5'},[],true)]),
+      new E('Comentário F',{'data-rating':'5'})
+    ];
+    const result=window.MI_DOM.visibleCustomerVoice({querySelectorAll:()=>rows},'seller_reputation','amazon');
+    expect(result.map((item:any)=>item.rating??null)).toEqual([5,4,null,null,null,null]);
+  });
+});
