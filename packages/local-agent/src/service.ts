@@ -549,6 +549,7 @@ export class LocalService {
     this.register('settings.set', (payload, auth) => {
       const schema = z.object({ key: z.string().min(1).max(120), value: z.unknown() });
       const input = schema.parse(payload);
+      if(input.key.startsWith('assisted_limits:'))throw Error('use operation.limits.set para confirmar limites de operação');
       if (/key|secret|token|password/i.test(input.key)) {
         throw new Error('segredos não podem ser gravados em settings; use o cofre cifrado');
       }
