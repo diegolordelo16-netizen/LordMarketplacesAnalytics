@@ -219,9 +219,9 @@ const inspectJson = (directory) => {
 };
 inspectJson('.');
 check(jsonCount > 0, 'arquivos JSON encontrados para validação');
-const failed = checks.filter((item) => !item.ok);
 check(serviceTs.includes("i.type==='AUDITORIA'&&auth?.role!=='super_admin'") && serviceTs.includes("report_type<>'AUDITORIA'"), 'auditoria global e agendamentos protegidos');
 check(serviceTs.includes('renderReportPdf(report)') && appJs.includes('atob(r.pdfBase64)'), 'PDF real gerado localmente e baixado pelo painel');
+const failed = checks.filter((item) => !item.ok);
 console.log(`Auditoria estática: ${checks.length - failed.length}/${checks.length} verificações aprovadas.`);
 for (const item of failed) console.error(`FALHOU: ${item.label}`);
 if (failures.length) process.exitCode = 1;

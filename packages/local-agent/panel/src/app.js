@@ -2581,7 +2581,10 @@ const ACTIONS = {
   },
   'schedule-run-download': async (d) => {
     const result = await api('report.schedule.run.get', { runId: d.id });
-    const blob = new Blob([result.reportJson], { type: 'application/json;charset=utf-8' });
+    const pages=[JSON.parse(result.reportJson)];
+    for(let page=1;page<result.pageCount;page++){const part=await api('report.schedule.run.get',{runId:d.id,page});pages.push(JSON.parse(part.reportJson));}
+    const output=result.pageCount===1?{...pages[0],storedPartial:result.partial}:{runId:d.id,partial:result.partial,pageCount:pages.length,rowCount:pages.reduce((n,p)=>n+(p.rowCount||0),0),pages};
+    const blob = new Blob([JSON.stringify(output,null,2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `relatorio-agendado-${d.id}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -2687,7 +2690,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save','schedule-run-download'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);

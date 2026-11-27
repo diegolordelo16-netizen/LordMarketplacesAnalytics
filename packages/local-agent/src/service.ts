@@ -432,15 +432,30 @@ export class LocalService {
           if (!handler) throw new Error('handler report.export indisponível');
           const owner=db.row<{role:AccessRole}>('SELECT role FROM users WHERE id=? AND is_active=1',schedule.created_by??'');
           if(!owner||!roleHasPermission(owner.role,'view_reports')||(schedule.report_type==='AUDITORIA'&&owner.role!=='super_admin')){db.db.prepare("UPDATE report_schedules SET enabled=0,last_status='FAILED',last_error='permissão do responsável revogada',updated_at=? WHERE id=?").run(nowIso(),schedule.id);continue;}
-          const result = await handler({ type: schedule.report_type, format: schedule.format, accountId: schedule.account_id ?? undefined }, {userId:schedule.created_by!,role:owner.role});
-          const serialized = JSON.stringify(result);
-          const reportJson = Buffer.byteLength(serialized,'utf8') <= 1_000_000 ? serialized : JSON.stringify({ truncated: true, reason: 'relatório acima de 1 MB; execute exportação manual paginada' });
-          const rowCount = Number((result as { rowCount?: number } | null)?.rowCount ?? 0);
-          db.db.prepare('INSERT INTO report_schedule_runs (id,schedule_id,generated_at,status,report_json,row_count) VALUES (?,?,?,?,?,?)')
-            .run(runId, schedule.id, nowIso(), 'COMPLETED', reportJson, rowCount);
-          const nextAt = nextOccurrence(schedule.next_run_at, schedule.cadence, schedule.interval_minutes, new Date());
-          db.db.prepare('UPDATE report_schedules SET last_run_at=?,last_status=?,last_error=NULL,next_run_at=?,consecutive_failures=0,updated_at=? WHERE id=?')
-            .run(nowIso(), 'COMPLETED', nextAt, nowIso(), schedule.id);
+          db.transaction(()=>{
+            const pages:string[]=[];let rowCount=0,offset=0,totalBytes=0,partial=false,auditThroughId:number|undefined;
+            const auth={userId:schedule.created_by!,role:owner.role};
+            // Synchronous local query and one transaction keep all pages on a consistent DB snapshot.
+            for(let index=0;index<100;index++){
+              const result=handler({type:schedule.report_type,format:'json',accountId:schedule.account_id??undefined,offset,limit:500,auditThroughId},auth);
+              if(result instanceof Promise)throw Error('relatório agendado deve usar consulta local síncrona');
+              const report=result as {rowCount:number;nextOffset:number|null;auditThroughId:number|null};
+              if(!Number.isInteger(report.rowCount)||report.rowCount<0)throw Error('resultado inválido');
+              if(report.auditThroughId!==null)auditThroughId=report.auditThroughId;
+              const serialized=JSON.stringify(result),bytes=Buffer.byteLength(serialized,'utf8');
+              if(bytes>1_000_000||totalBytes+bytes>20_000_000){if(!pages.length)throw Error('primeira página acima do limite de armazenamento');partial=true;break;}
+              pages.push(serialized);rowCount+=report.rowCount;totalBytes+=bytes;
+              if(report.nextOffset===null){partial=false;break;}
+              if(report.nextOffset<=offset)throw Error('paginação não avançou');
+              offset=report.nextOffset;partial=true;
+            }
+            const generatedAt=nowIso(),meta={paged:true,pageCount:pages.length,rowCount,partial,nextOffset:partial?offset:null,note:partial?'Limite de 100 partes/20 MB atingido. O histórico armazenado é parcial.':'Todas as partes foram armazenadas.'};
+            db.db.prepare('INSERT INTO report_schedule_runs(id,schedule_id,generated_at,status,report_json,row_count) VALUES(?,?,?,?,?,?)').run(runId,schedule.id,generatedAt,'COMPLETED',JSON.stringify(meta),rowCount);
+            const insert=db.db.prepare('INSERT INTO report_schedule_pages(run_id,page_index,report_json) VALUES(?,?,?)');
+            pages.forEach((page,index)=>insert.run(runId,index,page));
+            const nextAt=nextOccurrence(schedule.next_run_at,schedule.cadence,schedule.interval_minutes,new Date());
+            db.db.prepare('UPDATE report_schedules SET last_run_at=?,last_status=?,last_error=NULL,next_run_at=?,consecutive_failures=0,updated_at=? WHERE id=?').run(generatedAt,'COMPLETED',nextAt,generatedAt,schedule.id);
+          });
           reports += 1;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -3862,11 +3877,15 @@ export class LocalService {
       return db.rows('SELECT id,schedule_id,generated_at,status,error,row_count FROM report_schedule_runs WHERE schedule_id=? AND EXISTS(SELECT 1 FROM report_schedules s WHERE s.id=schedule_id AND (?=1 OR (s.report_type<>\'AUDITORIA\' AND s.created_by=?))) ORDER BY generated_at DESC LIMIT ?',i.scheduleId,Number(auth?.role==='super_admin'),auth?.userId??'',i.limit);
     });
     this.register('report.schedule.run.get', (payload,auth) => {
-      const i=z.object({runId:z.string().min(1)}).parse(payload ?? {});
+      const i=z.object({runId:z.string().min(1),page:z.number().int().min(0).max(99).default(0)}).parse(payload ?? {});
       const row=db.row<{id:string;report_json:string|null;status:string}>('SELECT id,report_json,status FROM report_schedule_runs WHERE id=? AND EXISTS(SELECT 1 FROM report_schedules s WHERE s.id=schedule_id AND (?=1 OR (s.report_type<>\'AUDITORIA\' AND s.created_by=?)))',i.runId,Number(auth?.role==='super_admin'),auth?.userId??'');
       if(!row) throw new Error('execução de relatório não encontrada');
       if(!row.report_json) throw new Error('esta execução não possui arquivo de relatório (falha ou payload não armazenado)');
-      return {id:row.id,status:row.status,reportJson:row.report_json};
+      const count=db.row<{n:number}>('SELECT COUNT(*) n FROM report_schedule_pages WHERE run_id=?',row.id)?.n??0;
+      if(!count){if(i.page!==0)throw Error('página inexistente');return {id:row.id,status:row.status,reportJson:row.report_json,page:0,pageCount:1,partial:parseJsonObject(row.report_json).truncated===true||parseJsonObject(row.report_json).partial===true};}
+      const page=db.row<{report_json:string}>('SELECT report_json FROM report_schedule_pages WHERE run_id=? AND page_index=?',row.id,i.page);
+      if(!page)throw Error('página inexistente');
+      return {id:row.id,status:row.status,reportJson:page.report_json,page:i.page,pageCount:count,partial:parseJsonObject(row.report_json).partial===true};
     });
 
     this.register('connector.configure', (payload, auth) => {

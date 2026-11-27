@@ -2855,3 +2855,23 @@ describe('Etapa 09 — relatórios e administração',()=>{
     expect((await call('agent.budget')).result).toMatchObject({geminiConfigured:false});
   });
 });
+
+describe('Relatórios agendados paginados',()=>{
+  it('armazena todas as partes e aplica a permissão por execução',async()=>{
+    const accountId='schedule-paged';seedImportAccount(accountId);
+    const at=new Date().toISOString(),stmt=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    for(let i=0;i<501;i++)stmt.run('paged-'+String(i).padStart(4,'0'),accountId,'mercado_livre','MLB'+(1000+i),'Anúncio '+i,'ACTIVE',at,at);
+    const created=await call('report.schedule.create',{accountId,reportType:'ANUNCIO',format:'json',cadence:'daily'});expect(created.ok).toBe(true);
+    const id=(created.result as {id:string}).id;
+    db.db.prepare("UPDATE report_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(id);
+    expect((await service.processScheduledWork()).reports).toBe(1);
+    const runs=(await call('report.schedule.runs',{scheduleId:id})).result as Array<{id:string;row_count:number}>;
+    expect(runs[0]?.row_count).toBe(501);
+    const runId=runs[0]!.id;
+    const first=(await call('report.schedule.run.get',{runId,page:0})).result as {reportJson:string;pageCount:number;partial:boolean};
+    expect(first.pageCount).toBe(2);expect(first.partial).toBe(false);expect(JSON.parse(first.reportJson).rowCount).toBe(500);
+    const last=(await call('report.schedule.run.get',{runId,page:1})).result as {reportJson:string};
+    expect(JSON.parse(last.reportJson).rows).toMatchObject([{id:'paged-0500'}]);
+    expect((await call('report.schedule.run.get',{runId,page:2})).ok).toBe(false);
+  });
+});

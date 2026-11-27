@@ -20,3 +20,6 @@ Base: etapa 08, 3.17.0, CI 264 aprovada (6a903d03). PR empilhado sobre a branch 
 - Agendamentos de relatório verificam usuário responsável ativo e papel; auditoria não é acessível a visualizador/operador. Relatórios muito grandes são paginados e identificados como parciais; nova exportação após alterações concorrentes pode ter recorte diferente.
 - Testes de publicação simulam resposta do marketplace; não substituem homologação real. 
 - CI 269: TypeScript, builds, testes e regressões passaram; auditoria estática antiga esperava texto de rollback obsoleto, ajustada para exigir o vínculo e prova inversa. Nova CI deve validar SHA final.
+
+## Revisão adicional
+Relatórios agendados passaram a armazenar as partes da mesma transação local (até 100 partes e 20 MB, com indicação explícita de parcialidade), em vez de descartar dados acima de 1 MB. O download reúne todas as partes armazenadas; arquivos legados permanecem legíveis.

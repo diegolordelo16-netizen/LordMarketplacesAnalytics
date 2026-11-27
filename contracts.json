@@ -157,10 +157,8 @@
     "result": "histórico de execuções, status, duração, resultado limitado e erro"
   },
   "report.schedule.run.get": {
-    "description": "Obter JSON de uma execução de relatório agendado",
-    "payload": {
-      "runId": "string"
-    }
+    "runId": "string",
+    "page": "optional 0..99"
   },
   "analysis.schedule.create": {
     "payload": {

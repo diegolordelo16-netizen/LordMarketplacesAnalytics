@@ -1,0 +1,1 @@
+CREATE TABLE report_schedule_pages (run_id TEXT NOT NULL REFERENCES report_schedule_runs(id) ON DELETE CASCADE,page_index INTEGER NOT NULL CHECK(page_index>=0),report_json TEXT NOT NULL,PRIMARY KEY(run_id,page_index));
