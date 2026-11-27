@@ -204,6 +204,7 @@ export const IPC_METHODS = [
   'listing.change.review',
   'operation.receipt.record',
   'operation.receipt.list',
+  'operation.measure',
   'offer.variation.update',
   'offer.variation.delete',
   'inventory.dashboard',
