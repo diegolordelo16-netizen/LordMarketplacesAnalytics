@@ -492,14 +492,14 @@ describe('capacidades adicionais 3.10.3', () => {
       maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20,
     }})).ok).toBe(true);
     const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
-    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0;
+    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0,hideCreated=false,sellerId=23;
     const mock=vi.fn(async (url:URL,init:RequestInit)=>{
       expect(url.origin).toBe('https://api.mercadolibre.com');
       expect(init.redirect).toBe('error');
       if(url.pathname==='/users/me')return Response.json({id:23,nickname,site_id:'MLB',tags:[]});
-      if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',status:'active',
+      if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:sellerId,site_id:'MLB',currency_id:'BRL',status:'active',
         user_product_id:null,pictures:[{id:'PIC1'}],variations:[{id:41,attribute_combinations:[{id:'COLOR',value_id:'1'}]},
-          ...(created&&!deleted?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:sold}]:[])]});
+          ...(created&&!deleted&&!hideCreated?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:sold}]:[])]});
       if(url.pathname==='/items/'+itemId+'/variations'&&init.method==='POST'){
         postCount++;
         expect(JSON.parse(String(init.body))).toEqual({attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:0,picture_ids:['PIC1']});
@@ -523,6 +523,12 @@ describe('capacidades adicionais 3.10.3', () => {
       expect(postCount).toBe(1);
       failReadback=false;
       const {confirmed,...verify}=request;
+      hideCreated=true;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:'42',remoteVerified:false});
+      hideCreated=false;
+      sellerId=24;
+      expect((await call('variation.api.verify',verify)).ok).toBe(false);
+      sellerId=23;
       expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:'42',remoteVerified:true});
       expect(postCount).toBe(1);
       const list=await call('variation.api.list',{accountId});
