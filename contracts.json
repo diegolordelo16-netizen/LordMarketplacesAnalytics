@@ -382,5 +382,11 @@
   "offer.variation.delete": {
     "accountId": "string",
     "id": "string"
+  },
+  "operation.measure": {
+    "accountId": "string",
+    "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
+    "proposalId": "string",
+    "method": "compatible before/after source windows following human-reported action; not remote verification or causality"
   }
 }
