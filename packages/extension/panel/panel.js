@@ -564,12 +564,33 @@ async function budgetAction(action){
   }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
   finally{budgetBusy=false;$('budget-apply').disabled=false;$('budget-verify').disabled=false;}
 }
-let compLoad=0;
+let compLoad=0,compRelationsLoad=0;
+async function compRelations(){
+  const generation=++compRelationsLoad,accountId=$('comp-account').value,ownProductId=$('comp-product').value,select=$('comp-content-relation');
+  select.replaceChildren();
+  if(!accountId||!ownProductId)return;
+  const r=await call('competitor.relations',{accountId,ownProductId,status:'APROVADO'});
+  if(generation!==compRelationsLoad||accountId!==$('comp-account').value||ownProductId!==$('comp-product').value)return;
+  for(const row of r?.ok?r.result??[]:[]){const o=document.createElement('option');o.value=row.id;o.textContent=row.candidate_title;select.append(o);}
+}
+async function compContentCapture(){
+  const accountId=$('comp-account').value,ownProductId=$('comp-product').value,side=$('comp-content-side').value,relationId=$('comp-content-relation').value,out=$('comp-content-out'),button=$('comp-content-capture');
+  if(!accountId||!ownProductId||(side==='RIVAL'&&!relationId)){out.textContent='Selecione a loja, produto e concorrente quando aplicável.';return;}
+  if(!confirm('Registrar somente a descrição, promoções e imagens reconhecidas da página pública aberta?'))return;
+  button.disabled=true;
+  try{
+    const r=await call('competitor.captureCurrentPublicContent',{accountId,ownProductId,side,...(side==='RIVAL'?{relationId}:{}),confirmed:true});
+    out.textContent=r?.ok?'Evidência pública registrada. Confira o comparativo no histórico.':r?.error?.message||'Captura não concluída.';
+  }catch(e){out.textContent=String(e?.message||e);}
+  finally{button.disabled=false;}
+}
 async function compProducts(){
   const generation=++compLoad,accountId=$('comp-account').value,select=$('comp-product');select.replaceChildren();
+  $('comp-content-relation').replaceChildren();++compRelationsLoad;
   if(!accountId)return;
   const r=await call('competitor.ownProduct.list',{accountId});if(generation!==compLoad||accountId!==$('comp-account').value)return;
   for(const row of r?.ok?r.result??[]:[]){const o=document.createElement('option');o.value=row.id;o.textContent=row.title;select.append(o);}
+  await compRelations();
 }
 async function compAccounts(){
   const r=await call('account.list',{}),select=$('comp-account');select.replaceChildren();
@@ -626,6 +647,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('comp-schedule-stop').addEventListener('click',()=>void scheduleAction('stop'));
   $('comp-schedule-status').addEventListener('click',()=>void scheduleAction('status'));
   $('comp-account').addEventListener('change',()=>void compProducts());
+  $('comp-product').addEventListener('change',()=>void compRelations());
+  $('comp-content-capture').addEventListener('click',()=>void compContentCapture());
   $('comp-capture').addEventListener('click',()=>void compCapture());
   void compAccounts();
   $('listing-op-apply').addEventListener('click',()=>void listingOperationApply());
