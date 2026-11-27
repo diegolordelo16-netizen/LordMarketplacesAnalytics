@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
@@ -18,7 +18,8 @@ const reg = (...args) => spawnSync('reg.exe', args, { encoding:'utf8', windowsHi
 const registered = key => reg('query',key,'/ve').status === 0;
 const autostart = () => reg('query',runKey,'/v','MarketplaceIntelligence').status === 0;
 assert.ok(keys.every(key => !registered(key)) && !autostart(), 'Runner deve começar sem registros do produto.');
-const work = mkdtempSync(join(tmpdir(), 'mi-installer-smoke-'));
+// O Windows pode expandir o caminho 8.3 de TEMP ao gravar os atalhos.
+const work = realpathSync.native(mkdtempSync(join(tmpdir(), 'mi-installer-smoke-')));
 const root = join(work,'Installed Marketplace Intelligence'), local = join(work,'Local AppData = QA');
 const data = join(local,'MarketplaceIntelligence');
 mkdirSync(data,{recursive:true});
@@ -50,9 +51,9 @@ function readShortcuts(){
 const execute = promisify(execFile);
 const launcherLog = join(data,'logs','launcher.log');
 async function runShortcut(shortcut, argument){
-  assert.equal(shortcut.TargetPath,join(root,'MarketplaceIntelligence.exe'));
+  assert.equal(realpathSync.native(shortcut.TargetPath),realpathSync.native(join(root,'MarketplaceIntelligence.exe')));
   assert.equal(shortcut.Arguments,argument);
-  assert.equal(shortcut.WorkingDirectory,root);
+  assert.equal(realpathSync.native(shortcut.WorkingDirectory),root);
   try {
     // Executa o destino e os parâmetros gravados pelo Inno, herdando o perfil isolado do teste.
     await execute(shortcut.TargetPath, argument ? [argument] : [], {
