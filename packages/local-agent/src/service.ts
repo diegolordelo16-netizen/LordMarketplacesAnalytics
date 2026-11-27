@@ -830,16 +830,19 @@ export class LocalService {
       return capture.kpisForListing(input.listingId, input.days);
     });
 
-    const buildDashboard = (filter: { accountId?: string; marketplace?: string } = {}) => {
+    const buildDashboard = (filter: { accountId?: string; marketplace?: string; days?:number; listingId?:string; skuId?:string } = {}) => {
+      const days=filter.days??30;
+      const cutoff=new Date(Date.now()-days*86400000).toISOString();
+      const entityScoped=Boolean(filter.listingId||filter.skuId);
       const accounts = db.rows<{ id: string; marketplace: string; display_name: string; is_active: number }>(
         'SELECT id, marketplace, display_name, is_active FROM accounts WHERE (? IS NULL OR id = ?) AND (? IS NULL OR marketplace = ?) ORDER BY display_name',
         filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,
       );
       const listings = db.rows<{ id: string; account_id: string; marketplace: string; external_id: string; title: string | null }>(
-        'SELECT id, account_id, marketplace, external_id, title FROM listings WHERE (? IS NULL OR account_id = ?) AND (? IS NULL OR marketplace = ?)',
-        filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,
+        'SELECT id, account_id, marketplace, external_id, title FROM listings WHERE (? IS NULL OR account_id = ?) AND (? IS NULL OR marketplace = ?) AND (? IS NULL OR id=?) AND (? IS NULL OR sku_id=?)',
+        filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,filter.listingId??null,filter.listingId??null,filter.skuId??null,filter.skuId??null,
       );
-      const perListing = listings.map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, 30) }));
+      const perListing = listings.map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, days, cutoff) }));
       const captured = perListing.filter((l) => l.kpis !== null);
       const sumKnown = (rows: typeof perListing, select: (pillars: NonNullable<(typeof perListing)[number]['kpis']>['pillars']) => number | null): number | null => {
         if (rows.length === 0 || rows.some((l) => !l.kpis)) return null;
@@ -850,7 +853,7 @@ export class LocalService {
       const listingSnapshotRows = db.rows<{ listing_id:string; account_id:string; captured_at:string; metrics_json:string }>(
         `SELECT listing_id,account_id,captured_at,metrics_json FROM listing_snapshots
           WHERE captured_at>=? AND (? IS NULL OR account_id=?) ORDER BY captured_at DESC`,
-        new Date(Date.now()-30*86_400_000).toISOString(), filter.accountId ?? null, filter.accountId ?? null,
+        cutoff, filter.accountId ?? null, filter.accountId ?? null,
       );
       const latestListingSnapshots = new Map<string, Record<string,unknown>>();
       for (const row of listingSnapshotRows) {
@@ -858,11 +861,11 @@ export class LocalService {
         if (latestListingSnapshots.has(key)) continue;
         try { latestListingSnapshots.set(key, JSON.parse(row.metrics_json) as Record<string,unknown>); } catch { continue; }
       }
-      const accountSnapshotRows = db.rows<{ account_id:string; page_kind:string; captured_at:string; metrics_json:string }>(
+      const accountSnapshotRows = entityScoped?[]:db.rows<{ account_id:string; page_kind:string; captured_at:string; metrics_json:string }>(
         `SELECT account_id,page_kind,captured_at,metrics_json FROM account_snapshots
           WHERE captured_at>=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?)
           ORDER BY captured_at DESC`,
-        new Date(Date.now()-30*86_400_000).toISOString(), filter.accountId ?? null, filter.accountId ?? null,
+        cutoff, filter.accountId ?? null, filter.accountId ?? null,
         filter.marketplace ?? null, filter.marketplace ?? null,
       );
       const accountMetricPriority: Record<string,string[]> = {
@@ -924,7 +927,7 @@ export class LocalService {
           stockCoverageDays: stock !== null && dailySales !== null && dailySales > 0 ? stock / dailySales : null,
         };
       };
-      const byAccount = accounts.map((a) => {
+      const byAccount = accounts.filter(a=>!entityScoped||perListing.some(l=>l.account_id===a.id)).map((a) => {
         const rows = perListing.filter((l) => l.account_id === a.id);
         const capturedRows = rows.filter((l) => l.kpis);
         const metrics = accountMetrics.get(a.id);
@@ -956,12 +959,12 @@ export class LocalService {
       };
       return {
         accounts, listings: perListing, coverage: { totalListings: listings.length, capturedListings: captured.length, uncapturedListings: listings.length - captured.length, accountsWithSnapshots: accountMetrics.size },
-        totals, byAccount,
+        totals, byAccount,window:{days,cutoff,kind:'CAPTURE_RECENCY',sourcePeriodVerified:false,entityScoped},
       };
     };
 
     this.register('kpi.dashboard', (payload) => {
-      const i = z.object({ accountId: z.string().optional(), marketplace: z.string().optional() }).parse(payload ?? {});
+      const i = z.object({ accountId: z.string().optional(), marketplace:z.enum(['mercado_livre','shopee','amazon']).optional(),days:z.number().int().min(1).max(365).default(30),listingId:z.string().max(200).optional(),skuId:z.string().max(200).optional() }).parse(payload ?? {});
       return buildDashboard(i);
     });
     this.register('kpi.compare', (payload) => {
