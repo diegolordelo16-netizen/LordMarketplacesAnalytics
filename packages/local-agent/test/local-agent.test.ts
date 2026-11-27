@@ -1369,6 +1369,10 @@ describe('comparação de períodos e entidades', () => {
     const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
     expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
     expect((await call('kpi.compare.detail',{...payload,listingId:'nonexistent'})).result).toMatchObject({rows:[]});
+    insert.run('after-window-a',listingId,accountId,'2025-01-20T12:00:00.000Z','2025-01-20T12:00:00.000Z',JSON.stringify({gmv:6000,orders:60,visits:600,units:72,stockAvailable:120}),'A_PRIMARY_UI',evidence('2025-01-08','2025-01-14','all'));
+    insert.run('after-window-b',listingId,accountId,'2025-01-20T13:00:00.000Z','2025-01-20T13:00:00.000Z',JSON.stringify({gmv:10000,orders:100,visits:1000,units:120,stockAvailable:300}),'A_PRIMARY_UI',evidence('2025-01-01','2025-01-07','all'));
+    expect((await call('kpi.compare.detail',{...payload,sourceWindows:true})).result).toMatchObject({sourceWindows:true,rows:[{comparisonQuality:{comparable:true},growthOpportunity:{best:{incrementalGmvCents:100000}}}]});
+    expect((await call('kpi.compare.detail',{...payload,accountId:undefined,sourceWindows:true})).ok).toBe(false);
     const campaignAt='2025-01-14T22:00:00.000Z';
     const base={marketplace:'mercado_livre',accountId,pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',sourceClass:'A_PRIMARY_UI',referenceAt:campaignAt,collectedAt:campaignAt,method:'content_script_dom',listings:[],evidence:{filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all'}};
     const detail=(externalId:string,adSpend:number,adAttributedRevenue:number)=>({kind:'AD_CAMPAIGN',externalId,metrics:{adSpend,adAttributedRevenue},evidence:{adSpend:'Investimento',adAttributedRevenue:'Receita atribuída'}});
