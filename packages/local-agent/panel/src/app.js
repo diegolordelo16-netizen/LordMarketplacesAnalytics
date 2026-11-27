@@ -329,7 +329,7 @@ async function viewExec() {
     ['Ticket médio', brl(k?.aovCents), 'aov', 'indigo'],
     ['ACoS', pct(k?.acosPct), 'acos', 'blue'],
     ['Devoluções', pct(k?.returnRatePct), 'returnRate', 'amber'],
-    ['Cobertura de estoque', Number.isFinite(k?.stockCoverageDays) ? `${num(k.stockCoverageDays, 1)} d` : '—', null, 'amber'],
+    ['Cobertura de estoque', k && typeof k.stockCoverageDays === 'number' && Number.isFinite(k.stockCoverageDays) ? `${num(k.stockCoverageDays, 1)} d` : '—', null, 'amber'],
   ];
   const renderKpi = ([label, value, metric, tone, icon]) => {
     const content = `<span class="exec-kpi-head">${icon ? `<i class="exec-icon exec-icon-${icon}" aria-hidden="true"></i>` : ''}<span class="l">${esc(label)}</span></span>
