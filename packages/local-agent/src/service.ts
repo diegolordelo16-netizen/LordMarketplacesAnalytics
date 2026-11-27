@@ -3913,11 +3913,13 @@ export class LocalService {
         };
         const isGoogle=id==='google_analytics4'||id==='google_search_console';
         let startDay=from??null,endDay=to??null;
+        if(mode==='SYNC'&&!isGoogle&&(from||to))throw Error('período não se aplica à leitura de anúncios');
         if(mode==='SYNC'&&isGoogle){
           endDay=to??new Date(Date.now()-(id==='google_search_console'?4:1)*86400000).toISOString().slice(0,10);
           const last=db.row<{period_end:string}>("SELECT period_end FROM connector_sync_runs WHERE connector_id=? AND account_id=? AND scope_key=? AND status='OK' AND partial=0 ORDER BY period_end DESC LIMIT 1",id,accountId!,scopeKey)?.period_end;
           const lower=new Date(Date.parse(endDay)-29*86400000).toISOString().slice(0,10);
           startDay=from??(last?[lower,new Date(Date.parse(last)-2*86400000).toISOString().slice(0,10)].sort().at(-1)!:lower);
+          if(startDay>endDay&&from)throw Error('período inicial posterior ao final');
           if(startDay>endDay)startDay=endDay;
           windowDays(startDay,endDay);
         }
@@ -3946,7 +3948,7 @@ export class LocalService {
           if(mode==='SYNC'){
             const result=report as Awaited<ReturnType<typeof readReport>>|null;
             if(result&&new Set(result.rows.map(x=>x.key)).size!==result.rows.length)throw Error('resposta contém chaves duplicadas');
-            db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,next_cursor,previous_run_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(runId,id,accountId!,scopeKey,result?.kind??'UNAVAILABLE',startDay,endDay,started,nowIso(),ok?'OK':status,Number(result?.partial??false),result?.rows.length??0,requests,result?.note??message,result?.nextCursor??null,continueRunId??null);
+            db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,next_cursor,previous_run_id,source_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(runId,id,accountId!,scopeKey,result?.kind??'UNAVAILABLE',startDay,endDay,started,nowIso(),ok?'OK':status,Number(result?.partial??false),result?.rows.length??0,requests,result?.note??message,result?.nextCursor??null,continueRunId??null,JSON.stringify({source:'OFFICIAL_API',provider:row.provider,property:cfg.propertyId??cfg.siteUrl??cfg.sellerId??cfg.shopId??null,accountId,observedAt:nowIso(),costUsd:null,costStatus:'NOT_REPORTED'}));
             const insert=db.db.prepare('INSERT INTO connector_sync_rows(run_id,row_key,reference_date,values_json) VALUES(?,?,?,?)');
             for(const item of result?.rows??[])insert.run(runId,item.key,item.date??null,JSON.stringify(item.values));
           }
@@ -4436,13 +4438,14 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
     });
 
     this.register('connector.import.get', (payload) => {
-      const i = z.object({ jobId: z.string().min(1), accountId: z.string().min(1) }).parse(payload ?? {});
+      const i = z.object({ jobId: z.string().min(1), accountId: z.string().min(1),offset:z.number().int().min(0).max(10000).default(0),limit:z.number().int().min(1).max(200).default(100) }).parse(payload ?? {});
       const job = db.row<Record<string, unknown>>('SELECT * FROM import_jobs WHERE id=? AND account_id=?', i.jobId, i.accountId);
       if (!job) throw new Error('importação não encontrada');
       const rows = db.rows<{ row_number: number; data_json: string }>(
-        'SELECT row_number,data_json FROM import_job_rows WHERE job_id=? ORDER BY row_number LIMIT 10000', i.jobId,
+        'SELECT row_number,data_json FROM import_job_rows WHERE job_id=? ORDER BY row_number LIMIT ? OFFSET ?', i.jobId,i.limit,i.offset,
       ).map((row) => ({ rowNumber: row.row_number, data: JSON.parse(row.data_json) as Record<string, unknown> }));
-      return { ...job, report_json: job.report_json ? JSON.parse(String(job.report_json)) : null, rows };
+      const total=Number(job.rows_total??0);
+      return { ...job, report_json: job.report_json ? JSON.parse(String(job.report_json)) : null, rows,offset:i.offset,nextOffset:i.offset+rows.length<total?i.offset+rows.length:null };
     });
 
     this.register('connector.import.commit', (payload, auth) => {
