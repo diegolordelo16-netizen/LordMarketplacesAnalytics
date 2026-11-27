@@ -1655,7 +1655,7 @@ const ACTIONS = {
     if(!out)return;
     const [h,evidence]=await run(()=>Promise.all([
       api('competitor.monitoring.history',{relationId:d.id}),
-      api('competitor.evidence.compare',{relationId:d.id}).catch(()=>null),
+      api('competitor.evidence.compare',{relationId:d.id,accountId}).catch(()=>null),
     ]))||[];
     if(!h||generation!==viewRenderSequence||accountId!==state.accountId||productId!==state.ownProductId||
        status!==state.relationsStatus||!out.isConnected)return;
@@ -1668,7 +1668,7 @@ const ACTIONS = {
       ['Anúncio concorrente patrocinado',evidence.sponsored==null?'—':evidence.sponsored?'Sim':'Não'],
       ['Arquivos de imagem idênticos',num(evidence.images.identicalHashes)],
     ].map(([label,value])=>`<tr><td>${esc(label)}</td><td>${esc(value)}</td></tr>`),'Sem evidências comparáveis.')+
-    `<p class="muted small">${esc(evidence.images.explanation)}</p>`:'<p class="muted small">Comparativo de evidências indisponível.</p>';
+    `<p class="muted small">${evidence.observedAt?'Captura: '+dt(evidence.observedAt)+' · ':''}${esc(evidence.images.explanation)}</p>`:'<p class="muted small">Comparativo de evidências indisponível.</p>';
     const pts = h.points || [];
     const max = Math.max(...pts.map((p) => p.price_cents || 0), h.ownPriceCents || 0, 1);
     out.innerHTML = `

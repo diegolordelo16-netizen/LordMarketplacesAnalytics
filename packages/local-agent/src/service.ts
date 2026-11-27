@@ -2809,36 +2809,41 @@ export class LocalService {
       return {items,history:history.slice(0,500).map(r=>({...r,stock:knownNumber(parseJsonObject(String(r.metrics_json)),'stockAvailable')})),areas:areaRows.slice(0,100).map(r=>({...r,metrics:parseJsonObject(String(r.metrics_json)),evidence:parseJsonObject(String(r.evidence_json))})),warehouses:warehouses.slice(0,100).map(r=>({...r,metrics:parseJsonObject(String(r.metrics_json))})),truncated:history.length>500||areaRows.length>100||warehouses.length>100,coverageVerified:false,cutoff,method:'Último snapshot por anúncio. Estoque zero é distinto de ausente; não somar estoque de anúncios que compartilham SKU. Cobertura em dias exige janela de vendas explícita. Investimento e estoque observados não comprovam simultaneidade operacional.'};
     });
 
-    this.register('competitor.evidence.record', (payload, auth) => {
+    this.register('competitor.evidence.record', (payload, auth) => db.transaction(() => {
       const i = z.object({ relationId: z.string(), priceCents: z.number().int().min(0).nullable().optional(), shippingCents: z.number().int().min(0).nullable().optional(), deliveryDaysMin: z.number().min(0).nullable().optional(), deliveryDaysMax: z.number().min(0).nullable().optional(), rating: z.number().min(0).max(5).nullable().optional(), reviews: z.number().int().min(0).nullable().optional(), sponsored: z.boolean().nullable().optional(), images: z.array(z.object({ url: z.string().url().max(2048), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(10).default([]), sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT']), capturedAt: z.string().datetime().optional(), evidence: z.record(z.string(), z.string().max(2000)).default({}) }).refine((v) => v.deliveryDaysMin == null || v.deliveryDaysMax == null || v.deliveryDaysMin <= v.deliveryDaysMax, 'prazo mínimo não pode superar o máximo').parse(payload ?? {});
       const relation = db.row<{ id: string; status: string; monitoring_state: string; own_product_id: string; candidate_id: string }>('SELECT id,status,monitoring_state,own_product_id,candidate_id FROM competitor_relations WHERE id=?', i.relationId);
       if (!relation || relation.status === 'REJEITADO') throw new Error('relação de concorrência inexistente ou rejeitada');
       const id = randomUUID(); const capturedAt = i.capturedAt ?? nowIso();
+      if(capturedAt>nowIso())throw Error('data da captura no futuro');
       db.db.prepare(`INSERT INTO competitor_monitoring_points (id,relation_id,captured_at,price_cents,rating,reviews,source_class,shipping_cents,delivery_days_min,delivery_days_max,sponsored,images_json,evidence_json)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,i.relationId,capturedAt,i.priceCents ?? null,i.rating ?? null,i.reviews ?? null,i.sourceClass,i.shippingCents ?? null,i.deliveryDaysMin ?? null,i.deliveryDaysMax ?? null,i.sponsored == null ? null : (i.sponsored ? 1 : 0),JSON.stringify(i.images),JSON.stringify(i.evidence));
       const candidate = db.row<{ id: string }>('SELECT id FROM competitor_candidates WHERE id=?', relation.candidate_id);
-      if (candidate) db.db.prepare('UPDATE competitor_candidates SET shipping_cents=COALESCE(?,shipping_cents),delivery_days_min=COALESCE(?,delivery_days_min),delivery_days_max=COALESCE(?,delivery_days_max),sponsored=COALESCE(?,sponsored),images_json=CASE WHEN ?=0 THEN images_json ELSE ? END,last_seen_at=? WHERE id=?')
-        .run(i.shippingCents ?? null,i.deliveryDaysMin ?? null,i.deliveryDaysMax ?? null,i.sponsored == null ? null : (i.sponsored ? 1 : 0),i.images.length,JSON.stringify(i.images),capturedAt,candidate.id);
+      if (candidate) db.db.prepare('UPDATE competitor_candidates SET shipping_cents=COALESCE(?,shipping_cents),delivery_days_min=COALESCE(?,delivery_days_min),delivery_days_max=COALESCE(?,delivery_days_max),sponsored=COALESCE(?,sponsored),images_json=CASE WHEN ?=0 THEN images_json ELSE ? END,last_seen_at=? WHERE id=? AND last_seen_at<=?')
+        .run(i.shippingCents ?? null,i.deliveryDaysMin ?? null,i.deliveryDaysMax ?? null,i.sponsored == null ? null : (i.sponsored ? 1 : 0),i.images.length,JSON.stringify(i.images),capturedAt,candidate.id,capturedAt);
       this.audit(auth, 'COMPETITOR_EVIDENCE_RECORD', 'competitor_monitoring_point', id, 'OK', `${i.sourceClass}; ${i.images.length} image(s); dados ausentes preservados como NULL`);
       return { ok: true, id, relationId: i.relationId, capturedAt, visualComparison: 'HASH_ONLY_WHEN_PROVIDED', missingFieldsRemainNull: true };
-    });
+    }));
 
     this.register('competitor.evidence.compare', (payload) => {
-      const i = z.object({ relationId: z.string() }).parse(payload ?? {});
+      const i = z.object({relationId:z.string(),accountId:z.string().min(1).optional()}).parse(payload ?? {});
       const row = db.row<Record<string, unknown>>(`SELECT r.id,r.status,o.title own_title,o.price_cents own_price,o.shipping_cents own_shipping,o.delivery_days_min own_delivery_min,o.delivery_days_max own_delivery_max,o.images_json own_images,c.title competitor_title,c.price_cents competitor_price,c.shipping_cents competitor_shipping,c.delivery_days_min competitor_delivery_min,c.delivery_days_max competitor_delivery_max,c.images_json competitor_images,c.sponsored,
-        (SELECT price_cents FROM competitor_monitoring_points p WHERE p.relation_id=r.id ORDER BY captured_at DESC LIMIT 1) observed_price,
-        (SELECT shipping_cents FROM competitor_monitoring_points p WHERE p.relation_id=r.id ORDER BY captured_at DESC LIMIT 1) observed_shipping,
-        (SELECT delivery_days_min FROM competitor_monitoring_points p WHERE p.relation_id=r.id ORDER BY captured_at DESC LIMIT 1) observed_delivery_min,
-        (SELECT delivery_days_max FROM competitor_monitoring_points p WHERE p.relation_id=r.id ORDER BY captured_at DESC LIMIT 1) observed_delivery_max,
-        (SELECT images_json FROM competitor_monitoring_points p WHERE p.relation_id=r.id ORDER BY captured_at DESC LIMIT 1) observed_images
-        FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id JOIN competitor_candidates c ON c.id=r.candidate_id WHERE r.id=?`, i.relationId);
+        p.id AS observed_id,p.captured_at AS observed_at,p.price_cents AS observed_price,p.shipping_cents AS observed_shipping,
+        p.delivery_days_min AS observed_delivery_min,p.delivery_days_max AS observed_delivery_max,p.images_json AS observed_images,p.sponsored AS observed_sponsored
+        FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id
+        JOIN competitor_candidates c ON c.id=r.candidate_id AND c.own_product_id=o.id
+        LEFT JOIN competitor_monitoring_points p ON p.id=(
+          SELECT newest.id FROM competitor_monitoring_points newest
+          WHERE newest.relation_id=r.id AND newest.captured_at<=? ORDER BY newest.captured_at DESC,newest.rowid DESC LIMIT 1
+        )
+        WHERE r.id=? AND (? IS NULL OR o.account_id=?)`,nowIso(),i.relationId,i.accountId??null,i.accountId??null);
       if (!row) throw new Error('relação de concorrência não encontrada');
       const ownImages = (() => { try { return JSON.parse(String(row.own_images ?? '[]')) as Array<{ sha256?: string }>; } catch { return []; } })();
-      const compImages = (() => { try { return JSON.parse(String(row.observed_images ?? row.competitor_images ?? '[]')) as Array<{ sha256?: string }>; } catch { return []; } })();
+      const compImages = (() => { try { return JSON.parse(String((row.observed_id?row.observed_images:row.competitor_images) ?? '[]')) as Array<{ sha256?: string }>; } catch { return []; } })();
       const ownHashes = new Set(ownImages.map((image) => image.sha256).filter(Boolean));
       const sharedHashes = compImages.map((image) => image.sha256).filter((hash): hash is string => Boolean(hash && ownHashes.has(hash)));
       const diff = (own: unknown, competitor: unknown) => own == null || competitor == null ? null : Number(competitor) - Number(own);
-      return { relationId: i.relationId, status: row.status, priceDifferenceCents: diff(row.own_price,row.observed_price ?? row.competitor_price), shippingDifferenceCents: diff(row.own_shipping,row.observed_shipping ?? row.competitor_shipping), deliveryDaysMinDifference: diff(row.own_delivery_min,row.observed_delivery_min ?? row.competitor_delivery_min), deliveryDaysMaxDifference: diff(row.own_delivery_max,row.observed_delivery_max ?? row.competitor_delivery_max), images: { ownCount: ownImages.length, competitorCount: compImages.length, identicalHashes: sharedHashes.length, visualSimilarity: 'NOT_COMPUTED', explanation: 'hashes iguais indicam arquivo idêntico; hashes diferentes/ausentes não provam diferença visual' }, sponsored: row.sponsored == null ? null : Boolean(row.sponsored), unknowns: ['frete/prazo não coletados permanecem null','patrocínio só é informado quando visível e registrado'] };
+      const sponsored=row.observed_id?row.observed_sponsored:row.sponsored;
+      return { relationId: i.relationId, status: row.status, observedAt:row.observed_at??null, priceDifferenceCents: diff(row.own_price,row.observed_id?row.observed_price:row.competitor_price), shippingDifferenceCents: diff(row.own_shipping,row.observed_id?row.observed_shipping:row.competitor_shipping), deliveryDaysMinDifference: diff(row.own_delivery_min,row.observed_id?row.observed_delivery_min:row.competitor_delivery_min), deliveryDaysMaxDifference: diff(row.own_delivery_max,row.observed_id?row.observed_delivery_max:row.competitor_delivery_max), images: { ownCount: ownImages.length, competitorCount: compImages.length, identicalHashes: sharedHashes.length, visualSimilarity: 'NOT_COMPUTED', explanation: 'hashes iguais indicam arquivo idêntico; hashes diferentes/ausentes não provam diferença visual' }, sponsored: sponsored == null ? null : Boolean(sponsored), unknowns: ['frete/prazo não coletados permanecem null','patrocínio só é informado quando visível e registrado'] };
     });
 
     this.register('campaign.change.prepare', (payload, auth) => {

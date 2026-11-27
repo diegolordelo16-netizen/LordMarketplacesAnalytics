@@ -27,3 +27,5 @@ A presença e o share Top 20 usam capturas com posições válidas e sem empates
 ## Comparativo de concorrentes
 
 O histórico de cada relação no painel mostra as diferenças observadas de preço, frete e prazo, o patrocínio informado e a contagem de arquivos idênticos por hash. Campos sem observação ficam vazios. A resposta é descartada se o usuário trocar a loja, o produto ou o filtro enquanto a consulta está em andamento.
+
+A comparação utiliza uma única captura recente identificada por data e ID. Capturas antigas ficam no histórico, campos ausentes continuam sem valor e a consulta do painel verifica a loja selecionada.

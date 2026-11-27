@@ -144,6 +144,27 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('voc.overview',{accountId:'unknown'})).ok).toBe(false);
   });
 
+  it('compara a captura mais recente de concorrência sem misturar dados antigos ou lojas',async()=>{
+    const accountId='comp-evidence-account',other='comp-evidence-other',relationId='comp-evidence-relation';
+    seedImportAccount(accountId);seedImportAccount(other);
+    const old='2025-01-01T12:00:00.000Z',recent='2025-01-02T12:00:00.000Z';
+    db.db.prepare(`INSERT INTO own_products(id,account_id,marketplace,title,price_cents,shipping_cents,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run('comp-own',accountId,'mercado_livre','Produto próprio',1000,500,old,old);
+    db.db.prepare(`INSERT INTO competitor_candidates(id,own_product_id,marketplace,title,source_class,discovery_method,first_seen_at,last_seen_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run('comp-candidate','comp-own','mercado_livre','Concorrente','A_PRIMARY_UI','TEST',old,old);
+    db.db.prepare(`INSERT INTO competitor_relations(id,own_product_id,candidate_id,relation_kind,status,similarity_pct,rationale_json,suggested_by,suggested_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(relationId,'comp-own','comp-candidate','DIRETO','APROVADO',100,'{}','RULES',old);
+    const source={relationId,sourceClass:'A_PRIMARY_UI'};
+    expect((await call('competitor.evidence.record',{...source,capturedAt:recent,priceCents:1100,sponsored:false})).ok).toBe(true);
+    expect((await call('competitor.evidence.record',{...source,capturedAt:old,priceCents:900,shippingCents:999,sponsored:true})).ok).toBe(true);
+    expect((await call('competitor.evidence.record',{...source,capturedAt:'2099-01-01T00:00:00.000Z',priceCents:0})).ok).toBe(false);
+    expect((await call('competitor.evidence.compare',{relationId,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.evidence.compare',{relationId,accountId})).result).toMatchObject({
+      observedAt:recent,priceDifferenceCents:100,shippingDifferenceCents:null,sponsored:false,
+    });
+    expect(db.row('SELECT last_seen_at FROM competitor_candidates WHERE id=?','comp-candidate')).toMatchObject({last_seen_at:recent});
+  });
+
   it('persiste detalhes de campanha e variação por conta sem somar aos totais e rejeita escopo inválido',async()=>{
     seedImportAccount('acct-details');
     seedImportAccount('acct-details-other');
