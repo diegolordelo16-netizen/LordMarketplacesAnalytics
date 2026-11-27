@@ -658,8 +658,17 @@ describe('comparação de períodos e entidades', () => {
     const verified=await call('kpi.compare.detail',payload);
     expect(verified.ok).toBe(true);
     expect(verified.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:20},comparisonQuality:{comparable:true}}]});
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:80,orders:10,visits:200,adSpend:120,commission:20,stockAvailable:4}),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:100,orders:20,visits:200,adSpend:100,commission:10,stockAvailable:4}),'verified-b');
+    const diagnostics=(await call('kpi.compare.detail',payload)).result as any;
+    expect(diagnostics.rows[0].diagnostics.map((d:any)=>d.code)).toEqual(expect.arrayContaining(['SALES_DECLINE','ORDERS_DECLINE','COST_INCREASE','CVR_DECLINE']));
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:120,orders:25,visits:200,stockAvailable:4}),'verified-a');
+    const growth=(await call('kpi.compare.detail',payload)).result as any;
+    expect(growth.rows[0].diagnostics.map((d:any)=>d.code)).toContain('GROWTH_REVIEW');
+
     db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(evidence('2025-01-01','2025-01-07','active'),'verified-b');
     const incompatible=await call('kpi.compare.detail',payload);
+    expect((incompatible.result as any).rows[0].diagnostics).toEqual([]);
     expect(incompatible.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:null},comparisonQuality:{sameFilters:false,comparable:false}}]});
     const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
     expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
