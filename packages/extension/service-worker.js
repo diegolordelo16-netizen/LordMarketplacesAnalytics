@@ -739,7 +739,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   };
   const enqueuePageLinks = (info, current) => {
     enqueueLinks(info.authorizedAreaLinks,new URL(info.url).pathname);
-    if ((info.paginationUnsupported&&!info.spaPagination) || info.coverageWarnings?.length) unsupportedLinks = true;
+    if ((info.paginationUnsupported&&!info.spaPagination) || info.coverageWarnings?.some(w=>w!=='TABELA_VIRTUALIZADA')) unsupportedLinks = true;
     const next = normalizeAuthorizedAreaUrl(info.nextPageUrl, origin, marketplace);
     if (next && current && next.pathname === current.pathname && keyOf(next) !== keyOf(current)) {
       const filterQuery=url=>JSON.stringify([...url.searchParams.entries()].filter(([key])=>!/^(page|page_number|p|offset|limit)$/i.test(key)).sort());
@@ -795,11 +795,12 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   };
 
   const rootSpa=Boolean(initialInfo.spaPagination&&!initialInfo.nextPageUrl);
+  const rootTemporary=rootSpa||Boolean(initialInfo.coverageWarnings?.includes('TABELA_VIRTUALIZADA'));
   if(prior?.spaPage!==undefined&&!rootSpa)return {ok:false,error:'marcador SPA anterior não está disponível para retomada segura'};
-  if(rootSpa&&!seen.has(keyOf(currentUrl))&&!queue.some(item=>item.key===keyOf(currentUrl)))queue.unshift({key:keyOf(currentUrl),url:currentUrl.href,label:'paginação SPA inicial',filterSignature:initialInfo.filterSignature});
+  if(rootTemporary&&!seen.has(keyOf(currentUrl))&&!queue.some(item=>item.key===keyOf(currentUrl)))queue.unshift({key:keyOf(currentUrl),url:currentUrl.href,label:'paginação SPA inicial',filterSignature:initialInfo.filterSignature});
   if(rootSpa&&seen.has(keyOf(currentUrl))&&prior?.spaPage===undefined)unsupportedLinks=true;
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
-  if (!rootSpa&&currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
+  if (!rootTemporary&&currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
     if (options.beforeCapture) await options.beforeCapture();
     const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url, filterSignature:initialInfo.filterSignature, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
     recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued), filterSignature:initialInfo.filterSignature, coverageWarnings:firstCapture.snapshot?.coverageWarnings??initialInfo.coverageWarnings });
@@ -871,7 +872,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
           for(let attempt=0;attempt<12;attempt++){
             state=await readCapturePageInfo(temporary.id);
             if(!contextOk(state)){stoppedReason='conta, filtros ou marcador SPA divergentes';break;}
-            const response=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REQUEST'}).catch(()=>null);
+            const response=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REQUEST',...(state.coverageWarnings?.includes('TABELA_VIRTUALIZADA')?{virtualized:true,accountId:expectedAccountId,url:state.url,filterSignature:state.filterSignature,spaPage:expectedPage}:{})}).catch(()=>null);
             const snap=response?.ok?response.snapshot:null;
             ids=spaRecordIds(snap);
             if(!ids||snap.marketplace!==marketplace||snap.accountId!==expectedAccountId||snap.pageKind!==info.pageKind||snap.url!==info.url||snap.filterSignature!==info.filterSignature||snap.spaPage!==expectedPage){fingerprint=null;await new Promise(resolve=>setTimeout(resolve,400));continue;}
@@ -896,7 +897,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
             pages[position]=base;
             if(!await persistProgress()){failed=true;break;}
             const captureKey=options.logicalBatchId?await digest(JSON.stringify([options.logicalBatchId,expectedAccountId,item.key,expectedPage])):undefined;
-            const captured=await captureTab(temporary.id,{accountId:expectedAccountId,url:info.url,pageKind:info.pageKind,filterSignature:info.filterSignature,spaPage:expectedPage,spaRecordIds:fingerprint,spaFingerprint:hash,skipAreaTotals:step>0,...(captureKey?{captureKey}:{})});
+            const captured=await captureTab(temporary.id,{accountId:expectedAccountId,url:info.url,pageKind:info.pageKind,filterSignature:info.filterSignature,spaPage:expectedPage,spaRecordIds:fingerprint,spaFingerprint:hash,virtualized:Boolean(state.coverageWarnings?.includes('TABELA_VIRTUALIZADA')),skipAreaTotals:step>0,...(captureKey?{captureKey}:{})});
             pages[position]={...base,ok:Boolean(captured.ok),queued:Boolean(captured.queued),error:captured.ok?undefined:captured.error,coverageWarnings:captured.snapshot?.coverageWarnings??state.coverageWarnings};
             if(!await persistProgress()){failed=true;break;}
             if(!captured.ok){stoppedReason='captura SPA não confirmada';failed=true;break;}
@@ -917,9 +918,9 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       }
 
       if (options.beforeCapture) await options.beforeCapture();
-      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, filterSignature:info.filterSignature, ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
+      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, filterSignature:info.filterSignature, spaPage:info.spaPagination?.page, virtualized:Boolean(info.coverageWarnings?.includes('TABELA_VIRTUALIZADA')), ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
       recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued), filterSignature:info.filterSignature, coverageWarnings:captured.snapshot?.coverageWarnings??info.coverageWarnings });
-      if(captured.snapshot?.coverageWarnings?.length)unsupportedLinks=true;
+      if((captured.snapshot?.coverageWarnings??info.coverageWarnings)?.length)unsupportedLinks=true;
       if (captured.ok || (captured.queued && !options.logicalBatchId)) {
         seen.add(item.key);
         queue.shift();
