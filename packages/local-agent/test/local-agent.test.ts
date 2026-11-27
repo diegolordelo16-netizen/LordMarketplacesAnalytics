@@ -213,6 +213,7 @@ describe('restauração segura de backup', () => {
       reader.db.exec('BEGIN');
       reader.db.prepare('SELECT * FROM restore_busy_probe').all();
       db.db.prepare('UPDATE restore_busy_probe SET value=?').run('atual');
+      db.db.exec('PRAGMA busy_timeout=50');
       expect(() => db.restoreBackup(backup.id)).toThrow(/ocupado/);
       expect(db.row<{value:string}>('SELECT value FROM restore_busy_probe')?.value).toBe('atual');
     } finally { reader.db.exec('ROLLBACK'); reader.close(); }
