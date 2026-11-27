@@ -1779,7 +1779,8 @@ export class LocalService {
           WHERE a.status='APPROVED' AND a.expires_at>? AND a.marketplace=? AND a.account_id=? AND a.external_listing_id=?
             AND i.status='APPROVED_TO_PUBLISH' AND l.status<>'CLOSED'
             AND NOT EXISTS (SELECT 1 FROM listing_api_executions remote WHERE remote.account_id=i.account_id AND remote.listing_id=i.listing_id AND remote.status<>'REMOTE_VERIFIED')
-            AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.id<>i.id AND busy.status IN ('PROCESSING','PUBLISHING'))
+            AND NOT EXISTS (SELECT 1 FROM listing_browser_executions browser WHERE browser.account_id=i.account_id AND browser.listing_id=i.listing_id AND browser.status IN ('CLAIMED','NEEDS_VERIFICATION','CANDIDATE_OBSERVED'))
+            AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.id<>i.id AND busy.status IN ('PROCESSING','PUBLISHING','UNCERTAIN'))
           ORDER BY a.approved_at LIMIT 2`, nowIso(), i.marketplace, i.accountId, i.externalListingId);
         if (matches.length > 1) return { ambiguous: true };
         const match = matches[0];
@@ -3066,7 +3067,7 @@ export class LocalService {
            db.row("SELECT id FROM operation_manual_receipts WHERE proposal_kind='VARIATION' AND proposal_id=?",i.proposalId)||
            db.row("SELECT id FROM listing_browser_executions WHERE proposal_kind='VARIATION' AND proposal_id=?",i.proposalId))throw Error('proposta já utilizada');
         if(db.row("SELECT proposal_id FROM listing_api_executions WHERE account_id=? AND listing_id=? AND status<>'REMOTE_VERIFIED'",i.accountId,p.listingId)||
-           db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,p.listingId)||
+           db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION','CANDIDATE_OBSERVED')",i.accountId,p.listingId)||
            db.row("SELECT id FROM task_items WHERE account_id=? AND listing_id=? AND status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH','UNCERTAIN')",i.accountId,p.listingId))throw Error('execução anterior pendente');
         const limits=readAssistedLimits(i.accountId);
         const guard=evaluateGuard({action:removing?'edit_variation':'create_variation',actorRole:auth.role,
@@ -3176,7 +3177,7 @@ export class LocalService {
         }
       }
       if(db.row('SELECT id FROM operation_manual_receipts WHERE proposal_kind=? AND proposal_id=?',kind,i.proposalId)||db.row('SELECT id FROM listing_browser_executions WHERE proposal_kind=? AND proposal_id=?',kind,i.proposalId))throw Error('proposta já utilizada; não repetir');
-      const conflict=db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,listing.id)||db.row("SELECT id FROM task_items WHERE account_id=? AND listing_id=? AND status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH')",i.accountId,listing.id);
+      const conflict=db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION','CANDIDATE_OBSERVED')",i.accountId,listing.id)||db.row("SELECT id FROM task_items WHERE account_id=? AND listing_id=? AND status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH','UNCERTAIN')",i.accountId,listing.id);
       const limits=readAssistedLimits(i.accountId);
       const action=i.action==='DUPLICATE'?'duplicate_listing':i.action==='CREATE_VARIATION'?'create_variation':'edit_variation';
       const guard=evaluateGuard({action,actorRole:auth.role,marketplace:{id:account.marketplace,enabled:Boolean(db.row('SELECT id FROM marketplaces WHERE id=? AND enabled=1',account.marketplace))},account:{id:account.id,marketplace:account.marketplace,verified:true,sessionState:'AUTHENTICATED'},listing:{id:listing.id,accountId:account.id,externalId:listing.external_id,status:listing.status},currentState:{sourcePath:source,externalListingId:listing.external_id,...(i.action==='EDIT_VARIATION'?{beforePriceCents:i.beforePriceCents,beforeStock:i.beforeStock}:{})},financialLimits:limits?{...limits,targetVariationPriceCents:Number(plan.priceCents),targetVariationStock:Number(plan.stock),currentPriceCents:i.beforePriceCents}:null,requiredData:{missing:[]},platformRules:{violations:[]},authorization:{approved:true,approvedBy:auth.userId},conflicts:conflict?['execução ou tarefa anterior pendente']:[]});
