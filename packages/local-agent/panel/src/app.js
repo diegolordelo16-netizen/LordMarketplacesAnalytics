@@ -1455,10 +1455,10 @@ async function viewGrowthOpportunities() {
     const reason={NO_RECORD:'Sem registro financeiro',CONFLICT:'Registros sobrepostos ou divergentes',INVALID_RECORD:'Custos ou origem inválidos',REVENUE_MISMATCH:'Receita líquida ausente ou divergente',NO_SCENARIO:'Sem cenário elegível'}[r.financialGrowth?.status]||'Sem evidência financeira';
     return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+esc(reason)+'</td></tr>';
   }),'Nenhuma lacuna entre os candidatos.');
-  const funnel = table(['Anúncio','Impressões orgânicas','Impressões pagas','Visitas','Adições ao carrinho','Checkout','Pedidos','Pedidos/visitas'],eligible.slice(0,100).map(r=>{
+  const funnel = table(['Anúncio','Impressões totais','Impressões orgânicas','Impressões pagas','Visitas','Adições ao carrinho','Checkout iniciado','Pedidos','Pedidos/visitas'],eligible.slice(0,100).map(r=>{
     const f=r.growthOpportunity.funnel;
     const d=r.funnelDetails||{};
-    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+num(d.organicImpressions)+'</td><td>'+num(d.paidImpressions)+'</td><td>'+num(f.visits)+'</td><td>'+num(d.addToCart)+'</td><td>—</td><td>'+num(f.orders)+'</td><td>'+pct(f.conversionPct)+'</td></tr>';
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+num(d.totalImpressions)+'</td><td>'+num(d.organicImpressions)+'</td><td>'+num(d.paidImpressions)+'</td><td>'+num(f.visits)+'</td><td>'+num(d.addToCart)+'</td><td>'+num(d.checkout)+'</td><td>'+num(f.orders)+'</td><td>'+pct(f.conversionPct)+'</td></tr>';
   }),'Sem observações com janelas compatíveis.');
   const shown = scenarioRows.slice(0,600);
   const option = shown.map(({r,s})=>'<option value="'+s.incrementalGmvCents+'">'+esc((r.label||r.id)+' · '+type(s.kind)+' · '+Math.round(s.recoveryFraction*100)+'% · '+format(s.incrementalGmvCents))+'</option>').join('');
@@ -1471,7 +1471,7 @@ async function viewGrowthOpportunities() {
     +card('Priorização financeira — cenário histórico', '<p class="muted small">Até 100 resultados ordenados por lucro histórico projetado sobre GMV adicional no cenário de 25%. A receita líquida deve coincidir com um registro único do mesmo anúncio e período; todos os custos devem estar confirmados. A proporção histórica inclui custos registrados e Ads históricos, não comprova margem incremental futura. Não desconta o custo extra da ação; valores negativos são preservados. Não autoriza investimento.</p>'+financialRows+tableFinancialNote())
     +card('Simulador por anúncio',scenarios+'<p class="muted small">Exibindo '+num(shown.length)+' de '+num(scenarioRows.length)+' alternativas. Tráfego e conversão são alternativas, não aditivas.</p>')
     +card('Simulação de contribuição incremental', shown.length?'<div class="form-grid"><label>Cenário<select id="growth-scenario">'+option+'</select></label><label>Margem incremental estimada (%)<input id="growth-margin" type="number" min="-100" max="100" step="0.01" placeholder="Informe sua premissa"></label><label>Custo adicional da ação (R$)<input id="growth-cost" type="number" min="0" step="0.01" placeholder="Informe inclusive zero"></label></div><button class="btn" data-act="growth-evaluate">Calcular contribuição simulada</button><div id="growth-evaluation" aria-live="polite"></div><p class="muted small">Margem informada deve descontar custos variáveis incrementais, taxas, frete, tributos e devoluções; não duplicar custo da ação. Sem premissas, não estimar contribuição. Estoque deve ser revalidado antes de executar.</p>':'<p>Sem cenários para simular.</p>')
-    +card('Raio-X do funil observado',funnel+'<p class="muted small">Até 100 anúncios. Impressões orgânicas e pagas e adições ao carrinho são exibidas separadamente apenas com evidência explícita do anúncio. Não somar impressões, inferir usuários únicos ou abandono. Checkout permanece indisponível.</p>');
+    +card('Raio-X do funil observado',funnel+'<p class="muted small">Até 100 anúncios. Impressões orgânicas e pagas e adições ao carrinho são exibidas separadamente apenas com evidência explícita do anúncio. Não somar impressões, inferir usuários únicos ou abandono. Impressões totais e checkout iniciado exigem rótulos específicos do anúncio; ausência permanece indisponível.</p>');
 }
 
 const VIEWS = {
