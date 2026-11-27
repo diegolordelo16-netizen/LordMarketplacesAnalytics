@@ -539,6 +539,106 @@
     }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
   }
 
+  const consumedListingGrants=new Set();
+  function operationLabel(el){
+    return String(el.getAttribute('aria-label')||Array.from(el.labels||[]).map(l=>l.textContent).join(' ')||el.textContent||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+  }
+  function listingOperationContext(action,externalListingId,variationId,allowFilled=false){
+    if(location.origin!=='https://vendedores.mercadolivre.com.br'||window.MI_DOM.hasChallenge(document)||document.querySelector('input[type="password"],form[action*="login"],form[action*="signin"]')||!/^(MLB-?\d{5,})$/i.test(externalListingId))throw Error('sessão ou anúncio não reconhecido');
+    const accountId=visibleAccountIdentity().accountId;
+    if(!accountId)throw Error('conta não comprovada');
+    budgetDocumentNonce??=crypto.randomUUID();
+    const base={accountId,externalListingId,action,sourcePath:location.origin+location.pathname,documentNonce:budgetDocumentNonce};
+    const unique=(items,message)=>{if(items.length!==1)throw Error(message);return items[0];};
+    const visible=el=>window.MI_DOM.isVisible(el);
+    const safeButton=el=>visible(el)&&!el.getAttribute('formaction')&&!el.getAttribute('form')&&!el.getAttribute('href')&&!el.getAttribute('formmethod')&&!el.getAttribute('formtarget');
+    const listingIds=el=>['data-item-id','data-listing-id'].map(k=>el.getAttribute(k)).filter(Boolean);
+    if(action==='DUPLICATE'){
+      if(currentPageKind()!=='seller_listings'||variationId)throw Error('abra a lista de anúncios');
+      const row=unique(Array.from(document.querySelectorAll('[data-item-id],[data-listing-id]')).filter(el=>visible(el)&&listingIds(el).length>0&&listingIds(el).every(id=>id===externalListingId)),'linha explícita e única do anúncio necessária');
+      const button=unique(Array.from(row.querySelectorAll('button[type="button"]')).filter(el=>safeButton(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.form&&!el.closest('form')&&/^(duplicar anuncio|duplicar publicacao|duplicate listing)$/.test(operationLabel(el))),'controle explícito de duplicação não encontrado');
+      return {base,fields:{},button,values:{}};
+    }
+    if(!['CREATE_VARIATION','EDIT_VARIATION'].includes(action)||currentPageKind()!=='seller_listing_edit'||currentExternalListingId()!==externalListingId)throw Error('abra o editor do anúncio aprovado');
+    let region=document;
+    if(action==='EDIT_VARIATION'){
+      if(!/^[A-Za-z0-9_.:-]{1,200}$/.test(variationId||''))throw Error('ID explícito da variação necessário');
+      region=unique(Array.from(document.querySelectorAll('[data-variation-id]')).filter(el=>visible(el)&&el.getAttribute('data-variation-id')===variationId),'variação ambígua ou ausente');
+      const parent=region.closest('[data-item-id],[data-listing-id]');
+      if(parent&&listingIds(parent).some(id=>id!==externalListingId))throw Error('variação pertence a outro anúncio');
+      const label=unique(Array.from(region.querySelectorAll('[data-testid="variation-name"]')).filter(visible),'nome explícito da variação necessário');
+      const name=String(label.textContent||'').trim();
+      if(!name||name.length>120)throw Error('nome da variação não verificável');
+      base.variationId=variationId;base.variationLabel=name;
+    }else if(variationId)throw Error('formulário de nova variação necessário');
+    const savePattern=action==='CREATE_VARIATION'?/^(criar variacao|adicionar variacao|salvar nova variacao|create variation|add variation)$/:/^(salvar variacao|atualizar variacao|save variation|update variation)$/;
+    const candidates=Array.from(region.querySelectorAll('form')).filter(form=>visible(form)&&Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).some(el=>safeButton(el)&&savePattern.test(operationLabel(el))));
+    const form=unique(candidates,'formulário dedicado de variação ausente ou ambíguo');
+    if(new URL(form.action||location.href,location.href).origin!==location.origin||form.getAttribute('target')&&!['_self',''].includes(form.getAttribute('target')))throw Error('destino do formulário não autorizado');
+    const button=unique(Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>safeButton(el)&&savePattern.test(operationLabel(el))),'controle de salvar ambíguo');
+    const definitions=action==='CREATE_VARIATION'?{
+      name:['text',/^(nome da variacao|variation name)$/],option:['text',/^(opcao da variacao|valor da variacao|variation option|variation value)$/],
+      priceCents:['number',/^(preco|price)( \(r\$\)| r\$)?$/],stock:['number',/^(estoque|stock|quantidade disponivel|available quantity)$/]
+    }:{priceCents:['number',/^(preco|price)( \(r\$\)| r\$)?$/],stock:['number',/^(estoque|stock|quantidade disponivel|available quantity)$/]};
+    const controls=Array.from(form.elements||[]).filter(el=>!['hidden','button','submit','reset'].includes(String(el.type||'').toLowerCase()));
+    if(controls.length!==Object.keys(definitions).length||form.querySelector('[contenteditable="true"]'))throw Error('formulário contém outros campos; revise manualmente');
+    const fields={},values={};
+    for(const [key,[type,pattern]] of Object.entries(definitions)){
+      const field=unique(controls.filter(el=>el.tagName==='INPUT'&&el.type===type&&el.form===form&&visible(el)&&isEditableVisible(el)&&!el.getAttribute('form')&&pattern.test(operationLabel(el))),'campo '+key+' não comprovado');
+      fields[key]=field;const raw=String(field.value??'');
+      if(key==='priceCents'){
+        if(raw===''&&action==='CREATE_VARIATION'&&!allowFilled)values[key]=null;
+        else if(/^\d+(?:\.\d{1,2})?$/.test(raw)&&Number.isSafeInteger(Math.round(Number(raw)*100)))values[key]=Math.round(Number(raw)*100);
+        else throw Error('preço inválido');
+      }else if(key==='stock'){
+        if(raw===''&&action==='CREATE_VARIATION'&&!allowFilled)values[key]=null;
+        else if(/^\d+$/.test(raw)&&Number.isSafeInteger(Number(raw)))values[key]=Number(raw);
+        else throw Error('estoque inválido');
+      }else values[key]=raw.trim();
+    }
+    if(action==='CREATE_VARIATION'&&!allowFilled&&(values.name!==''||values.option!==''||values.priceCents!==null||!(values.stock===null||values.stock===0)))throw Error('formulário de criação deve estar vazio antes da autorização');
+    if(action==='EDIT_VARIATION'){base.beforePriceCents=values.priceCents;base.beforeStock=values.stock;}
+    return {base,fields,button,values};
+  }
+  function listingOperationPublicContext(message){
+    return listingOperationContext(message.action,message.externalListingId,message.variationId).base;
+  }
+  async function applyListingOperation(grant){
+    let touched=false;
+    try{
+      if(!grant||typeof grant.id!=='string'||consumedListingGrants.has(grant.id)||consumedListingGrants.size>=100)throw Error('autorização já utilizada ou limite atingido');
+      consumedListingGrants.add(grant.id);
+      const g=grant.context,p=grant.plan;
+      const initial=listingOperationContext(g.action,g.externalListingId,g.variationId);
+      const contextMatches=c=>['accountId','externalListingId','action','sourcePath','documentNonce','variationId','variationLabel'].every(k=>c.base[k]===g[k])&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
+      const baselineMatches=c=>contextMatches(c)&&c.base.beforePriceCents===g.beforePriceCents&&c.base.beforeStock===g.beforeStock;
+      if(!baselineMatches(initial))throw Error('contexto mudou');
+      if(g.action!=='DUPLICATE'&&(!Number.isSafeInteger(p.priceCents)||p.priceCents<=0||p.priceCents>100000000||!Number.isSafeInteger(p.stock)||p.stock<0||p.stock>1000000))throw Error('valores da proposta inválidos');
+      const summary=g.action==='DUPLICATE'?'Duplicar anúncio '+g.externalListingId+' — '+p.originalTitle:'Variação de '+g.externalListingId+' — '+p.name+(p.option?' / '+p.option:'')+'\nPreço: R$ '+(p.priceCents/100).toFixed(2)+'\nEstoque: '+p.stock;
+      if(!window.confirm('Loja: '+g.accountId+'\n'+summary+'\nConfirma acionar o controle desta proposta agora? A operação pode alterar ou criar uma oferta.'))return {outcome:'CANCELLED',message:'cancelado antes da edição'};
+      const again=listingOperationContext(g.action,g.externalListingId,g.variationId);
+      if(!baselineMatches(again)||again.button!==initial.button||Object.keys(initial.fields).some(k=>again.fields[k]!==initial.fields[k]))throw Error('formulário mudou antes da ação');
+      if(g.action==='DUPLICATE'){
+        touched=true;again.button.click();
+        return {outcome:'NEEDS_VERIFICATION',message:'controle de duplicação acionado; revise eventual diálogo e capture o novo anúncio. Não repetir automaticamente.'};
+      }
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+      if(!setter)throw Error('setter nativo ausente');
+      const wanted=g.action==='CREATE_VARIATION'?{name:p.name,option:p.option,priceCents:p.priceCents,stock:p.stock}:{priceCents:p.priceCents,stock:p.stock};
+      for(const [key,value] of Object.entries(wanted)){
+        const now=listingOperationContext(g.action,g.externalListingId,g.variationId,touched);
+        if(!contextMatches(now)||now.button!==again.button||now.fields[key]!==again.fields[key])throw Error('contexto mudou durante o preenchimento');
+        touched=true;setter.call(now.fields[key],key==='priceCents'?(Number(value)/100).toFixed(2):String(value));
+        now.fields[key].dispatchEvent(new Event('input',{bubbles:true}));now.fields[key].dispatchEvent(new Event('change',{bubbles:true}));
+      }
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const ready=listingOperationContext(g.action,g.externalListingId,g.variationId,true);
+      if(!contextMatches(ready)||ready.button!==again.button||Object.entries(wanted).some(([k,v])=>ready.fields[k]!==again.fields[k]||ready.values[k]!==v||!ready.fields[k].checkValidity())||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('dados finais ou controle de salvar divergiram; revise manualmente');
+      ready.button.click();
+      return {outcome:'NEEDS_VERIFICATION',message:'controle de variação acionado; confira a página e capture novamente. Não repetir automaticamente.'};
+    }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
+  }
+
   async function publishApprovedChange(message) {
     const { task, item, externalListingId } = message ?? {};
     if (task?.mode !== 'PUBLISH') throw new Error('tarefa não possui autorização de publicação');
@@ -642,6 +742,13 @@
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;
+    }
+    if(message?.type==='MI_LISTING_OPERATION_CONTEXT'){
+      try{sendResponse({ok:true,...listingOperationPublicContext(message)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
+      return false;
+    }
+    if(message?.type==='MI_LISTING_OPERATION_APPLY'){
+      applyListingOperation(message.grant).then(sendResponse).catch(error=>sendResponse({outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)}));return true;
     }
     if(message?.type==='MI_CAMPAIGN_BUDGET_CONTEXT'){
       try{sendResponse({ok:true,...budgetPublicContext(message.campaignRef)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
