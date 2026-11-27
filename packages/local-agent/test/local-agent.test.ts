@@ -353,6 +353,7 @@ describe('capacidades adicionais 3.10.3', () => {
     const at='2025-01-31T23:59:59.999Z',periodStart='2025-01-01T00:00:00.000Z';
     for(const id of ['profit-negative','profit-missing'])db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,accountId,'mercado_livre',id,id,'ACTIVE',at,at);
     const payload={accountId,listingId:'profit-negative',periodStart,periodEnd:at,netRevenueCents:10000,productCostCents:9000,packagingCents:100,shippingCents:1000,marketplaceFeesCents:1000,taxesCents:100,adSpendCents:500,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0,sourceClass:'F_USER_INPUT',evidence:{source:'relatório de teste'}};
+    expect((await call('finance.realized.upsert',{...payload,adSpendCents:undefined})).ok).toBe(false);
     expect((await call('finance.realized.upsert',payload)).ok).toBe(true);
     const data=(await call('finance.profitability',{accountId,periodStart,periodEnd:at})).result as any;
     expect(data.listings.find((l:any)=>l.id==='profit-negative')).toMatchObject({profitCents:-1700,marginPct:-17,negative:true,status:'RECORDED'});
@@ -387,9 +388,50 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('capture.ingest',{...base,pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/vendas',accountMetrics:{gmv:1000}})).ok).toBe(true);
     const result=(await call('ads.dashboard',{accountId,from,to})).result as any;
     expect(result).toMatchObject({tacosPct:10,items:[{external_id:'C5',signal:'REVIEW_SPEND',verified:true}]});
+    const costs={productCostCents:15000,packagingCents:0,shippingCents:0,marketplaceFeesCents:0,taxesCents:0,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0};
+    const rec={accountId,snapshotId:result.items[0].id,netAttributedRevenueCents:20000,costs,sourceReference:'Relatório conciliado de campanha',confirmedSameScope:true};
+    expect((await call('ads.reconcile',{...rec,costs:{productCostCents:15000}})).ok).toBe(false);
+    expect((await call('ads.reconcile',rec)).result).toMatchObject({profitCents:-5000,classification:'REPORTED_ATTRIBUTED_PROFIT'});
+    expect((await call('ads.dashboard',{accountId,from,to})).result).toMatchObject({items:[{profitCents:-5000,signal:'REPORTED_NEGATIVE_ATTRIBUTED_PROFIT'}]});
+
     expect((await call('ads.dashboard',{accountId,from,to,externalId:'C5'})).result).toMatchObject({tacosPct:null});
     db.db.prepare("UPDATE account_snapshots SET evidence_json=? WHERE account_id=? AND page_kind='seller_dashboard'").run(JSON.stringify({filtersAndPeriod:'start_date=2025-01-02|end_date=2025-01-07|status=all'}),accountId);
     expect((await call('ads.dashboard',{accountId,from,to})).result).toMatchObject({tacosPct:null});
+  });
+
+
+  it('protege propostas de capa e variação por conta, aprovação e relato humano sem simular execução',async()=>{
+    const accountId='acct-ops-5',other='acct-ops-other-5';seedImportAccount(accountId);seedImportAccount(other);
+    const listingId='listing-ops-5',at='2025-01-07T23:59:59.999Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre','MLB-OPS5','Teste','ACTIVE',at,at);
+    const insert=db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)');
+    insert.run('ops-before',listingId,accountId,at,at,JSON.stringify({orders:10,gmv:100}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}));
+    const media=(await call('media.add',{accountId,filename:'pixel.png',mimeType:'image/png',base64:'iVBORw0KGgo='})).result as any;
+    const mediaId=media.id;
+    const payload={accountId,listingId,kind:'COVER',mediaId,reason:'Teste de capa'};
+    expect((await call('listing.change.prepare',{...payload,accountId:other})).ok).toBe(false);
+    const prepared=await call('listing.change.prepare',payload);
+    expect(prepared.ok).toBe(true);
+    const id=(prepared.result as any).id;
+    const receipt={accountId,proposalKind:'LISTING_CHANGE',proposalId:id,performedAt:'2025-01-08T12:00:00.000Z',evidenceReference:'Relatório de alteração',confirmedManualExecution:true};
+    expect((await call('operation.receipt.record',receipt)).ok).toBe(false);
+    expect((await call('listing.change.review',{accountId:other,id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    expect((await call('listing.change.review',{accountId,id,decision:'APPROVED',reason:'Teste'})).result).toMatchObject({status:'APPROVED',published:false});
+    expect((await call('listing.change.review',{accountId,id,decision:'REJECTED',reason:'Teste'})).ok).toBe(false);
+    db.db.prepare('UPDATE listing_change_proposals SET updated_at=? WHERE id=?').run('2025-01-08T10:00:00.000Z',id);
+    expect((await call('operation.receipt.record',{...receipt,accountId:other})).ok).toBe(false);
+    expect((await call('operation.receipt.record',receipt)).result).toMatchObject({status:'HUMAN_REPORTED',remoteVerified:false});
+    expect((await call('operation.receipt.record',receipt)).ok).toBe(false);
+    expect((await call('operation.receipt.list',{accountId:other})).result).toEqual([]);
+    expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:id})).result).toMatchObject({status:'INSUFFICIENT_COMPATIBLE_WINDOWS',remoteVerified:false});
+    const after='2025-01-16T12:00:00.000Z';
+    insert.run('ops-after',listingId,accountId,after,after,JSON.stringify({orders:12,gmv:120}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+    expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:id})).result).toMatchObject({status:'OBSERVED_CHANGE',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:false,causalityVerified:false});
+    const variant=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Cor',options:[{name:'Azul'}]})).result as any;
+    expect((await call('offer.variation.update',{accountId:other,id:variant.id,variationName:'Cor',options:[{name:'Preto'}]})).ok).toBe(false);
+    expect((await call('offer.variation.update',{accountId,id:variant.id,variationName:'Cor',options:[{name:'Preto'}]})).result).toMatchObject({status:'DRAFT',published:false});
+    expect((await call('offer.variation.delete',{accountId,id:variant.id})).ok).toBe(true);
+    expect((await call('offer.variation.list',{accountId})).result).toEqual([]);
   });
 
   it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
