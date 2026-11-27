@@ -353,8 +353,31 @@ async function viewListings() {
 }
 
 // ------------------------------------------------------------------ FINANCEIRO
+const REALIZED_FIELDS=[["netRevenueCents","Receita líquida"],["productCostCents","Custo dos produtos"],["packagingCents","Embalagens"],["shippingCents","Frete"],["marketplaceFeesCents","Taxas marketplace"],["taxesCents","Impostos"],["adSpendCents","Publicidade"],["refundsCents","Reembolsos"],["returnLogisticsCents","Logística reversa"],["cancellationLossCents","Perdas em cancelamentos"],["otherCostsCents","Outros custos"]];
+function realizedPayload(read,accountId){
+  if(!accountId)throw new Error('Selecione uma loja.');
+  const from=read('rp-from'),to=read('rp-to'),evidence=read('rp-evidence').trim();
+  const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(Date.parse(v+'T00:00:00Z'))&&new Date(v+'T00:00:00Z').toISOString().slice(0,10)===v;
+  if(!validDate(from)||!validDate(to)||from>to||!evidence)throw new Error('Informe período válido e evidência da conciliação.');
+  const payload={accountId,listingId:read('rp-listing').trim()||undefined,periodStart:from+'T00:00:00.000Z',periodEnd:to+'T23:59:59.999Z',sourceClass:'F_USER_INPUT',evidence:{source:evidence}};
+  for(const [key,label] of REALIZED_FIELDS){
+    const raw=read('rp-'+key).trim();
+    if(!/^\d+(?:[.,]\d{1,2})?$/.test(raw))throw new Error('Informe '+label+'; use 0 somente se confirmado.');
+    const cents=Math.round(Number(raw.replace(',','.'))*100);
+    if(!Number.isSafeInteger(cents)||cents<0)throw new Error('Valor inválido: '+label);
+    payload[key]=cents;
+  }
+  return payload;
+}
 async function viewFinance() {
-  return card('Simulador de margem e cenários', `
+  return card('Registrar lucro realizado', state.accountId?`
+    <p class="muted small">Informe valores efetivamente conciliados. Nenhum campo financeiro é preenchido automaticamente com zero. Não desconte duas vezes valores já incluídos na receita líquida.</p>
+    <div class="form-grid"><label>Anúncio (ID interno, opcional)<input id="rp-listing" maxlength="200"></label><label>Início (UTC)<input type="date" id="rp-from"></label><label>Fim (UTC)<input type="date" id="rp-to"></label>
+    ${REALIZED_FIELDS.map(([key,label])=>`<label>${esc(label)} (R$)<input id="rp-${key}" inputmode="decimal" placeholder="0,00"></label>`).join('')}</div>
+    <label>Referência da conciliação (relatório, data, origem)<textarea id="rp-evidence" maxlength="500" rows="2"></textarea></label>
+    <button class="btn primary" data-act="finance-realized-save">Registrar valores conciliados</button><div id="rp-out" class="out" aria-live="polite"></div>
+  `:'<p class="muted">Selecione uma loja para registrar lucro.</p>')
+  + card('Simulador de margem e cenários', `
     <div class="form-grid">
       <label>Preço de venda (R$) <input id="fs-price" type="number" step="0.01" value="199.90"></label>
       <label>Custo do produto (R$) <input id="fs-cost" type="number" step="0.01" value="89.00"></label>
@@ -1555,6 +1578,14 @@ const ACTIONS = {
     renderView();
   },
 
+  'finance-realized-save': async()=>{
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#rp-out');
+    const payload=realizedPayload(id=>$('#'+id).value,accountId);
+    if(!confirm('Registrar os valores informados nesta loja? Confirme a conciliação e evite períodos duplicados.'))return;
+    const result=await api('finance.realized.upsert',payload);
+    if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#rp-out')||!host)return;
+    host.textContent='Lucro registrado: '+brl(result.realizedProfitCents)+' · fonte informada pelo usuário. Consulte o executivo para verificar conflitos.';
+  },
   'exec-filter': async()=>{state.execFilters={marketplace:$('#exec-market').value,days:Number($('#exec-days').value),listingId:$('#exec-listing').value.trim(),skuId:$('#exec-sku').value.trim()};await renderView();},
   'kpi-drilldown': async (d) => {
     const metric = d.metric;
@@ -2184,7 +2215,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
