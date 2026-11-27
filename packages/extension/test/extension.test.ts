@@ -1000,3 +1000,30 @@ describe('filtros personalizados acessíveis',()=>{
     expect(window.MI_DOM.collectionFilterState(root).warnings).toContain('FILTRO_NAO_RECONHECIDO');
   });
 });
+
+describe('feedback em tabela virtualizada',()=>{
+  it('confirma todas as linhas por ID, preserva posição e não declara sucesso com lacunas',async()=>{
+    class E{
+      scrollTop=0;clientHeight=100;scrollHeight=200;
+      constructor(public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelector(){return null}
+      querySelectorAll(){return [] as E[]}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const grid=new E({'aria-rowcount':'3'});grid.scrollTop=25;
+    const indices=()=>grid.scrollTop>=100?[2,3]:[1,2];
+    grid.querySelectorAll=()=>indices().map(i=>new E({'aria-rowindex':String(i),'data-review-id':'R'+i}));
+    const root={querySelectorAll:()=>[grid],querySelector:()=>null,body:{innerText:''}};
+    const initial={pageKind:'seller_reputation',marketplace:'shopee',accountId:'a',url:'https://seller.shopee.com.br/ratings',filterSignature:'',coverageWarnings:['TABELA_VIRTUALIZADA'],customerVoice:[{kind:'REVIEW',externalRef:'R1',text:'review 1'}]};
+    const read=()=>({...initial,customerVoice:indices().map(i=>({kind:'REVIEW',externalRef:'R'+i,text:'review '+i}))});
+    const result=await window.MI_DOM.collectVirtualizedFeedback(root,initial,read,async()=>{});
+    expect(result.customerVoice.map((row:any)=>row.externalRef)).toEqual(['R1','R2','R3']);
+    expect(result.coverageWarnings).toEqual([]);expect(grid.scrollTop).toBe(25);
+    grid.attrs['aria-rowcount']='4';
+    expect((await window.MI_DOM.collectVirtualizedFeedback(root,initial,read,async()=>{})).coverageWarnings).toContain('TABELA_VIRTUALIZADA');
+    expect(grid.scrollTop).toBe(25);
+  });
+});
