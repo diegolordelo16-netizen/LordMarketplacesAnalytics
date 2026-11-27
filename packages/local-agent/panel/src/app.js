@@ -8,6 +8,7 @@
 // ------------------------------------------------------------------ estado
 let activeImportJobId = '';
 let activeImportAccountId = '';
+let reportPaging = null;
 
 const state = {
   token: new URLSearchParams(location.search).get('token') || sessionStorage.getItem('mi.token') || '',
@@ -2591,7 +2592,13 @@ const ACTIONS = {
     const accountId=type==='AUDITORIA'||$('#rp-scope').value==='all'?undefined:selectedAccount||undefined;
     if(type!=='AUDITORIA'&&$('#rp-scope').value==='account'&&!accountId)throw Error('Selecione uma loja.');
     const input={type,format:fmt,accountId,marketplace:type==='AUDITORIA'?undefined:$('#rp-market').value||undefined,days:$('#rp-days').value?Number($('#rp-days').value):undefined,listingId:$('#rp-listing').value.trim()||undefined,skuId:$('#rp-sku').value.trim()||undefined,limit:Number($('#rp-limit').value),offset:Number(d.offset||0)};
+    const previous=reportPaging;
+    const baseInput={...input,offset:0};
+    if(input.offset&&(!previous||previous.generation!==generation||JSON.stringify(previous.baseInput)!==JSON.stringify(baseInput)))throw Error('Filtros alterados; gere o relatório novamente desde a primeira parte.');
+    if(input.offset&&previous.auditThroughId!==null)input.auditThroughId=previous.auditThroughId;
     const r=await api('report.export',input);
+    const offsets=input.offset&&previous?[...previous.offsets.filter(x=>x<input.offset),input.offset]:[0];
+    reportPaging={generation,baseInput,auditThroughId:r.auditThroughId,offsets};
     if(generation!==viewRenderSequence||selectedAccount!==state.accountId||host!==$('#report-out'))return;
     const rows=r.rows||[],name='relatorio-'+type.toLowerCase()+'-'+Date.now()+'-parte-'+r.offset+'.'+fmt;
     let blob;
@@ -2608,7 +2615,7 @@ const ACTIONS = {
     const link=document.createElement('a');link.href=URL.createObjectURL(blob);host.dataset.objectUrl=link.href;link.download=name;link.textContent='Baixar '+name;link.className='link';
     const note=document.createElement('p');note.className='muted small';note.textContent=rows.length+' registros nesta parte. '+(r.partial?'Relatório paginado; confira todas as partes. ':'')+r.note;
     host.replaceChildren(link,note);
-    for(const [label,offset] of [['Parte anterior',r.offset>0?Math.max(0,r.offset-input.limit):null],['Próxima parte',r.nextOffset]]){if(offset===null)continue;const button=document.createElement('button');button.className='btn tiny';button.dataset.act='report';button.dataset.offset=String(offset);button.textContent=label;host.append(button);}
+    for(const [label,offset] of [['Parte anterior',offsets.length>1?offsets.at(-2):null],['Próxima parte',r.nextOffset]]){if(offset===null)continue;const button=document.createElement('button');button.className='btn tiny';button.dataset.act='report';button.dataset.offset=String(offset);button.textContent=label;host.append(button);}
     if(r.summary!==null){const pre=document.createElement('pre');pre.className='json';pre.textContent=JSON.stringify(r.summary,null,2);host.append(pre);}
     toast('Relatório gerado.');
   },

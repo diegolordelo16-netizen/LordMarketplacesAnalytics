@@ -103,7 +103,7 @@ check(mlContent.includes('waitForSaveConfirmation') && shopeeContent.includes('w
 check(mlContent.includes('salvo com sucesso') && shopeeContent.includes('salvo com sucesso') && mlContent.includes('n[aã]o') && shopeeContent.includes('n[aã]o'), 'detecção de sucesso é conservadora e exclui alertas negativos');
 check(serviceTs.includes('30 * 60_000') && serviceTs.includes('snapshot original recente'), 'aprovação rejeita snapshots originais com mais de 30 minutos');
 check(serviceTs.includes('itemTransition.changes') && serviceTs.includes('itemStarted.changes') && serviceTs.includes('itemFinished.changes'), 'transições de aprovação, execução e resultado são atômicas e verificam estado esperado');
-check(serviceTs.includes("execution: 'DRAFT_ONLY'") && serviceTs.includes('reversão remota só será possível'), 'rollback não executa escrita remota automática');
+check(serviceTs.includes("execution:'DRAFT_ONLY'") && serviceTs.includes('report_rollback_links') && serviceTs.includes("this.audit(auth,'ROLLBACK_VERIFIED'") && serviceTs.includes("beforeText!==rollback.after_text||afterText!==rollback.before_text"), 'rollback não executa escrita remota automática e exige evidência inversa');
 check(ipcSchema.includes("'task.approvePublish'") && ipcSchema.includes("'task.publishResult'"), 'comandos de publicação estão protegidos no schema IPC');
 
 // Exercita os filtros reais dos content scripts sem navegador ou sessão de vendedor.
@@ -220,7 +220,11 @@ const inspectJson = (directory) => {
 inspectJson('.');
 check(jsonCount > 0, 'arquivos JSON encontrados para validação');
 const failed = checks.filter((item) => !item.ok);
+check(serviceTs.includes("i.type==='AUDITORIA'&&auth?.role!=='super_admin'") && serviceTs.includes("report_type<>'AUDITORIA'"), 'auditoria global e agendamentos protegidos');
+check(serviceTs.includes('renderReportPdf(report)') && appJs.includes('atob(r.pdfBase64)'), 'PDF real gerado localmente e baixado pelo painel');
 console.log(`Auditoria estática: ${checks.length - failed.length}/${checks.length} verificações aprovadas.`);
 for (const item of failed) console.error(`FALHOU: ${item.label}`);
 if (failures.length) process.exitCode = 1;
 else console.log('OK: sem inconsistências estáticas detectadas.');
+
+// Etapa 09: relatório PDF local e controles administrativos.

@@ -31,7 +31,8 @@
     "skuId": "optional scoped",
     "offset": "0..1000000",
     "limit": "1..1000",
-    "audit": "super_admin"
+    "audit": "super_admin",
+    "auditThroughId": "optional audit high-water mark from first page"
   },
   "settings.get": "(sem parâmetros)",
   "gemini.testKey": "(sem parâmetros — usa a chave gravada)",
@@ -690,6 +691,9 @@
   "operation.limits.restore": {
     "accountId": "string",
     "revisionId": "latest revision",
+    "confirmed": true
+  },
+  "gemini.clearKey": {
     "confirmed": true
   }
 }

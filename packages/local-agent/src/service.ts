@@ -4669,7 +4669,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
      * relatório traz as linhas que existem hoje no banco.
      */
     this.register('report.export', (payload, auth) => {
-      const i=z.object({type:z.enum(['EXECUTIVO','KPIS','ANUNCIO','CONCORRENCIA','FINANCEIRO','EXPERIMENTOS','AUDITORIA']),format:z.enum(['csv','json','xlsx','pdf']).default('csv'),accountId:z.string().optional(),marketplace:z.enum(['mercado_livre','shopee','amazon']).optional(),days:z.number().int().min(1).max(365).optional(),listingId:z.string().optional(),skuId:z.string().optional(),offset:z.number().int().min(0).max(1000000).default(0),limit:z.number().int().min(1).max(1000).default(500)}).strict().parse(payload??{});
+      const i=z.object({auditThroughId:z.number().int().min(0).optional(),type:z.enum(['EXECUTIVO','KPIS','ANUNCIO','CONCORRENCIA','FINANCEIRO','EXPERIMENTOS','AUDITORIA']),format:z.enum(['csv','json','xlsx','pdf']).default('csv'),accountId:z.string().optional(),marketplace:z.enum(['mercado_livre','shopee','amazon']).optional(),days:z.number().int().min(1).max(365).optional(),listingId:z.string().optional(),skuId:z.string().optional(),offset:z.number().int().min(0).max(1000000).default(0),limit:z.number().int().min(1).max(1000).default(500)}).strict().parse(payload??{});
       if(i.type==='AUDITORIA'&&auth?.role!=='super_admin')throw Error('auditoria global exige super_admin');
       if(i.type==='AUDITORIA'&&(i.listingId||i.skuId||i.marketplace))throw Error('auditoria global não suporta filtros de anúncio/SKU/marketplace');
       if(i.accountId&&!db.row('SELECT id FROM accounts WHERE id=? AND (? IS NULL OR marketplace=?)',i.accountId,i.marketplace??null,i.marketplace??null))throw Error('conta não encontrada ou marketplace incompatível');
@@ -4678,6 +4678,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       if(i.skuId&&!db.row('SELECT id FROM skus WHERE id=? AND account_id=?',i.skuId,i.accountId!))throw Error('SKU não pertence ao escopo');
       if((i.listingId||i.skuId)&&['CONCORRENCIA','EXPERIMENTOS','FINANCEIRO'].includes(i.type))throw Error('filtro de anúncio/SKU não se aplica a este relatório; selecione a conta');
       const at=nowIso(),cutoff=i.days?new Date(Date.parse(at)-i.days*86400000).toISOString():null;
+      const auditThroughId=i.type==='AUDITORIA'?(i.auditThroughId??db.row<{n:number}>('SELECT COALESCE(MAX(id),0) n FROM audit_log')?.n??0):null;
       const filters={accountId:i.type==='AUDITORIA'?null:i.accountId??null,marketplace:i.marketplace??null,days:i.type==='EXECUTIVO'?i.days??30:i.days??null,listingId:i.listingId??null,skuId:i.skuId??null};
       const account=i.accountId??null,market=i.marketplace??null,listing=i.listingId??null,sku=i.skuId??null;
       let rows:Array<Record<string,unknown>>=[],summary:unknown=null,note='';
@@ -4702,7 +4703,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
         rows=page(`SELECT l.id,l.account_id,l.marketplace,l.external_id,l.title,l.status,l.sku_id,s.sku_code,
           (SELECT MAX(x.captured_at) FROM listing_snapshots x WHERE x.listing_id=l.id AND x.account_id=l.account_id AND (? IS NULL OR x.captured_at>=?)) last_capture
           FROM listings l LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=l.account_id
-          WHERE (? IS NULL OR l.account_id=?) AND (? IS NULL OR l.marketplace=?) AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?) ORDER BY l.account_id,l.id`,cutoff,cutoff,account,account,market,market,listing,listing,sku,sku).map(r=>({...r,kpis:capture.kpisForListing(String(r.id),30,cutoff??undefined)??null}));
+          WHERE (? IS NULL OR l.account_id=?) AND (? IS NULL OR l.marketplace=?) AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?) ORDER BY l.account_id,l.id`,cutoff,cutoff,account,account,market,market,listing,listing,sku,sku).map(r=>({...r,kpis:r.last_capture?capture.kpisForListing(String(r.id),30,cutoff??undefined)??null:null,kpiWindowStatus:'CAPTURE_WINDOW_NOT_VERIFIED'}));
         note='Um registro por anúncio, com SKU e KPIs observados. Sem captura no período não significa ausência de vendas.';
       }else if(i.type==='CONCORRENCIA'){
         rows=page(`SELECT r.*,o.account_id,o.title AS own_product_title,c.marketplace,c.external_id,c.title AS competitor_title,c.price_cents
@@ -4720,20 +4721,22 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
           FROM sku_costs c JOIN skus s ON s.id=c.sku_id JOIN accounts a ON a.id=s.account_id
           WHERE (? IS NULL OR s.account_id=?) AND (? IS NULL OR a.marketplace=?) AND (? IS NULL OR c.valid_to IS NULL OR c.valid_to>=?)
         ) ORDER BY reference_at DESC,id DESC`,account,account,market,market,cutoff,cutoff,account,account,market,market,cutoff,cutoff);
+        const fields=['net_revenue_cents','product_cost_cents','packaging_cents','shipping_cents','marketplace_fees_cents','taxes_cents','ad_spend_cents','refunds_cents','return_logistics_cents','cancellation_loss_cents','other_costs_cents'];
+        rows=rows.map(row=>{const valid=row.recordType==='RESULTADO_REALIZADO'&&fields.every(key=>typeof row[key]==='number'&&Number.isFinite(row[key])&&Number(row[key])>=0)&&parseJsonObject(String(row.evidence_json??'')).costFieldsConfirmed===true;const net=valid?Number(row.net_revenue_cents):null,profit=net===null?null:net-fields.slice(1).reduce((total,key)=>total+Number(row[key]),0);return {...row,realizedProfitCents:profit,realizedMarginPct:profit!==null&&net!==null&&net>0?profit/net*100:null};});
         if(account){const fn=this.handlers.get('finance.realized.summary');if(fn)summary=fn({accountId:account,periodStart:cutoff??undefined},auth);}
         note='Custos cadastrados e resultados realizados em linhas distintas. Não somar as duas categorias. Totais realizados exigem registros não conflitantes; não constituem auditoria contábil.';
       }else if(i.type==='EXPERIMENTOS'){
         rows=page('SELECT e.* FROM experiments e JOIN accounts a ON a.id=e.account_id WHERE (? IS NULL OR e.account_id=?) AND (? IS NULL OR a.marketplace=?) AND (? IS NULL OR e.started_at>=?) ORDER BY e.started_at DESC,e.id',account,account,market,market,cutoff,cutoff);
         note='Experimentos registrados; não extrapolar causalidade sem evidência.';
       }else{
-        rows=page('SELECT id,at,actor_user_id,actor_role,action,entity,entity_id,account_id,result,reason,correlation_id FROM audit_log WHERE (? IS NULL OR at>=?) ORDER BY at DESC,id DESC',cutoff,cutoff);
+        rows=page('SELECT id,at,actor_user_id,actor_role,action,entity,entity_id,account_id,result,reason,correlation_id FROM audit_log WHERE id<=? AND (? IS NULL OR at>=?) ORDER BY at DESC,id DESC',auditThroughId,cutoff,cutoff);
         note='Auditoria global restrita a administradores; payloads antes/depois omitidos da exportação.';
       }
       let hasNext=rows.length>i.limit;rows=rows.slice(0,i.limit);
       // Bound response bytes, not just number of rows; never silently omit.
       while(rows.length>1&&Buffer.byteLength(JSON.stringify(rows),'utf8')>900000){rows.pop();hasNext=true;}
       if(Buffer.byteLength(JSON.stringify(rows),'utf8')>900000)throw Error('registro excede o limite de exportação IPC');
-      const report={ok:true,type:i.type,format:i.format,generatedAt:at,rowCount:rows.length,summary,rows,scope:i.type==='AUDITORIA'?'global':i.accountId??'all_accounts',filters,note,offset:i.offset,nextOffset:hasNext?i.offset+rows.length:null,partial:hasNext||i.offset>0};
+      const report={ok:true,type:i.type,format:i.format,generatedAt:at,rowCount:rows.length,summary,rows,scope:i.type==='AUDITORIA'?'global':i.accountId??'all_accounts',filters,note,auditThroughId,offset:i.offset,nextOffset:hasNext?i.offset+rows.length:null,partial:hasNext||i.offset>0};
       const pdf=i.format==='pdf'?renderReportPdf(report):null;
       this.audit(auth,'REPORT_EXPORT','report',i.type,'OK',rows.length+' linhas em '+i.format+(hasNext?' (página parcial)':''));
       return {...report,...(pdf?{pdfBase64:pdf.toString('base64'),mimeType:'application/pdf'}:{})};
