@@ -100,27 +100,55 @@ function historyMetricConfig(){
   };
 }
 function renderHistoryChart(points, metric = 'gmvCents') {
-  const config=historyMetricConfig();
-  const selected = config[metric] ? metric : 'gmvCents';
+  const config = historyMetricConfig();
+  const selected = Object.hasOwn(config, metric) ? metric : 'gmvCents';
   const meta = config[selected];
-  const valid = (Array.isArray(points) ? points : []).filter((p) => typeof p[selected] === 'number' && Number.isFinite(p[selected]));
-  if (valid.length < 2) return `<div class="empty">São necessários pelo menos dois dias com ${esc(meta.label.toLowerCase())} capturado para desenhar a evolução. A ausência de dado não é zero.</div>`;
-  const width = 820, height = 230, left = 66, right = 22, top = 18, bottom = 38;
-  const values = valid.map((p) => p[selected]);
-  const min = Math.min(0, ...values), max = Math.max(...values);
-  const span = Math.max(1, max - min);
-  const start=Date.parse(valid[0].date+'T00:00:00Z'),end=Date.parse(valid[valid.length-1].date+'T00:00:00Z');
-  const x=(index)=>left+(Date.parse(valid[index].date+'T00:00:00Z')-start)/Math.max(86400000,end-start)*(width-left-right);
-  const y = (value) => top + (max - value) / span * (height - top - bottom);
-  const path = valid.map((p, index) => `${index&&Date.parse(p.date+'T00:00:00Z')-Date.parse(valid[index-1].date+'T00:00:00Z')===86400000 ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(p[selected]).toFixed(2)}`).join(' ');
-  const ticks = [0, .25, .5, .75, 1].map((fraction) => {
-    const value = min + span * fraction;
-    const yy = top + (height - top - bottom) * (1 - fraction);
-    return `<g><line class="trend-grid" x1="${left}" y1="${yy}" x2="${width-right}" y2="${yy}"/><text class="trend-axis" x="${left-10}" y="${yy+4}" text-anchor="end">${esc(meta.format(value))}</text></g>`;
+  const valid = (Array.isArray(points) ? points : [])
+    .filter(point => Number.isFinite(point?.[selected]) && /^\d{4}-\d{2}-\d{2}$/.test(point.date) &&
+      Number.isFinite(Date.parse(point.date + 'T00:00:00Z')))
+    .map(point => ({ time: Date.parse(point.date + 'T00:00:00Z'), date: point.date, value: point[selected] }))
+    .sort((a, b) => a.time - b.time);
+  const last = valid.at(-1);
+  if (valid.length < 2) return `<div class="trend-empty"><strong>${last ? esc(meta.format(last.value)) : 'Sem observações'}</strong><p>
+    ${last ? 'Único ponto capturado em '+esc(last.date)+'.' : 'Aguardando capturas de '+esc(meta.label.toLowerCase())+'.'}
+    A evolução aparece com pelo menos dois dias de dados.</p></div>`;
+  const width = 840, height = 300, left = 108, right = 26, top = 25, bottom = 39;
+  const values = valid.map(point => point.value);
+  const min = Math.min(0, ...values), max = Math.max(0, ...values);
+  const upper = min === max ? max + 1 : max;
+  const span = upper - min;
+  const first = valid[0], day = 86400000;
+  const x = point => left + (point.time - first.time) / Math.max(day, last.time - first.time) * (width - left - right);
+  const y = value => top + (upper - value) / span * (height - top - bottom);
+  const segments = [];
+  for (const point of valid) {
+    const current = segments.at(-1);
+    if (current && point.time - current.at(-1).time === day) current.push(point);
+    else segments.push([point]);
+  }
+  const line = group => group.map((point, index) => `${index ? 'L' : 'M'} ${x(point).toFixed(2)} ${y(point.value).toFixed(2)}`).join(' ');
+  const path = segments.map(line).join(' ');
+  const areas = segments.filter(group => group.length > 1).map(group =>
+    `<path d="${line(group)} L ${x(group.at(-1))} ${y(0)} L ${x(group[0])} ${y(0)} Z" fill="url(#trend-area-fill)"/>`).join('');
+  const ticks = [0, .25, .5, .75, 1].map(fraction => {
+    const value = min + span * fraction, yy = y(value);
+    return `<g><line class="trend-grid" x1="${left}" y1="${yy}" x2="${width-right}" y2="${yy}"/><text class="trend-axis" x="${left-12}" y="${yy+4}" text-anchor="end">${esc(meta.format(value))}</text></g>`;
   }).join('');
-  const dots = valid.map((p,index) => `<circle class="trend-dot" cx="${x(index)}" cy="${y(p[selected])}" r="3.5"><title>${esc(p.date)} · ${esc(meta.format(p[selected]))}</title></circle>`).join('');
-  const first = valid[0].date, last = valid[valid.length-1].date;
-  return `<div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução de ${esc(meta.label)} de ${esc(first)} a ${esc(last)}">${ticks}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}<text class="trend-axis" x="${left}" y="${height-10}">${esc(first)}</text><text class="trend-axis" x="${width-right}" y="${height-10}" text-anchor="end">${esc(last)}</text></svg></div><p class="muted small">${valid.length} dias com dado · observações por conta e anúncio · lacunas não são interpoladas.</p>`;
+  const dateLabel = point => point.date.slice(8,10)+'/'+point.date.slice(5,7);
+  const xTicks = [...new Set([first, ...(last.time-first.time>=4*day?[valid[Math.floor(valid.length/2)]]:[]), last])];
+  const dates=xTicks.map((point,index)=>`<text class="trend-axis" x="${x(point)}" y="${height-11}" text-anchor="${index===0?'start':point===last?'end':'middle'}">${dateLabel(point)}</text>`).join('');
+  const dots = valid.map(point => `<circle class="trend-dot${point===last?' trend-dot-last':''}" cx="${x(point)}" cy="${y(point.value)}" r="${point===last?5:3.5}">
+      <title>${esc(point.date)} · ${esc(meta.format(point.value))}</title></circle>`).join('');
+  return `<div class="trend-summary" style="--series-color:${meta.color}">
+      <div><span class="trend-summary-label"><i></i> Última observação · ${dateLabel(last)}</span><strong>${esc(meta.format(last.value))}</strong></div>
+      <div><span class="trend-summary-label">Dias com dados</span><strong>${valid.length}</strong></div>
+    </div>
+    <div class="trend-chart-wrap" tabindex="0" aria-label="Área rolável do gráfico">
+      <svg class="trend-chart" style="--series-color:${meta.color}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(meta.label)} de ${esc(first.date)} a ${esc(last.date)}">
+        <defs><linearGradient id="trend-area-fill" x1="0%" y1="0%" x2="0%" y2="100%"><stop stop-color="${meta.color}" stop-opacity=".25"/><stop offset="1" stop-color="${meta.color}" stop-opacity=".02"/></linearGradient></defs>
+        ${ticks}${areas}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}${dates}
+      </svg>
+    </div><p class="trend-caption">Observações por dia de captura. Os intervalos sem dados ficam em branco.</p>`;
 }
 
 function dt(iso) {
@@ -288,37 +316,63 @@ async function viewExec() {
   // kpi.dashboard devolve { accounts, listings, totals, ... }: usa totals quando existir.
   const k = kpis && !kpis.error ? (kpis.totals || kpis) : null;
   const kpiCards = [
-    ['Receita líquida', k ? brl(k.netRevenueCents) : '—', 'netRevenue'],
-    ['Lucro realizado registrado', realized&&!realized.error ? brl(realized.realizedProfitCents) : '—', null],
-    ['Lucro de contribuição', k ? brl(k.contributionCents) : '—', null],
-    ['Margem de contribuição', k ? pct(k.contributionMarginPct) : '—', null],
-    ['GMV', k ? brl(k.gmvCents) : '—', 'gmv'],
-    ['Unidades vendidas', k ? num(k.units) : '—', null],
-    ['Pedidos', k ? num(k.orders) : '—', 'orders'],
-    ['Visitas', k ? num(k.visits) : '—', 'visits'],
-    ['CVR', k ? pct(k.cvr) : '—', 'cvr'],
-    ['Ticket médio', k ? brl(k.aovCents) : '—', 'aov'],
-    ['ACoS', k ? pct(k.acosPct) : '—', 'acos'],
-    ['ROAS', k ? num(k.roas, 2) : '—', 'roas'],
-    ['Devoluções', k ? pct(k.returnRatePct) : '—', 'returnRate'],
-    ['Cobertura de estoque', k && typeof k.stockCoverageDays === 'number' && Number.isFinite(k.stockCoverageDays) ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
+    ['GMV', brl(k?.gmvCents), 'gmv', 'indigo', 'money'],
+    ['Receita líquida', brl(k?.netRevenueCents), 'netRevenue', 'teal', 'wallet'],
+    ['Pedidos', num(k?.orders), 'orders', 'violet', 'box'],
+    ['ROAS', num(k?.roas, 2), 'roas', 'blue', 'activity'],
+    ['Lucro realizado registrado', realized&&!realized.error ? brl(realized.realizedProfitCents) : '—', null, realized?.realizedProfitCents<0?'red':'teal'],
+    ['Lucro de contribuição', brl(k?.contributionCents), null, k?.contributionCents<0?'red':'teal'],
+    ['Margem de contribuição', pct(k?.contributionMarginPct), null, k?.contributionMarginPct<0?'red':'teal'],
+    ['Unidades vendidas', num(k?.units), null, 'violet'],
+    ['Visitas', num(k?.visits), 'visits', 'blue'],
+    ['CVR', pct(k?.cvr), 'cvr', 'violet'],
+    ['Ticket médio', brl(k?.aovCents), 'aov', 'indigo'],
+    ['ACoS', pct(k?.acosPct), 'acos', 'blue'],
+    ['Devoluções', pct(k?.returnRatePct), 'returnRate', 'amber'],
+    ['Cobertura de estoque', k && typeof k.stockCoverageDays === 'number' && Number.isFinite(k.stockCoverageDays) ? `${num(k.stockCoverageDays, 1)} d` : '—', null, 'amber'],
   ];
+  const renderKpi = ([label, value, metric, tone, icon]) => {
+    const content = `<span class="exec-kpi-head">${icon ? `<i class="exec-icon exec-icon-${icon}" aria-hidden="true"></i>` : ''}<span class="l">${esc(label)}</span></span>
+      <span class="v">${esc(value)}</span>${metric ? '<span class="kpi-hint" aria-hidden="true"></span>' : ''}`;
+    const classes = `kpi exec-kpi tone-${tone}${value==='—'?' has-no-data':''}`;
+    return metric
+      ? `<button type="button" class="${classes} kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(label)}: ${esc(value)}">${content}</button>`
+      : `<div class="${classes}">${content}</div>`;
+  };
+  const scopeLabel = selectedAccount ? 'Loja selecionada' : 'Todas as lojas';
+  const recentDays = historyPoints.length;
 
   const signals=(diagnostic?.rows||[]).flatMap(row=>(row.diagnostics||[]).map(d=>({label:row.label,...d})));
   const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history], ['Diagnósticos',diagnostic], ['Registros de lucro',profitRows], ['Resumo do lucro realizado',realized] ].filter(([, value]) => value?.error);
-  return `
+  return `<div class="exec-dashboard">
+    <section class="exec-hero" aria-labelledby="exec-heading">
+      <div class="exec-hero-copy">
+        <div class="exec-hero-scope"><span></span>${esc(scopeLabel)}${filters.marketplace?' · '+esc(filters.marketplace):''}</div>
+        <h2 id="exec-heading">Desempenho da operação</h2>
+        ${filters.listingId||filters.skuId ? `<p>${[filters.listingId && 'Anúncio '+filters.listingId, filters.skuId && 'SKU '+filters.skuId].filter(Boolean).map(esc).join(' · ')}</p>` : ''}
+      </div>
+      <div class="exec-hero-range"><span>Janela de captura</span><strong>${esc(filters.days)} dias</strong>
+        <small>${history?.error?'Histórico indisponível':num(recentDays)+' dias no histórico'}</small></div>
+    </section>
     ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
     ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
-    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas seguem a loja selecionada; alertas globais são identificados separadamente, sem inferir filtro por anúncio ou período.</p>`)}
-    <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <details class="exec-filters" ${filters.marketplace||filters.listingId||filters.skuId?'open':''}><summary>Filtros de captura <span>${esc(filters.days)} dias</span></summary><div class="card-body"><div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas seguem a loja selecionada; alertas globais são identificados separadamente, sem inferir filtro por anúncio ou período.</p></div></details>
+    <div class="kpi-grid exec-primary-kpis">${kpiCards.slice(0,4).map(renderKpi).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
+    <section class="card exec-history" aria-labelledby="exec-history-heading">
+      <header><div><h2 id="exec-history-heading">Evolução dos indicadores</h2><p>Histórico de snapshots do escopo selecionado</p></div>
+        <label>Métrica <select id="history-metric">${Object.entries(historyMetricConfig()).map(([key,m])=>`<option value="${esc(key)}">${esc(m.label)}</option>`).join('')}</select></label>
+      </header>
+      <div class="card-body"><div id="history-chart">${history?.error?'<div class="empty bad-text">Falha ao carregar histórico.</div>':renderHistoryChart(historyPoints)}</div></div>
+    </section>
+    <section class="exec-secondary" aria-labelledby="exec-secondary-heading"><h2 id="exec-secondary-heading">Indicadores complementares</h2>
+      <div class="kpi-grid exec-secondary-kpis">${kpiCards.slice(4).map(renderKpi).join('')}</div>
+    </section>
     ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
     ${card('Diagnósticos automáticos — 7 dias completos', '<p class="muted small">'+esc(diagnostic?.diagnosticPolicy||'Comparação de snapshots; não comprova causalidade.')+' · '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+' (UTC).</p>'+table(['Anúncio','Indicador','Atual','Anterior','Sinal observado'],signals.slice(0,100).map(d=>'<tr><td>'+esc(d.label)+'</td><td>'+esc(d.metric)+'</td><td>'+num(d.current,2)+'</td><td>'+num(d.previous,2)+'</td><td>'+esc(d.note)+'</td></tr>'),diagnostic?.error?'Falha ao consultar diagnósticos.':'Nenhum sinal com evidência suficiente.')+table(['Campanha','Investimento','Receita atribuída'],(diagnostic?.campaigns||[]).slice(0,100).map(d=>'<tr><td>'+esc(d.label||d.campaignId)+'</td><td>'+brl(d.spend*100)+'</td><td>'+brl(d.attributedRevenue*100)+'</td></tr>'),'Nenhuma campanha com evidência suficiente para revisão.')+'<button class="btn" data-act="nav" data-view="compare">Abrir comparações detalhadas</button>')}
     ${card('Histórico do lucro registrado',table(['Período inicial','Período final','Escopo','Lucro registrado','Origem'],(Array.isArray(profitRows)?profitRows:[]).map(r=>'<tr><td>'+dt(r.period_start)+'</td><td>'+dt(r.period_end)+'</td><td>'+esc(r.listing_id||'Loja')+'</td><td>'+brl(r.realizedProfitCents)+'</td><td>'+esc(r.source_class)+'</td></tr>'),profitRows?.error?'Falha ao carregar registros.':'Selecione uma loja com registros de lucro.')+'<p class="muted small">Registros individuais; períodos sobrepostos não são somados.</p>')}
     ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Cobertura de estoque: estoque disponível ÷ média diária de vendas, quando ambas as entradas estão disponíveis. Lucro de contribuição e margem de contribuição não são calculados pelo agregado de snapshots sem custos conciliados. Lucro realizado exige registros financeiros conciliados e não equivale ao lucro estimado. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
-
-    ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric">${Object.entries(historyMetricConfig()).map(([key,m])=>`<option value="${esc(key)}">${esc(m.label)}</option>`).join('')}</select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
     ${card('Missões do dia', Array.isArray(missions) && missions.length
       ? missions.map((m) => `<div class="mission">
@@ -344,7 +398,7 @@ async function viewExec() {
       </div>
       <p class="muted small">Exige pelo menos 8 semanas distintas com snapshots. Projeção linear local com intervalo heurístico; não é promessa de venda nem inferência causal.</p>
       <div id="forecast-out" class="out"></div>`)}
-  `;
+  </div>`;
 }
 
 // ------------------------------------------------------------------ ANÚNCIOS / CAPTURA

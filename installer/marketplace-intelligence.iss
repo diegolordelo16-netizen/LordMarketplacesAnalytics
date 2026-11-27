@@ -43,7 +43,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-UninstallDisplayIcon={app}\node.exe
+UninstallDisplayIcon={app}\MarketplaceIntelligence.exe
 LicenseFile={#SourceRoot}\installer\LICENSE.txt
 SetupLogging=yes
 
@@ -58,6 +58,7 @@ Name: "autostart"; Description: "Iniciar o serviço local ao entrar no Windows";
 [Files]
 ; Runtime
 Source: "{#SourceRoot}\tools\node.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceRoot}\tools\MarketplaceIntelligence.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Serviço local
 Source: "{#SourceRoot}\dist\local-agent\main.js"; DestDir: "{app}\local-agent"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\local-agent\package.json"; DestDir: "{app}\local-agent"; Flags: ignoreversion
@@ -88,13 +89,13 @@ Name: "{localappdata}\MarketplaceIntelligence\logs"; Permissions: users-full
 
 [Registry]
 ; Início automático no logon do usuário atual (HKCU, não exige administrador).
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MarketplaceIntelligence"; ValueData: """{app}\start-panel.cmd"" --background"; Flags: uninsdeletevalue; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MarketplaceIntelligence"; ValueData: """{app}\MarketplaceIntelligence.exe"" --background"; Flags: uninsdeletevalue; Tasks: autostart
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "MarketplaceIntelligence"; Flags: deletevalue; Tasks: not autostart
 
 [Icons]
-Name: "{group}\{#AppName} — Painel local"; Filename: "{app}\start-panel.cmd"; IconFilename: "{app}\node.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\start-panel.cmd"; IconFilename: "{app}\node.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{group}\{#AppName} — Pré-Start e diagnóstico"; Filename: "{app}\start-panel.cmd"; Parameters: "--prestart"; IconFilename: "{app}\node.exe"; WorkingDir: "{app}"
+Name: "{group}\{#AppName} — Painel local"; Filename: "{app}\MarketplaceIntelligence.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\MarketplaceIntelligence.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#AppName} — Pré-Start e diagnóstico"; Filename: "{app}\MarketplaceIntelligence.exe"; Parameters: "--prestart"; WorkingDir: "{app}"
 Name: "{group}\Desinstalar {#AppName}"; Filename: "{uninstallexe}"
 
 [Run]
@@ -102,10 +103,10 @@ Name: "{group}\Desinstalar {#AppName}"; Filename: "{uninstallexe}"
 ; O ID vem da chave fixa no manifest da extensão: é sempre o mesmo, então o host
 ; pode ser registrado agora, antes de o usuário carregar a extensão no navegador.
 Filename: "{app}\node.exe"; Parameters: """{app}\native-host\register.js"" --extension-id={#ExtensionId}"; Flags: runhidden waituntilterminated; StatusMsg: "Registrando o host nativo para Chrome e Edge..."
-Filename: "{app}\start-panel.cmd"; Description: "Abrir o painel local agora (Pré-Start e diagnóstico)"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\MarketplaceIntelligence.exe"; Description: "Abrir o painel local agora"; Flags: postinstall nowait skipifsilent
 ; Início automático com o Windows, sem janela: o serviço sobe em segundo plano e
 ; o atalho do Menu Iniciar só abre a tela no navegador.
-Filename: "{app}\start-panel.cmd"; Parameters: "--background"; Flags: runhidden nowait; Tasks: autostart
+Filename: "{app}\MarketplaceIntelligence.exe"; Parameters: "--background"; Flags: nowait; Tasks: autostart
 
 [UninstallRun]
 Filename: "{app}\node.exe"; Parameters: """{app}\native-host\register.js"" --unregister"; Flags: runhidden waituntilterminated

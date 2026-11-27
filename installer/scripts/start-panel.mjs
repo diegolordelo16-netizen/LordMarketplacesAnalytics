@@ -31,29 +31,20 @@ function readPort(data) {
   catch { return null; }
 }
 
-async function openPanel(url, mode) {
-  if (mode === 'background') return;
-  // URL criada exclusivamente com endereço loopback, porta numérica e caminho fixo.
-  if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/(?:prestart)?$/.test(url)) throw Error('URL local inválida');
-  const browser = spawn('cmd.exe', ['/d', '/c', 'start "" ' + url], {
-    windowsVerbatimArguments: true, windowsHide: true, stdio: 'ignore'
-  });
-  await new Promise((resolve, reject) => { browser.once('error', reject); browser.once('exit', code => code === 0 ? resolve() : reject(Error('Não foi possível abrir o navegador'))); });
-}
-
 export async function launch(mode, root, data) {
   if (!['panel', 'prestart', 'background'].includes(mode)) throw Error('Modo de inicialização inválido');
   mkdirSync(join(data, 'logs'), { recursive: true });
   const marker = join(data, 'update-in-progress.json');
   if (existsSync(marker)) throw Error('Atualização em andamento; inicialização bloqueada');
   const existing = await readyUrl(readPort(data), mode);
-  if (existing) { await openPanel(existing, mode); return; }
-  const preferredPort = readPort(data) ?? 47811;
+  if (existing) return existing;
+  const previousPort = readPort(data);
+  const preferredPort = previousPort !== null && previousPort >= 47811 && previousPort <= 47830 ? previousPort : 47811;
   let stdout, stderr, service;
   try {
     stdout = openSync(join(data, 'logs', 'service.log'), 'a');
     stderr = openSync(join(data, 'logs', 'service-err.log'), 'a');
-    service = spawn(join(root, 'node.exe'), [join(root, 'local-agent', 'main.js'), '--serve', '--port=' + preferredPort, '--data=' + data], {
+    service = spawn(join(root, 'node.exe'), [join(root, 'local-agent', 'main.js'), '--serve', '--port=' + preferredPort, '--find-port', '--data=' + data], {
       detached: true, windowsHide: true, stdio: ['ignore', stdout, stderr]
     });
   } finally {
@@ -67,7 +58,7 @@ export async function launch(mode, root, data) {
   for (let i = 0; i < 60; i++) {
     if (existsSync(marker)) throw Error('Atualização em andamento; inicialização bloqueada');
     const url = await readyUrl(readPort(data), mode);
-    if (url) { await openPanel(url, mode); return; }
+    if (url) return url;
     if (failed) break;
     await sleep(500);
   }
@@ -80,7 +71,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error('Inicialização exige Windows, LOCALAPPDATA e modo válido.');
     process.exitCode = 1;
   } else {
-    try { await launch(mode, dirname(fileURLToPath(import.meta.url)), join(process.env.LOCALAPPDATA, 'MarketplaceIntelligence')); }
+    try {
+      const url = await launch(mode, dirname(fileURLToPath(import.meta.url)), join(process.env.LOCALAPPDATA, 'MarketplaceIntelligence'));
+      if (mode !== 'background') console.log(url);
+    }
     catch (err) { console.error(err instanceof Error ? err.message : 'Falha de inicialização'); process.exitCode = 1; }
   }
 }

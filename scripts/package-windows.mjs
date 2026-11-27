@@ -4,7 +4,8 @@
  * Pré-requisitos (verificados antes de compilar):
  *  - Inno Setup 6 (ISCC.exe)
  *  - dist/ gerado pelos scripts de build
- *  - tools/node.exe (runtime embarcado)
+ *  - .NET Framework 4.x (compilador do launcher gráfico)
+ *  - tools/node.exe (runtime embarcado, copiado do Node local quando necessário)
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -36,6 +37,24 @@ if (!existsSync(nodeExe)) {
   const source = existsSync(portable) ? portable : process.execPath;
   copyFileSync(source, nodeExe);
   console.log(`node.exe embarcado a partir de ${source}`);
+}
+
+const windowsDir = process.env.WINDIR ?? 'C:\\Windows';
+const csc = ['Framework64', 'Framework']
+  .map(framework => join(windowsDir, 'Microsoft.NET', framework, 'v4.0.30319', 'csc.exe'))
+  .find(candidate => existsSync(candidate));
+if (!csc) {
+  console.error('ERRO: compilador C# do .NET Framework 4.x não encontrado.');
+  process.exit(1);
+}
+const launcher = join(root, 'tools', 'MarketplaceIntelligence.exe');
+const compilation = spawnSync(csc, [
+  '/nologo', '/target:winexe', '/optimize+', '/codepage:65001', '/reference:System.Windows.Forms.dll',
+  `/out:${launcher}`, join(root, 'installer', 'scripts', 'start-panel.cs'),
+], { stdio: 'inherit' });
+if (compilation.error || compilation.status !== 0) {
+  console.error('ERRO: falha ao compilar o iniciador gráfico.', compilation.error ?? compilation.status);
+  process.exit(1);
 }
 
 /** ID do Chrome a partir da chave pública (sha256 do DER, primeiros 32 nibbles → a-p). */

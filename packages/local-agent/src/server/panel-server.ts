@@ -22,6 +22,8 @@ import { MAX_MESSAGE_BYTES, type IpcResponse } from '@mi/shared';
 
 export interface PanelServerOptions {
   port: number;
+  /** Portas alternativas quando a preferida não pode ser usada. */
+  fallbackPorts?: number[];
   version?: string;
   token: string;
   /** Diretório com os arquivos estáticos do painel (HTML/CSS/JS compilados). */
@@ -330,8 +332,10 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
       }
 
       let rel: string;
-      if (requested === '/' || requested === '/prestart') {
+      if (requested === '/') {
         rel = readStartTarget() === 'dashboard' ? '/index.html' : '/prestart.html';
+      } else if (requested === '/prestart') {
+        rel = '/prestart.html';
       } else if (requested === '/app') {
         rel = '/index.html';
       } else {
@@ -370,9 +374,27 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
 /** Cria e escuta o servidor do painel; devolve a porta efetiva. */
 export async function startPanelServer(options: PanelServerOptions): Promise<PanelServer> {
   const panel = createPanelServer(options);
-  await new Promise<void>((resolve, reject) => {
-    panel.server.once('error', reject);
-    panel.server.listen(options.port, '127.0.0.1', () => resolve());
-  });
-  return panel;
+  const ports = [...new Set([options.port, ...(options.fallbackPorts ?? [])])];
+  for (const port of ports) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          panel.server.off('listening', onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          panel.server.off('error', onError);
+          resolve();
+        };
+        panel.server.once('error', onError);
+        panel.server.once('listening', onListening);
+        panel.server.listen(port, '127.0.0.1');
+      });
+      return panel;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (port === ports.at(-1) || (code !== 'EADDRINUSE' && code !== 'EACCES')) throw error;
+    }
+  }
+  throw new Error('Nenhuma porta local disponível para o painel.');
 }
