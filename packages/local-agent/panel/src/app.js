@@ -1881,9 +1881,9 @@ const ACTIONS = {
   },
   'backup-create': async () => { await run(() => api('backup.create', {}), 'Backup criado.'); renderView(); },
   'backup-restore': async (d) => {
-    if (!d.id || !confirm('Restaurar este backup? O banco atual será salvo em um arquivo .pre-restore.bak antes da troca. Operações recentes posteriores à data do backup serão substituídas.')) return;
-    await run(() => api('backup.restore', { backupId: d.id, confirmed: true }), 'Backup restaurado e integridade verificada.');
-    renderView();
+    if (!d.id || !confirm('Restaurar este backup? O banco atual será salvo em um arquivo .pre-restore.bak antes da troca. Operações recentes posteriores à data do backup serão substituídas. As sessões serão revogadas e autorizações antigas de publicação precisarão de revisão.')) return;
+    await run(() => api('backup.restore', { backupId: d.id, confirmed: true }), 'Backup restaurado e integridade verificada. Reinicie o serviço local e reabra o painel para renovar a sessão.');
+    state.token = ''; sessionStorage.removeItem('mi.token');
   },
   'au-propose': async () => {
     await run(() => api('autoupgrade.propose', {

@@ -4,7 +4,7 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -258,38 +258,57 @@ export class LocalDatabase {
       validationDb.close();
     }
 
-    this.backup('pre-restore automático');
-    this.close();
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const previousFile = `${this.file}.pre-restore-${stamp}.bak`;
+    const previousFile = `${this.file}.pre-restore-${stamp}-${randomUUID().slice(0, 8)}.bak`;
     const stagedFile = `${this.file}.restore-${randomUUID()}.tmp`;
+    let originalClosed = false;
     let movedCurrent = false;
+    let installedRestore = false;
+    let openedRestore = false;
     try {
-      copyFileSync(backupPath, stagedFile);
-      if (existsSync(this.file)) {
-        renameSync(this.file, previousFile);
-        movedCurrent = true;
-      }
+      // Prepare exatamente os bytes cujo checksum foi conferido, antes de tocar no banco vivo.
+      writeFileSync(stagedFile, bytes, { flag: 'wx', mode: 0o600 });
+      this.backup('pre-restore automático');
+      const checkpoint = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number };
+      if (checkpoint.busy !== 0) throw new Error('banco ocupado: restauração cancelada antes da troca');
+      this.db.close();
+      originalClosed = true;
+      renameSync(this.file, previousFile);
+      movedCurrent = true;
       for (const suffix of ['-wal', '-shm']) {
         const sidecar = `${this.file}${suffix}`;
         if (existsSync(sidecar)) rmSync(sidecar, { force: true });
       }
       renameSync(stagedFile, this.file);
+      installedRestore = true;
       this.db = this.openDatabase();
+      openedRestore = true;
       const migrationResult = this.migrate();
+      // Uma cópia antiga não pode reviver credenciais ou repetir ações remotas já executadas.
+      this.transaction(() => {
+        const at = new Date().toISOString();
+        this.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE revoked_at IS NULL').run(at);
+        this.db.prepare(`UPDATE task_items SET status='UNCERTAIN',last_error='backup restaurado: confira o marketplace antes de qualquer nova publicação'
+          WHERE id IN (SELECT item_id FROM task_publish_approvals WHERE status IN ('APPROVED','EXECUTING'))`).run();
+        this.db.prepare(`UPDATE task_publish_approvals SET status='NEEDS_VERIFICATION',execution_finished_at=?,result_json=?
+          WHERE status IN ('APPROVED','EXECUTING')`).run(at, JSON.stringify({ outcome: 'UNCERTAIN', message: 'autorização de backup antigo não pode ser reutilizada' }));
+      });
       const finalIntegrity = this.integrityCheck();
       if (!finalIntegrity.ok) throw new Error(`banco restaurado falhou na verificação: ${finalIntegrity.messages.join('; ')}`);
       return { backupId, restoredAt: new Date().toISOString(), previousFile, migrated: migrationResult.applied, integrity: finalIntegrity };
     } catch (error) {
-      try { this.db.close(); } catch { /* conexão pode não ter reaberto */ }
-      if (existsSync(this.file)) rmSync(this.file, { force: true });
-      for (const suffix of ['-wal', '-shm']) {
-        const sidecar = `${this.file}${suffix}`;
-        if (existsSync(sidecar)) rmSync(sidecar, { force: true });
+      if (openedRestore) { try { this.db.close(); } catch { /* preserva o erro original */ } }
+      // Se a preparação ou o primeiro rename falhar, o original jamais é apagado.
+      if (movedCurrent) {
+        if (installedRestore && existsSync(this.file)) rmSync(this.file, { force: true });
+        for (const suffix of ['-wal', '-shm']) {
+          const sidecar = `${this.file}${suffix}`;
+          if (existsSync(sidecar)) rmSync(sidecar, { force: true });
+        }
+        if (existsSync(previousFile)) renameSync(previousFile, this.file);
       }
-      if (movedCurrent && existsSync(previousFile)) renameSync(previousFile, this.file);
-      this.db = this.openDatabase();
-      rmSync(stagedFile, { force: true });
+      if (originalClosed) this.db = this.openDatabase();
+      if (existsSync(stagedFile)) rmSync(stagedFile, { force: true });
       throw error;
     }
   }

@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalDatabase } from '../src/db/database';
 import { TaskScheduler } from '../src/scheduler/task-scheduler';
-import { SecretStore, hashPassword } from '../src/security/secrets';
+import { SecretStore, hashPassword, loadMachineSecret } from '../src/security/secrets';
 import { GeminiClient } from '../src/ai/gemini-client';
 import { KnowledgeBase } from '../src/ai/knowledge-base';
 import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths } from '../src/ai/auto-upgrade';
@@ -195,6 +195,29 @@ describe('capacidades adicionais 3.10.3', () => {
 });
 
 describe('restauração segura de backup', () => {
+  it('não reativa sessões do backup depois de restaurar', async () => {
+    const backup = db.backup('sessão antiga');
+    db.db.prepare("UPDATE auth_sessions SET revoked_at=?").run(new Date().toISOString());
+    db.restoreBackup(backup.id);
+    expect((await call('account.list')).error?.code).toBe('UNAUTHORIZED');
+    const login = await call('auth.login', { email: 'admin@local.test', password: 'senha-forte-123' }, false);
+    expect((login.result as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('recusa restauração com leitor WAL ativo sem apagar o banco original', () => {
+    db.db.exec('CREATE TABLE restore_busy_probe (value TEXT NOT NULL)');
+    db.db.prepare('INSERT INTO restore_busy_probe VALUES (?)').run('antigo');
+    const backup = db.backup('leitor ativo');
+    const reader = new LocalDatabase({ file: db.file });
+    try {
+      reader.db.exec('BEGIN');
+      reader.db.prepare('SELECT * FROM restore_busy_probe').all();
+      db.db.prepare('UPDATE restore_busy_probe SET value=?').run('atual');
+      expect(() => db.restoreBackup(backup.id)).toThrow(/ocupado/);
+      expect(db.row<{value:string}>('SELECT value FROM restore_busy_probe')?.value).toBe('atual');
+    } finally { reader.db.exec('ROLLBACK'); reader.close(); }
+  });
+
   it('restaura somente backup registrado e validado, preservando o estado anterior', () => {
     db.db.exec('CREATE TABLE restore_probe (value TEXT NOT NULL)');
     db.db.prepare('INSERT INTO restore_probe(value) VALUES (?)').run('estado-original');
@@ -1086,6 +1109,35 @@ describe('tarefas e guard', () => {
 });
 
 describe('segredos e Gemini', () => {
+  it('não substitui uma chave local existente mas inválida', () => {
+    const keyDir = join(dir, 'invalid-key');
+    mkdirSync(keyDir);
+    const key = join(keyDir, 'master.key');
+    writeFileSync(key, 'inválida');
+    expect(() => loadMachineSecret(keyDir)).toThrow(/chave local inválida/);
+    expect(readFileSync(key, 'utf8')).toBe('inválida');
+  });
+
+  it.skipIf(process.platform === 'win32')('protege permissões e recusa symlink para a chave', () => {
+    const keyDir = join(dir, 'secure-key');
+    const first = loadMachineSecret(keyDir);
+    const key = join(keyDir, 'master.key');
+    chmodSync(key, 0o644);
+    expect(loadMachineSecret(keyDir).secret.equals(first.secret)).toBe(true);
+    expect(statSync(key).mode & 0o777).toBe(0o600);
+    const other = join(dir, 'symlink-key');
+    mkdirSync(other);
+    symlinkSync(key, join(other, 'master.key'));
+    expect(() => loadMachineSecret(other)).toThrow(/arquivo regular/);
+  });
+
+  it.skipIf(process.platform === 'win32')('não cria chave portátil se já existe arquivo DPAPI', () => {
+    const keyDir = join(dir, 'dpapi-key');
+    mkdirSync(keyDir);
+    writeFileSync(join(keyDir, 'master.key.dpapi'), 'chave existente');
+    expect(() => loadMachineSecret(keyDir)).toThrow(/DPAPI existente/);
+  });
+
   it('cifra e decifra segredo com roundtrip', () => {
     const store = new SecretStore(db, join(dir, 'sec2'));
     store.set('gemini.apiKey', 'chave-secreta-de-teste-123456');

@@ -4,7 +4,7 @@
  * Implementação: scrypt sobre um segredo de máquina + arquivo de chave com ACL do usuário.
  */
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { LocalDatabase } from '../db/database';
@@ -23,36 +23,48 @@ const SCRYPT_SALT = 'MarketplaceIntelligence::v1';
  * Obtém o material de máquina: DPAPI (Windows) quando possível, senão arquivo 0600.
  * DPAPI protege a chave por usuário do Windows; o arquivo é a alternativa portátil.
  */
+function existingRegularKey(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('arquivo de chave não é um arquivo regular');
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 export function loadMachineSecret(baseDir: string): { secret: Buffer; method: string } {
-  mkdirSync(baseDir, { recursive: true });
+  mkdirSync(baseDir, { recursive: true, mode: 0o700 });
   const keyPath = join(baseDir, KEY_FILE_NAME);
   const dpapiPath = `${keyPath}.dpapi`;
-
-  if (process.platform === 'win32') {
+  if (existingRegularKey(dpapiPath)) {
+    if (process.platform !== 'win32') throw new Error('chave DPAPI existente requer o usuário original do Windows');
     const dpapi = tryDpapiUnprotect(dpapiPath);
-    if (dpapi) return { secret: dpapi, method: 'DPAPI' };
+    if (!dpapi || dpapi.length !== 32) throw new Error('não foi possível recuperar a chave DPAPI existente; restaure a chave original');
+    return { secret: dpapi, method: 'DPAPI' };
   }
-
-  if (existsSync(keyPath)) {
+  if (existingRegularKey(keyPath)) {
+    if (process.platform !== 'win32') chmodSync(keyPath, 0o600);
     const raw = readFileSync(keyPath);
+    if (raw.length !== 32) throw new Error('chave local inválida; restaure a chave original');
     return { secret: raw, method: process.platform === 'win32' ? 'FILE_ACL' : 'FILE_0600' };
   }
-
   const generated = randomBytes(32);
-  if (process.platform === 'win32') {
-    const protectedBlob = tryDpapiProtect(generated);
-    if (protectedBlob) {
-      writeFileSync(dpapiPath, protectedBlob, { mode: 0o600 });
-      return { secret: generated, method: 'DPAPI' };
-    }
-  }
-  writeFileSync(keyPath, generated, { mode: 0o600 });
   try {
-    chmodSync(keyPath, 0o600);
-  } catch {
-    /* Windows ignora chmod */
+    if (process.platform === 'win32') {
+      const protectedBlob = tryDpapiProtect(generated);
+      if (protectedBlob) {
+        writeFileSync(dpapiPath, protectedBlob, { mode: 0o600, flag: 'wx' });
+        return { secret: generated, method: 'DPAPI' };
+      }
+    }
+    writeFileSync(keyPath, generated, { mode: 0o600, flag: 'wx' });
+    return { secret: generated, method: process.platform === 'win32' ? 'FILE_ACL' : 'FILE_0600' };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return loadMachineSecret(baseDir);
+    throw error;
   }
-  return { secret: generated, method: 'FILE_ACL' };
 }
 
 /** DPAPI via PowerShell (sem addon nativo). Falha silenciosa → fallback em arquivo. */
