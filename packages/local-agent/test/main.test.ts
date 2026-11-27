@@ -181,6 +181,7 @@ describe('avanço do pré-start para o painel', () => {
       const after = await (await fetch(base)).text();
       expect(after).not.toContain('Pré-Start');
       expect(after).toContain('app.js');
+      expect(await (await fetch(`${base}prestart`)).text()).toContain('prestart.js');
 
       await fetch(`${base}api/prestart/start-target`, { method: 'POST', headers: auth, body: JSON.stringify({ target: 'prestart' }) });
       expect(await (await fetch(base)).text()).toContain('Pré-Start');

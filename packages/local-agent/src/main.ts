@@ -43,6 +43,7 @@ export interface BootstrapOptions {
   publicDir?: string;
   version?: string;
   port?: number;
+  findPort?: boolean;
   extensionIds?: string[];
   /** Diretório das migrações SQL (default: ao lado do bundle). */
   migrationsDir?: string;
@@ -278,6 +279,8 @@ export async function start(options: BootstrapOptions = {}): Promise<StartedApp>
   const extensionDir = options.extensionDir ?? join(__dirname, '..', 'extension');
   const panel = await startPanelServer({
     port: options.port ?? 0,
+    // Faixa sondada pela extensão para descobrir o serviço local.
+    fallbackPorts: options.findPort ? Array.from({ length: 20 }, (_, index) => 47811 + index) : undefined,
     version: app.version,
     token: app.token,
     publicDir: existsSync(publicDir) ? publicDir : undefined,
@@ -461,7 +464,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const options: BootstrapOptions = {
     port: portArg ? Number(portArg.split('=')[1]) : 0,
-    dataDir: dataArg ? dataArg.split('=')[1] : undefined,
+    dataDir: dataArg?.slice('--data='.length),
+    findPort: mode === 'serve' && argv.includes('--find-port'),
   };
   if (mode === 'host') {
     const app = bootstrap(options);
@@ -479,7 +483,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   logger.info(`protocolo 1 · pasta de dados ${app.dataDir}`);
 
   if (mode === 'serve') {
-    // O launcher (.cmd) precisa saber a porta e a URL sem ler stdout: grava os
+    // O launcher precisa saber a porta e a URL sem ler stdout: grava os
     // dois arquivos no diretório de dados. Só existem em 127.0.0.1 e são
     // reescritos a cada início; o token nunca vai para log.
     try {
