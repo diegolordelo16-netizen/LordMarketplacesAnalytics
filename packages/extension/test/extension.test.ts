@@ -26,7 +26,7 @@ describe('extensão: manifest', () => {
   it('mantém a versão visível do painel alinhada ao manifest', () => {
     const panel = readFileSync(join(ext, 'panel', 'panel.html'), 'utf8');
     expect(panel.match(/id="version">v([^<]+)</)?.[1]).toBe(manifest.version);
-    expect(manifest.version).toBe('3.11.0');
+    expect(manifest.version).toBe('3.12.0');
   });
 
   it('é MV3 e não pede permissões além do necessário', () => {
