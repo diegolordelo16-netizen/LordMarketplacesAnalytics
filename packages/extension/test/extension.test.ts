@@ -1064,10 +1064,10 @@ describe('captura pública de concorrentes',()=>{
     expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
     const el=(text:string,href?:string)=>({innerText:text,textContent:text,href,getClientRects:()=>[{}]});
     const title=el('Capacete'),price=el('R$ 299,90'),anchor=el('', 'https://www.amazon.com.br/dp/B012345678?ref=abc');
-    const card={...el('Capacete'),getAttribute:()=> 'B012345678',querySelector:(sel:string)=>sel==='h2'?title:price,querySelectorAll:(sel:string)=>sel==='a[href]'?[anchor]:[]};
+    const card={...el('Capacete'),getAttribute:(name:string)=>({'data-asin':'B012345678','data-brand':'Marca teste','data-gtin':'4006381333931'} as Record<string,string>)[name]??null,querySelector:(sel:string)=>sel==='h2'?title:price,querySelectorAll:(sel:string)=>sel==='a[href]'?[anchor]:[]};
     const context=vm.createContext({URL,Date,Number,String,Set,location:{href:'https://www.amazon.com.br/s?k=capacete'},document:{querySelectorAll:()=>[card,card]},window:{getComputedStyle:()=>({visibility:'visible',display:'block'})}});
     const result=vm.runInContext(source.slice(start,end)+';collectPublicCompetitorCards()',context);
-    expect(result).toMatchObject({marketplace:'amazon',candidates:[{externalId:'B012345678',title:'Capacete',url:'https://www.amazon.com.br/dp/B012345678',priceCents:29990,sponsored:null,observedOrder:1}]});
+    expect(result).toMatchObject({marketplace:'amazon',candidates:[{externalId:'B012345678',title:'Capacete',url:'https://www.amazon.com.br/dp/B012345678',priceCents:29990,sponsored:null,observedOrder:1,brand:'Marca teste',universalCode:'4006381333931'}]});
     const rejected=vm.createContext({URL,location:{href:'https://sellercentral.amazon.com.br/'}});
     expect(vm.runInContext(source.slice(start,end)+';collectPublicCompetitorCards()',rejected)).toHaveProperty('error');
   });

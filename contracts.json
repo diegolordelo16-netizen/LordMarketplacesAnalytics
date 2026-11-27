@@ -16,6 +16,22 @@
     "password": "transient DataForSEO API password",
     "confirmedPaidRequest": true
   },
+  "competitor.radar.start": {
+    "accountId": "string",
+    "confirmed": true,
+    "product": "title, brand, optional EAN/UPC/GTIN and priceCents",
+    "ownProductId": "existing product instead of product"
+  },
+  "competitor.radar.read": {
+    "accountId": "string",
+    "ownProductId": "string"
+  },
+  "competitor.radar.claim": {},
+  "competitor.radar.complete": {
+    "requestId": "uuid",
+    "token": "one-use lease",
+    "outcomes": "one outcome per marketplace"
+  },
   "rank.record": "listingId | keywordId | position | isSponsored | context",
   "competitor.upsert": "accountId | marketplace | name | handle | groupKind",
   "competitor.relations": "ownProductId | accountId | status",

@@ -24,6 +24,7 @@ import {
   type LearningRule,
   type ProductFeatures,
 } from '@mi/shared';
+import { universalCode } from './universal-code';
 import type { LocalDatabase } from '../db/database';
 
 const ownProductInput = z.object({
@@ -35,6 +36,7 @@ const ownProductInput = z.object({
   url: z.string().url().max(2048).optional().nullable(),
   title: z.string().min(1).max(2000),
   brand: z.string().max(200).optional().nullable(),
+  universalCode: universalCode.optional().nullable(),
   model: z.string().max(200).optional().nullable(),
   category: z.string().max(300).optional().nullable(),
   attributes: z.record(z.string(), z.string()).optional().nullable(),
@@ -162,18 +164,20 @@ export class CompetitorService {
   upsertOwnProduct(raw: unknown): { id: string } {
     const input = ownProductInput.parse(raw);
     const now = new Date().toISOString();
+    if(input.listingId&&!this.db.row('SELECT id FROM listings WHERE id=? AND account_id=? AND marketplace=?',input.listingId,input.accountId,input.marketplace)){
+      throw Error('anúncio não pertence à loja e ao marketplace');
+    }
     const existing = this.db.row<{ id: string }>(
-      'SELECT id FROM own_products WHERE account_id = ? AND marketplace = ? AND title = ?',
-      input.accountId,
-      input.marketplace,
-      input.title,
+      `SELECT id FROM own_products WHERE account_id=? AND marketplace=? AND title=?
+       AND (?=0 OR (brand IS ? AND universal_code IS ?)) ORDER BY updated_at DESC,id DESC LIMIT 1`,
+      input.accountId,input.marketplace,input.title,Number(input.universalCode!==undefined),input.brand??null,input.universalCode??null,
     );
     const id = existing?.id ?? randomUUID();
     if (existing) {
       this.db.db
         .prepare(
           `UPDATE own_products SET listing_id = ?, external_id = ?, url = ?, brand = ?, model = ?, category = ?,
-           attributes_json = ?, variations_json = ?, images_json = ?, price_cents = ?, updated_at = ? WHERE id = ?`,
+           attributes_json = ?, variations_json = ?, images_json = ?, price_cents = ?, universal_code=COALESCE(?,universal_code), updated_at = ? WHERE id = ?`,
         )
         .run(
           input.listingId ?? null,
@@ -186,6 +190,7 @@ export class CompetitorService {
           JSON.stringify(input.variations ?? []),
           JSON.stringify(input.images ?? []),
           input.priceCents ?? null,
+          input.universalCode ?? null,
           now,
           id,
         );
@@ -194,8 +199,8 @@ export class CompetitorService {
     this.db.db
       .prepare(
         `INSERT INTO own_products (id, account_id, listing_id, marketplace, external_id, url, title, brand, model,
-          category, attributes_json, variations_json, images_json, price_cents, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          category, attributes_json, variations_json, images_json, price_cents, universal_code, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -212,6 +217,7 @@ export class CompetitorService {
         JSON.stringify(input.variations ?? []),
         JSON.stringify(input.images ?? []),
         input.priceCents ?? null,
+        input.universalCode ?? null,
         now,
         now,
       );
