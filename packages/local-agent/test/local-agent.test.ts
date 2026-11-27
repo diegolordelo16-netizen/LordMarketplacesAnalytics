@@ -409,6 +409,11 @@ describe('capacidades adicionais 3.10.3', () => {
     for(const bad of [{accountId:other},{budgetCents:999},{sourcePath:'https://www.mercadolivre.com.br/publicidade'},{sourcePath:'https://vendedores.mercadolivre.com.br/publicidade?token=abc'},{campaignRef:'OTHER'},{confirmed:false}]){
       expect((await call('campaign.budget.claim',{...ctx,confirmed:true,...bad})).ok).toBe(false);
     }
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    const limits={maxCampaignDailyBudgetCents:1100,minVariationPriceCents:100,maxVariationPriceCents:100000,maxVariationStock:100,maxVariationPriceChangePct:20};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    expect((await call('operation.limits.set',{accountId,limits:{...limits,maxCampaignDailyBudgetCents:1500},confirmed:true})).ok).toBe(true);
     const claim=await call('campaign.budget.claim',{...ctx,confirmed:true});
     expect(claim.ok).toBe(true);
     const grant=claim.result as any;
@@ -425,6 +430,40 @@ describe('capacidades adicionais 3.10.3', () => {
     const items=(await call('campaign.budget.list',{accountId})).result as any[];
     expect(items).toHaveLength(1);expect(items[0].status).toBe('UI_READBACK_MATCHED');expect(items[0].token_hash).toBeUndefined();
     expect((await call('campaign.budget.list',{accountId:other})).result).toEqual([]);
+  });
+
+  it('autoriza variação simples e duplicação apenas com proposta, contexto e limites correspondentes',async()=>{
+    const accountId='acct-browser-listing',other='acct-browser-other';seedImportAccount(accountId);seedImportAccount(other);
+    const listingId='browser-listing',externalListingId='MLB1234567',at='2025-01-07T23:59:59.999Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre',externalListingId,'Teste','ACTIVE',at,at);
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)').run('browser-baseline',listingId,accountId,at,at,'{}','A_PRIMARY_UI','{}');
+    const proposal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Cor',options:[{name:'Azul'}],proposedPriceCents:1200,proposedStock:5})).result as any;
+    expect((await call('offer.variation.review',{accountId,id:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    const ctx={accountId,externalListingId,action:'CREATE_VARIATION',sourcePath:'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1234567',documentNonce:'11111111-1111-4111-8111-111111111111',proposalId:proposal.id,confirmed:true};
+    expect((await call('listing.browser.claim',ctx)).ok).toBe(false);
+    const limits={maxCampaignDailyBudgetCents:1500,minVariationPriceCents:100,maxVariationPriceCents:100000,maxVariationStock:100,maxVariationPriceChangePct:20};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    for(const bad of [{accountId:other},{externalListingId:'MLB7654321'},{action:'EDIT_VARIATION'},{confirmed:false},{sourcePath:'https://www.mercadolivre.com.br/vendas/anuncios/editar/MLB1234567'}]){
+      expect((await call('listing.browser.claim',{...ctx,...bad})).ok).toBe(false);
+    }
+    const claim=await call('listing.browser.claim',ctx);expect(claim.ok).toBe(true);
+    const grant=claim.result as any;expect(grant.plan).toEqual({name:'Cor',option:'Azul',priceCents:1200,stock:5});
+    expect((await call('listing.browser.claim',ctx)).ok).toBe(false);
+    expect((await call('listing.browser.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(true);
+    expect((await call('listing.browser.verify',{accountId,proposalId:proposal.id,observedExternalId:'V1'})).ok).toBe(false);
+    expect((await call('listing.browser.list',{accountId:other})).result).toEqual([]);
+    const duplicate=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Teste duplicação'})).result as any;
+    expect((await call('listing.change.review',{accountId,id:duplicate.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    const duplicateCtx={...ctx,proposalId:duplicate.id,action:'DUPLICATE',sourcePath:'https://vendedores.mercadolivre.com.br/vendas/anuncios'};
+    expect((await call('listing.browser.claim',duplicateCtx)).ok).toBe(false);
+    db.db.prepare("UPDATE listing_browser_executions SET status='CANDIDATE_OBSERVED' WHERE id=?").run(grant.id);
+    const duplication=await call('listing.browser.claim',duplicateCtx);expect(duplication.ok).toBe(true);
+    expect((duplication.result as any).plan).toEqual({originalTitle:'Teste'});
+    const d=(duplication.result as any);
+    expect((await call('listing.browser.result',{id:d.id,token:d.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(true);
+    expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:externalListingId})).ok).toBe(false);
+    const rows=(await call('listing.browser.list',{accountId})).result as any[];
+    expect(rows).toHaveLength(2);expect(rows.every(row=>row.token_hash===undefined)).toBe(true);
   });
 
   it('protege propostas de capa e variação por conta, aprovação e relato humano sem simular execução',async()=>{
