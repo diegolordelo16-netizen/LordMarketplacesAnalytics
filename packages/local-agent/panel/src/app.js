@@ -496,8 +496,56 @@ async function viewKeywords() {
 }
 
 // ------------------------------------------------------------------ RADAR DE MERCADO
+function productRadarCard(products,selectedId){
+  if(!state.accountId)return card('Radar por produto','<p>Selecione uma loja para cadastrar ou comparar um produto.</p>');
+  return card('Radar por produto',`
+    <div class="form-grid">
+      <label>Produto <input id="radar-title" maxlength="150"></label>
+      <label>Marca <input id="radar-brand" maxlength="50"></label>
+      <label>EAN, UPC ou GTIN (opcional) <input id="radar-code" inputmode="numeric" maxlength="14"></label>
+      <label>Meu preço (R$, opcional) <input id="radar-price" type="number" min="0" step="0.01"></label>
+    </div>
+    <button class="btn primary" data-act="radar-start">Cadastrar e buscar</button>
+    <p class="muted small">A extensão consulta Mercado Livre e Shopee quando o navegador está aberto. A comparação exige marca explícita e descarta códigos observados divergentes.</p>
+    <div class="form-row">
+      <label class="grow">Meus produtos <select id="radar-product"><option value="">Selecione</option>
+        ${products.map(p=>`<option value="${esc(p.id)}" ${p.id===selectedId?'selected':''}>${esc(p.title)}${p.brand?' · '+esc(p.brand):''}${p.universal_code?' · '+esc(p.universal_code):''}</option>`).join('')}
+      </select></label>
+      <button class="btn" data-act="radar-select">Ver comparação</button>
+      <button class="btn" data-act="radar-refresh">Buscar novamente</button>
+    </div>
+    <div id="radar-out" class="out" aria-live="polite"></div>`);
+}
+let radarReadSequence=0;
+async function refreshProductRadar(){
+  const host=$('#radar-out'),ownProductId=$('#radar-product')?.value,accountId=state.accountId;
+  if(!host||!ownProductId||!accountId)return;
+  const sequence=++radarReadSequence;
+  const current=()=>sequence===radarReadSequence&&host===$('#radar-out')&&accountId===state.accountId&&ownProductId===$('#radar-product')?.value;
+  try{
+    const result=await api('competitor.radar.read',{accountId,ownProductId});
+    if(!current())return;
+    const labels={QUEUED:'Aguardando extensão',RUNNING:'Buscando ofertas públicas',COMPLETED:'Leitura concluída',PARTIAL:'Leitura parcial',FAILED:'Leitura indisponível'};
+    const outcomes=result.job?.outcomes?.map(row=>esc(row.marketplace||'Extensão')+' · '+(row.status==='OBSERVED'?
+      num(row.observedCards)+' cartões lidos, '+num(row.matchedCards)+' da mesma marca':esc(row.reason||'Leitura indisponível'))).join('<br>');
+    host.innerHTML='<p>'+esc(labels[result.job?.status]||'Comparações já disponíveis')+'</p>'+(outcomes?'<p class="muted small">'+outcomes+'</p>':'')+
+      table(['Oferta','Marketplace','Marca','Código universal','Preço','Diferença para meu preço','Captura'],result.matches.map(row=>
+        '<tr><td>'+esc(row.title)+'</td><td>'+esc(row.marketplace)+'</td><td>'+esc(row.brand)+'</td><td>'+
+        esc(row.universalCode||'Sem código observado')+(row.codeMatch===true?' · confere':'')+'</td><td>'+brl(row.priceCents)+'</td><td>'+
+        brl(row.priceDifferenceCents)+'</td><td>'+dt(row.observedAt)+' · '+esc(row.sourceClass==='A_PRIMARY_UI'?'Captura':row.sourceClass==='F_USER_INPUT'?'Manual':'Importação')+'</td></tr>'),
+      'Nenhuma oferta com a mesma marca comprovada até agora.');
+    initializeTables(host);
+    if(['QUEUED','RUNNING'].includes(result.job?.status))setTimeout(()=>{if(current())void refreshProductRadar();},4000);
+  }catch(error){
+    if(current())host.textContent=error.message;
+  }
+}
 async function viewMarket() {
-  return card('Snapshot de categoria', `
+  const accountId=state.accountId, generation=viewRenderSequence;
+  const products=accountId?await api('competitor.ownProduct.list',{accountId}):[];
+  const selected=products.find(product=>product.id===state.ownProductId)?.id||products[0]?.id||'';
+  if(generation===viewRenderSequence&&state.accountId===accountId)state.ownProductId=selected;
+  return productRadarCard(products,selected)+card('Snapshot de categoria', `
     <div class="form-grid">
       <label>Marketplace <input id="mk-mp" value="mercado_livre"></label>
       <label>Categoria <input id="mk-cat" placeholder="Capacetes"></label>
@@ -573,10 +621,11 @@ async function viewCompetition() {
   const s = stats || {};
   const rules = s.learningRules || [];
 
-  return card('Meu produto', `
+  return productRadarCard(products,ownProductId)+card('Cadastro detalhado de produto próprio', `
     <div class="form-grid">
       <label>Título <input id="op-title" placeholder="Capacete Norisk FF302 Fechado Fosco Preto"></label>
       <label>Marca <input id="op-brand" placeholder="Norisk"></label>
+      <label>EAN, UPC ou GTIN <input id="op-universal-code" inputmode="numeric" maxlength="14"></label>
       <label>Modelo <input id="op-model" placeholder="FF302"></label>
       <label>Categoria <input id="op-category" placeholder="Capacetes"></label>
       <label>Preço (R$) <input id="op-price" type="number" step="0.01"></label>
@@ -1452,6 +1501,7 @@ async function renderView() {
     host.innerHTML = content;
     initializeTables(host);
     if (state.view === 'competition') await loadRelations();
+    if (isCurrent()&&$('#radar-out'))void refreshProductRadar();
     if (state.view === 'browserSync') await showBrowserSyncBatch();
     return isCurrent();
   } catch (err) {
@@ -1678,6 +1728,30 @@ const ACTIONS = {
     $('#analysis-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result, null, 2))}</pre>`;
   },
 
+  'radar-start':async()=>{
+    const accountId=state.accountId,generation=viewRenderSequence;
+    const title=$('#radar-title').value.trim(),brand=$('#radar-brand').value.trim(),universalCode=$('#radar-code').value.trim()||null;
+    const price=$('#radar-price').value;
+    if(!accountId||!title||!brand)throw Error('Informe produto e marca na loja selecionada.');
+    const result=await api('competitor.radar.start',{accountId,confirmed:true,product:{title,brand,universalCode,priceCents:price?Math.round(Number(price)*100):null}});
+    if(accountId!==state.accountId||generation!==viewRenderSequence)return;
+    state.ownProductId=result.ownProductId;
+    await renderView();
+  },
+  'radar-refresh':async()=>{
+    const accountId=state.accountId,generation=viewRenderSequence,ownProductId=$('#radar-product').value;
+    if(!ownProductId)throw Error('Selecione um produto próprio.');
+    await api('competitor.radar.start',{accountId,confirmed:true,ownProductId});
+    if(accountId!==state.accountId||generation!==viewRenderSequence)return;
+    state.ownProductId=ownProductId;
+    await renderView();
+  },
+  'radar-select':async()=>{
+    const ownProductId=$('#radar-product').value;
+    if(!ownProductId)throw Error('Selecione um produto próprio.');
+    state.ownProductId=ownProductId;
+    await renderView();
+  },
   'own-add': async () => {
     const attrs = {};
     ($('#op-attrs').value || '').split(';').forEach((pair) => {
@@ -1690,6 +1764,7 @@ const ACTIONS = {
       marketplace: $('#op-mp').value.trim() || 'mercado_livre',
       title: $('#op-title').value.trim(),
       brand: $('#op-brand').value.trim() || null,
+      ...($('#op-universal-code').value.trim()?{universalCode:$('#op-universal-code').value.trim()}:{}),
       model: $('#op-model').value.trim() || null,
       category: $('#op-category').value.trim() || null,
       priceCents: price ? Math.round(Number(price) * 100) : null,

@@ -181,7 +181,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'mi.heartbeat') void pingPrestart();
   if (alarm.name === 'mi.tasks') { void processDraftTasks(); void processPublishTasks(); }
-  if (alarm.name === 'mi.sync') { void processScheduledSyncs(); void runDueCompetitorSchedule().catch(()=>{}); }
+  if (alarm.name === 'mi.sync') { void processScheduledSyncs(); void runDueCompetitorSchedule().catch(()=>{}); void processCompetitorRadar(); }
 });
 
 // Rede de segurança: mesmo sem onInstalled (extensão já instalada), garante o alarme.
@@ -1380,7 +1380,13 @@ function collectPublicCompetitorCards(){
       if(!id||seen.has(id)||(mp==='amazon'&&card.getAttribute('data-asin')!==id))continue;
       seen.add(id);url.search='';url.hash='';
       const adLabel=[...card.querySelectorAll('span,small')].some(el=>/^(patrocinad[oa]|sponsored)$/i.test(text(el)));const sponsored=adLabel?true:null;
-      candidates.push({externalId:id,title,url:url.href,priceCents:getPrice(card),sponsored,observedOrder:candidates.length+1});
+      const brandElement=card.querySelector('[itemprop="brand"]');
+      const brand=String(card.getAttribute('data-brand')||brandElement?.getAttribute('content')||text(brandElement)||'').trim();
+      const gtinElement=card.querySelector('[itemprop="gtin"],[itemprop="gtin8"],[itemprop="gtin12"],[itemprop="gtin13"],[itemprop="gtin14"]');
+      const gtin=String(card.getAttribute('data-gtin')||gtinElement?.getAttribute('content')||text(gtinElement)||'').trim();
+      const validGtin=/^(?:\d{8}|\d{12,14})$/.test(gtin)&&!/^0+$/.test(gtin)&&
+        (10-Array.from(gtin.slice(0,-1),Number).reverse().reduce((sum,digit,index)=>sum+digit*(index%2===0?3:1),0)%10)%10===Number(gtin.at(-1));
+      candidates.push({externalId:id,title,url:url.href,priceCents:getPrice(card),sponsored,observedOrder:candidates.length+1,...(brand&&brand.length<=200?{brand}:{}),...(validGtin?{universalCode:gtin}:{})});
       break;
     }
   }
@@ -1406,7 +1412,7 @@ async function executePublicCompetitorPlan(input){
   if(publicPlanBusy)throw Error('Já existe uma busca pública em andamento.');
   publicPlanBusy=true;
   try{
-        if(input.confirmed!==true||!Array.isArray(input.marketplaces)||input.marketplaces.length<1||input.marketplaces.length>3||!['TITLE','BRAND_MODEL','SKU','ATTRIBUTES'].includes(input.kind))throw Error('Confirme o critério e os marketplaces.');
+        if(input.confirmed!==true||!Array.isArray(input.marketplaces)||input.marketplaces.length<1||input.marketplaces.length>3||!['TITLE','BRAND_MODEL','SKU','ATTRIBUTES','PRODUCT_BRAND','GTIN'].includes(input.kind))throw Error('Confirme o critério e os marketplaces.');
         if(typeof input.accountId!=='string'||!input.accountId||typeof input.ownProductId!=='string'||!input.ownProductId||input.marketplaces.some(m=>!['mercado_livre','shopee','amazon'].includes(m)))throw Error('Escopo inválido.');
         if(input.marketplaces.includes('amazon')&&!await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']}))throw Error('Permissão Amazon ausente.');
         const plan=await callService('competitor.searchPlan',{accountId:input.accountId,ownProductId:input.ownProductId,marketplaces:input.marketplaces});
@@ -1428,9 +1434,9 @@ async function executePublicCompetitorPlan(input){
             }
             const current=await chrome.tabs.get(temporary.id);
             if(!captured||captured.error||!captured.candidates?.length||captured.marketplace!==row.marketplace||captured.sourceUrl!==current.url||current.url!==url.href)throw Error(captured?.error||'Página mudou ou não exibiu cartões reconhecidos.');
-            const saved=await callService('competitor.capturePublicSearch',{accountId:input.accountId,ownProductId:input.ownProductId,...captured});
+            const saved=await callService('competitor.capturePublicSearch',{accountId:input.accountId,ownProductId:input.ownProductId,...captured,...(input.sameBrandOnly===true?{sameBrandOnly:true}:{})});
             if(!saved?.ok)throw Error(saved?.error?.message||'Persistência recusada.');
-            outcomes.push({marketplace:row.marketplace,status:'OBSERVED',observedCards:saved.result.observedCards});
+            outcomes.push({marketplace:row.marketplace,status:'OBSERVED',observedCards:saved.result.observedCards,...(input.sameBrandOnly===true?{matchedCards:saved.result.matchedCards}:{})});
           }catch(error){outcomes.push({marketplace:row.marketplace,status:'NOT_VERIFIED',reason:String(error?.message||error)});}
           finally{if(temporary?.id)await chrome.tabs.remove(temporary.id).catch(()=>{});}
         }
@@ -1438,6 +1444,29 @@ async function executePublicCompetitorPlan(input){
     if(!outcomes.length)throw Error('Nenhuma busca disponível para o critério.');
     return {outcomes,coverageVerified:false};
   }finally{publicPlanBusy=false;}
+}
+let competitorRadarBusy=false;
+async function processCompetitorRadar(){
+  if(competitorRadarBusy||publicPlanBusy)return;
+  competitorRadarBusy=true;
+  try{
+    const response=await callService('competitor.radar.claim',{});
+    const job=response?.ok&&response.result;
+    if(!job)return;
+    let outcomes;
+    try{
+      ({outcomes}=await executePublicCompetitorPlan({...job,sameBrandOnly:true,confirmed:true}));
+    }catch(error){
+      const reason=String(error?.message||error).slice(0,300);
+      outcomes=job.marketplaces.map(marketplace=>({marketplace,status:'NOT_VERIFIED',reason}));
+    }
+    await callService('competitor.radar.complete',{requestId:job.requestId,token:job.token,
+      outcomes:outcomes.map(row=>({...row,...(row.reason?{reason:row.reason.slice(0,300)}:{})}))});
+  }catch{
+    // The local lease expires without relaunching a dispatched search.
+  }finally{
+    competitorRadarBusy=false;
+  }
 }
 async function competitorSchedule(action,input={}){
   return withCompetitorSchedule(async()=>{

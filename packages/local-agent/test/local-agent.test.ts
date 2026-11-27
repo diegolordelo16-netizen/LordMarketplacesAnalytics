@@ -71,6 +71,49 @@ function seedImportAccount(id: string): void {
 
 
 describe('Plano de busca competitiva',()=>{
+  it('cadastra e enfileira radar por GTIN com comparação da mesma marca e isolamento por loja',async()=>{
+    const accountId='radar-a',other='radar-b';seedImportAccount(accountId);seedImportAccount(other);
+    const product={title:'Café torrado',brand:'Marca Teste',universalCode:'4006381333931',priceCents:2000};
+    const request={accountId,confirmed:true,product};
+    expect((await call('competitor.radar.start',{...request,product:{...product,universalCode:'4006381333930'}})).ok).toBe(false);
+    const result=await call('competitor.radar.start',request);
+    const job=result.result as {ownProductId:string;requestId:string;status:string};
+    expect(job.status).toBe('QUEUED');
+    expect((await call('competitor.radar.start',request)).result).toEqual(job);
+    expect((await call('competitor.radar.start',{accountId:other,confirmed:true,ownProductId:job.ownProductId})).ok).toBe(false);
+    const context={accountId,ownProductId:job.ownProductId};
+    expect((await call('competitor.searchPlan',{...context,marketplaces:['mercado_livre','shopee']})).result)
+      .toMatchObject({links:expect.arrayContaining([expect.objectContaining({kind:'GTIN',term:product.universalCode}),expect.objectContaining({kind:'PRODUCT_BRAND',term:'Café torrado Marca Teste'})])});
+    const claim=(await call('competitor.radar.claim',{})).result as {token:string;kind:string};
+    expect(claim.kind).toBe('GTIN');
+    expect((await call('competitor.radar.claim',{})).result).toBeNull();
+    const reference={title:'Café torrado',priceCents:1750,sponsored:null};
+    const rows=[
+      {brand:'marca teste',universalCode:'04006381333931'},
+      {brand:'Outra marca',universalCode:product.universalCode},
+      {brand:'Marca Teste',universalCode:'5901234123457'},
+      {},
+    ].map((v,index)=>({...reference,...v,externalId:'MLB12345'+index,url:'https://produto.mercadolivre.com.br/MLB-12345'+index,observedOrder:index+1}));
+    expect((await call('competitor.capturePublicSearch',{...context,marketplace:'mercado_livre',sameBrandOnly:true,
+      sourceUrl:'https://lista.mercadolivre.com.br/4006381333931',observedAt:new Date().toISOString(),candidates:rows})).result)
+      .toMatchObject({observedCards:4,matchedCards:1});
+    const finished={requestId:job.requestId,token:claim.token,outcomes:[{marketplace:'mercado_livre',status:'OBSERVED',observedCards:4,matchedCards:1},
+      {marketplace:'shopee',status:'NOT_VERIFIED',reason:'Sem cartões reconhecidos'}]};
+    expect((await call('competitor.radar.complete',finished)).result).toMatchObject({status:'PARTIAL'});
+    expect((await call('competitor.radar.complete',finished)).ok).toBe(false);
+    expect((await call('competitor.radar.read',{...context,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.radar.read',context)).result).toMatchObject({
+      job:{status:'PARTIAL'},matches:[{codeMatch:true,priceDifferenceCents:-250}],
+    });
+    const later=new Date(Date.now()+1000).toISOString();
+    expect((await call('competitor.capturePublicSearch',{...context,marketplace:'mercado_livre',sameBrandOnly:true,
+      sourceUrl:'https://lista.mercadolivre.com.br/4006381333931',observedAt:later,candidates:[{...rows[0],priceCents:null}]})).ok).toBe(true);
+    expect((await call('competitor.radar.read',context)).result).toMatchObject({
+      matches:[{codeMatch:true,priceCents:null,priceDifferenceCents:null}],
+    });
+
+  });
+
   it('prepara links públicos sem inventar candidatos e isola a conta',async()=>{
     const accountId='search-plan-a',other='search-plan-b';seedImportAccount(accountId);seedImportAccount(other);
     const own=await call('competitor.ownProduct.upsert',{accountId,marketplace:'mercado_livre',title:'Capacete teste',brand:'Marca',model:'Modelo',attributes:{material:'ABS'}});

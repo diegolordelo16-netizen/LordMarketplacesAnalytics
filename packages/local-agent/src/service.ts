@@ -39,6 +39,7 @@ import { DEFAULT_BUDGET, type GeminiClient } from './ai/gemini-client';
 import type { KnowledgeBase } from './ai/knowledge-base';
 import type { AutoUpgradeEngine } from './ai/auto-upgrade';
 import type { CaptureService } from './capture/capture-service';
+import { universalCode } from './competitive/universal-code';
 import { CompetitorService } from './competitive/competitor-service';
 import { MercadoLivreVariations, legacyVariationOption, legacyStockOption, upOfferOption } from './adapters/mercado-livre-variations';
 import { IMPLEMENTED_ADAPTERS, PLANNED_ADAPTERS } from './adapters';
@@ -176,6 +177,10 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'competitor.ownProduct.list': 'view_reports',
   'competitor.search': 'manage_competitors',
   'competitor.searchPlan': 'view_reports',
+  'competitor.radar.start': 'manage_competitors',
+  'competitor.radar.read': 'view_reports',
+  'competitor.radar.claim': 'manage_competitors',
+  'competitor.radar.complete': 'manage_competitors',
   'competitor.capturePublicSearch': 'manage_competitors',
   'competitor.relations': 'view_reports',
   'competitor.approve': 'manage_competitors',
@@ -2289,19 +2294,108 @@ export class LocalService {
       return this.competitors.listOwnProducts(i.accountId);
     });
 
+    const brandKey=(value:string)=>value.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+    const expireRadarRequests=()=>db.db.prepare(`UPDATE competitor_radar_requests SET status='FAILED',lease_hash=NULL,updated_at=?,
+      outcomes_json='[{"status":"NOT_VERIFIED","reason":"Tempo de execução excedido"}]' WHERE
+      (status='QUEUED' AND created_at<?) OR (status='RUNNING' AND updated_at<?)`)
+      .run(nowIso(),new Date(Date.now()-900000).toISOString(),new Date(Date.now()-240000).toISOString());
+    const radarProducts=['mercado_livre','shopee'] as const;
+    this.register('competitor.radar.start',(payload,auth)=>db.transaction(()=>{
+      const i=z.object({accountId:z.string().min(1),confirmed:z.literal(true),
+        product:z.object({title:z.string().trim().min(2).max(150),brand:z.string().trim().min(1).max(50),
+          universalCode:universalCode.nullable(),priceCents:z.number().int().nonnegative().max(100000000).nullable()}).strict().optional(),
+        ownProductId:z.string().min(1).optional(),
+      }).strict().refine(v=>Boolean(v.product)!==Boolean(v.ownProductId),'informe um produto novo ou existente').parse(payload);
+      const account=db.row<{marketplace:string}>('SELECT marketplace FROM accounts WHERE id=? AND is_active=1',i.accountId);
+      if(!auth||!account)throw Error('conta ativa necessária');
+      let productId=i.ownProductId;
+      if(i.product){
+        const product=i.product;
+        const existing=db.row<{id:string}>(`SELECT id FROM own_products WHERE account_id=? AND marketplace=? AND title=? AND brand=? AND universal_code IS ?
+          ORDER BY updated_at DESC,id DESC LIMIT 1`,i.accountId,account.marketplace,product.title,product.brand,product.universalCode);
+        productId=existing?.id??this.competitors.upsertOwnProduct({...product,accountId:i.accountId,marketplace:account.marketplace}).id;
+        if(existing&&product.priceCents!==null)db.db.prepare('UPDATE own_products SET price_cents=?,updated_at=? WHERE id=? AND account_id=?')
+          .run(product.priceCents,nowIso(),productId,i.accountId);
+      }
+      const product=db.row<{brand:string|null;universal_code:string|null}>('SELECT brand,universal_code FROM own_products WHERE id=? AND account_id=?',productId??null,i.accountId);
+      if(!product?.brand?.trim())throw Error('produto da loja com marca preenchida necessário');
+      expireRadarRequests();
+      const pending=db.row<{id:string;status:string}>("SELECT id,status FROM competitor_radar_requests WHERE own_product_id=? AND status IN ('QUEUED','RUNNING')",productId!);
+      if(pending)return {ownProductId:productId,requestId:pending.id,status:pending.status};
+      const id=randomUUID(),now=nowIso();
+      db.db.prepare('INSERT INTO competitor_radar_requests(id,account_id,own_product_id,requested_by,created_at,updated_at,kind,status) VALUES(?,?,?,?,?,?,?,?)')
+        .run(id,i.accountId,productId!,auth.userId,now,now,product.universal_code?'GTIN':'PRODUCT_BRAND','QUEUED');
+      this.audit(auth,'COMPETITOR_RADAR_REQUEST','own_product',productId!, 'QUEUED');
+      return {ownProductId:productId,requestId:id,status:'QUEUED'};
+    }));
+    this.register('competitor.radar.claim',(_payload,auth)=>db.transaction(()=>{
+      if(!auth)return null;
+      expireRadarRequests();
+      const row=db.row<{id:string;account_id:string;own_product_id:string;kind:string}>(`SELECT r.id,r.account_id,r.own_product_id,r.kind
+        FROM competitor_radar_requests r JOIN accounts a ON a.id=r.account_id AND a.is_active=1
+        WHERE r.status='QUEUED' AND r.requested_by=? ORDER BY r.created_at,r.id LIMIT 1`,auth.userId);
+      if(!row)return null;
+      const token=randomUUID();
+      db.db.prepare("UPDATE competitor_radar_requests SET status='RUNNING',lease_hash=?,updated_at=? WHERE id=? AND status='QUEUED'")
+        .run(sha256(token),nowIso(),row.id);
+      return {requestId:row.id,token,accountId:row.account_id,ownProductId:row.own_product_id,kind:row.kind,marketplaces:radarProducts};
+    }));
+    this.register('competitor.radar.complete',(payload,auth)=>db.transaction(()=>{
+      const outcome=z.object({marketplace:z.enum(radarProducts),status:z.enum(['OBSERVED','NOT_VERIFIED']),
+        observedCards:z.number().int().min(0).max(20).optional(),matchedCards:z.number().int().min(0).max(20).optional(),reason:z.string().max(300).optional()}).strict();
+      const i=z.object({requestId:z.string().uuid(),token:z.string().uuid(),outcomes:z.array(outcome).min(1).max(2)}).strict().parse(payload);
+      if(!auth||new Set(i.outcomes.map(row=>row.marketplace)).size!==i.outcomes.length)throw Error('resultado de radar inválido');
+      expireRadarRequests();
+      const count=i.outcomes.filter(row=>row.status==='OBSERVED').length;
+      const status=count===radarProducts.length?'COMPLETED':count?'PARTIAL':'FAILED';
+      const saved=db.db.prepare("UPDATE competitor_radar_requests SET status=?,outcomes_json=?,lease_hash=NULL,updated_at=? WHERE id=? AND requested_by=? AND lease_hash=? AND status='RUNNING'")
+        .run(status,JSON.stringify(i.outcomes),nowIso(),i.requestId,auth.userId,sha256(i.token));
+      if(saved.changes!==1)throw Error('autorização de radar inválida ou consumida');
+      return {status};
+    }));
+    this.register('competitor.radar.read',payload=>{
+      const i=z.object({accountId:z.string().min(1),ownProductId:z.string().min(1)}).strict().parse(payload);
+      const own=db.row<{brand:string|null;price_cents:number|null;universal_code:string|null;external_id:string|null}>('SELECT o.brand,o.price_cents,o.universal_code,COALESCE(o.external_id,l.external_id) AS external_id FROM own_products o LEFT JOIN listings l ON l.id=o.listing_id AND l.account_id=o.account_id WHERE o.id=? AND o.account_id=?',i.ownProductId,i.accountId);
+      if(!own)throw Error('produto de outra loja');
+      expireRadarRequests();
+      const job=db.row<{status:string;outcomes_json:string;updated_at:string}>('SELECT status,outcomes_json,updated_at FROM competitor_radar_requests WHERE account_id=? AND own_product_id=? ORDER BY created_at DESC,id DESC LIMIT 1',i.accountId,i.ownProductId);
+      const rows=db.rows<{marketplace:string;title:string;brand:string|null;price_cents:number|null;universal_code:string|null;
+        external_id:string|null;observed_at:string;source_class:string}>(`SELECT c.marketplace,
+        CASE WHEN p.id IS NULL THEN c.title ELSE p.title END AS title,
+        CASE WHEN p.id IS NULL THEN c.brand ELSE p.brand END AS brand,
+        CASE WHEN p.id IS NULL THEN c.price_cents ELSE p.price_cents END AS price_cents,
+        CASE WHEN p.id IS NULL THEN json_extract(c.attributes_json,'$.GTIN') ELSE p.universal_code END AS universal_code,
+        c.external_id,COALESCE(p.observed_at,c.last_seen_at) AS observed_at,
+        CASE WHEN p.id IS NULL THEN c.source_class ELSE 'A_PRIMARY_UI' END AS source_class
+        FROM competitor_candidates c LEFT JOIN competitor_public_search_observations p ON p.id=(
+          SELECT q.id FROM competitor_public_search_observations q
+          WHERE q.candidate_id=c.id AND q.account_id=? AND q.own_product_id=c.own_product_id
+          ORDER BY q.observed_at DESC,q.rowid DESC LIMIT 1)
+        WHERE c.own_product_id=? ORDER BY observed_at DESC,c.id DESC LIMIT 2000`,i.accountId,i.ownProductId);
+      const matches=rows.filter(r=>own.brand&&r.brand&&brandKey(own.brand)===brandKey(r.brand)&&!(own.external_id&&r.external_id===own.external_id)).flatMap(r=>{
+        const observedCode=r.universal_code&&universalCode.safeParse(r.universal_code).success?r.universal_code:null;
+        const codeMatch=own.universal_code&&observedCode?own.universal_code.padStart(14,'0')===observedCode.padStart(14,'0'):null;
+        if(codeMatch===false)return [];
+        return [{marketplace:r.marketplace,title:r.title,brand:r.brand,priceCents:r.price_cents,universalCode:observedCode,codeMatch,
+          priceDifferenceCents:own.price_cents!=null&&r.price_cents!=null?r.price_cents-own.price_cents:null,observedAt:r.observed_at,sourceClass:r.source_class}];
+      });
+      return {job:job&&{status:job.status,outcomes:JSON.parse(job.outcomes_json),updatedAt:job.updated_at},matches:matches.slice(0,100)};
+    });
+
     this.register('competitor.searchPlan',payload=>{
       const i=z.object({accountId:z.string().min(1),ownProductId:z.string().min(1),marketplaces:z.array(z.enum(['mercado_livre','shopee','amazon'])).min(1).max(3)}).strict().parse(payload);
-      const own=db.row<{title:string;brand:string|null;model:string|null;attributes_json:string|null;sku:string|null}>(`SELECT o.title,o.brand,o.model,o.attributes_json,s.sku_code AS sku FROM own_products o JOIN accounts a ON a.id=o.account_id AND a.is_active=1 LEFT JOIN listings l ON l.id=o.listing_id AND l.account_id=o.account_id LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=o.account_id WHERE o.id=? AND o.account_id=?`,i.ownProductId,i.accountId);
+      const own=db.row<{title:string;brand:string|null;model:string|null;attributes_json:string|null;sku:string|null;universal_code:string|null}>(`SELECT o.title,o.brand,o.model,o.attributes_json,o.universal_code,s.sku_code AS sku FROM own_products o JOIN accounts a ON a.id=o.account_id AND a.is_active=1 LEFT JOIN listings l ON l.id=o.listing_id AND l.account_id=o.account_id LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=o.account_id WHERE o.id=? AND o.account_id=?`,i.ownProductId,i.accountId);
       if(!own)throw Error('produto não pertence à conta ativa');
       const attrs=parseJsonObject(own.attributes_json??'{}');
-      const queries=[{kind:'TITLE',term:own.title},{kind:'BRAND_MODEL',term:[own.brand,own.model].filter(Boolean).join(' ')},{kind:'SKU',term:own.sku??''},{kind:'ATTRIBUTES',term:[own.brand,own.model,...Object.values(attrs).filter(v=>typeof v==='string').slice(0,3)].filter(Boolean).join(' ')}];
+      const queries=[{kind:'PRODUCT_BRAND',term:own.brand&&!brandKey(own.title).includes(brandKey(own.brand))?own.title+' '+own.brand:own.title},{kind:'GTIN',term:own.universal_code??''},{kind:'TITLE',term:own.title},{kind:'BRAND_MODEL',term:[own.brand,own.model].filter(Boolean).join(' ')},{kind:'SKU',term:own.sku??''},{kind:'ATTRIBUTES',term:[own.brand,own.model,...Object.values(attrs).filter(v=>typeof v==='string').slice(0,3)].filter(Boolean).join(' ')}];
       const unique=new Set<string>();
-      const links=queries.filter(q=>{q.term=q.term.trim().slice(0,200);const key=q.term.toLowerCase();if(q.term.length<2||unique.has(key))return false;unique.add(key);return true;}).flatMap(q=>[...new Set(i.marketplaces)].map(m=>({marketplace:m,...q,url:m==='mercado_livre'?'https://lista.mercadolivre.com.br/'+encodeURIComponent(q.term):m==='shopee'?'https://shopee.com.br/search?keyword='+encodeURIComponent(q.term):'https://www.amazon.com.br/s?k='+encodeURIComponent(q.term),targetResults:20})));
+      const links=queries.filter(q=>{q.term=q.term.trim().slice(0,200);const key=q.kind+':'+q.term.toLowerCase();if(q.term.length<2||unique.has(key))return false;unique.add(key);return true;}).flatMap(q=>[...new Set(i.marketplaces)].map(m=>({marketplace:m,...q,url:m==='mercado_livre'?'https://lista.mercadolivre.com.br/'+encodeURIComponent(q.term):m==='shopee'?'https://shopee.com.br/search?keyword='+encodeURIComponent(q.term):'https://www.amazon.com.br/s?k='+encodeURIComponent(q.term),targetResults:20})));
       return {links,note:'Abra as buscas públicas e importe candidatos observados. Nenhuma busca remota ou posição foi confirmada pelo plano.'};
     });
     this.register('competitor.capturePublicSearch',(payload,auth)=>db.transaction(()=>{
-      const i=z.object({accountId:z.string().min(1),ownProductId:z.string().min(1),marketplace:z.enum(['mercado_livre','shopee','amazon']),sourceUrl:z.string().url().max(2048),observedAt:z.string().datetime(),candidates:z.array(z.object({externalId:z.string().min(1).max(100),title:z.string().trim().min(2).max(500),url:z.string().url().max(2048),priceCents:z.number().int().nonnegative().nullable(),sponsored:z.boolean().nullable(),observedOrder:z.number().int().min(1).max(20)}).strict()).min(1).max(20)}).strict().parse(payload);
-      if(!db.row('SELECT o.id FROM own_products o JOIN accounts a ON a.id=o.account_id AND a.is_active=1 WHERE o.id=? AND o.account_id=?',i.ownProductId,i.accountId))throw Error('produto não pertence à conta ativa');
+      const i=z.object({accountId:z.string().min(1),ownProductId:z.string().min(1),marketplace:z.enum(['mercado_livre','shopee','amazon']),sourceUrl:z.string().url().max(2048),observedAt:z.string().datetime(),sameBrandOnly:z.boolean().optional(),candidates:z.array(z.object({externalId:z.string().min(1).max(100),title:z.string().trim().min(2).max(500),url:z.string().url().max(2048),priceCents:z.number().int().nonnegative().nullable(),sponsored:z.boolean().nullable(),observedOrder:z.number().int().min(1).max(20),brand:z.string().trim().min(1).max(200).optional(),universalCode:universalCode.optional()}).strict()).min(1).max(20)}).strict().parse(payload);
+      const own=db.row<{brand:string|null;universal_code:string|null;external_id:string|null}>('SELECT o.brand,o.universal_code,COALESCE(o.external_id,l.external_id) AS external_id FROM own_products o JOIN accounts a ON a.id=o.account_id AND a.is_active=1 LEFT JOIN listings l ON l.id=o.listing_id AND l.account_id=o.account_id WHERE o.id=? AND o.account_id=?',i.ownProductId,i.accountId);
+      if(!own)throw Error('produto não pertence à conta ativa');
       if(Math.abs(Date.now()-Date.parse(i.observedAt))>5*60000)throw Error('captura pública fora da janela de 5 minutos');
       const source=new URL(i.sourceUrl),allowed=(url:URL)=>url.protocol==='https:'&&!url.username&&!url.password&&!url.port;
       const searchPage=allowed(source)&&(i.marketplace==='mercado_livre'?source.hostname==='lista.mercadolivre.com.br':i.marketplace==='shopee'?source.hostname==='shopee.com.br'&&source.pathname==='/search'&&!!source.searchParams.get('keyword'):source.hostname==='www.amazon.com.br'&&source.pathname==='/s'&&!!source.searchParams.get('k'));
@@ -2314,17 +2408,19 @@ export class LocalService {
         const host=i.marketplace==='mercado_livre'?/(^|\.)mercadolivre\.com\.br$/i.test(url.hostname):i.marketplace==='shopee'?url.hostname==='shopee.com.br':url.hostname==='www.amazon.com.br';
         if(!allowed(url)||!host||!canonical||canonical!==row.externalId||url.search||url.hash)throw Error('identidade pública do candidato incompatível');
       }
-      const result=this.competitors.search({ownProductId:i.ownProductId,marketplaces:[i.marketplace],sourceClass:'A_PRIMARY_UI',discoveryMethod:'BUSCA_ASSISTIDA',candidates:i.candidates.map(row=>({marketplace:i.marketplace,externalId:row.externalId,title:row.title,url:row.url,priceCents:row.priceCents}))});
-      for(const row of i.candidates){
+      const accepted=i.sameBrandOnly?i.candidates.filter(row=>own.brand&&row.brand&&brandKey(own.brand)===brandKey(row.brand)&&
+        row.externalId!==own.external_id&&(!own.universal_code||!row.universalCode||own.universal_code.padStart(14,'0')===row.universalCode.padStart(14,'0'))):i.candidates;
+      const result=this.competitors.search({ownProductId:i.ownProductId,marketplaces:[i.marketplace],sourceClass:'A_PRIMARY_UI',discoveryMethod:'BUSCA_ASSISTIDA',candidates:accepted.map(row=>({marketplace:i.marketplace,externalId:row.externalId,title:row.title,url:row.url,priceCents:row.priceCents,brand:row.brand,attributes:row.universalCode?{GTIN:row.universalCode}:undefined}))});
+      for(const row of accepted){
         const candidate=db.row<{id:string}>('SELECT id FROM competitor_candidates WHERE own_product_id=? AND marketplace=? AND external_id=?',i.ownProductId,i.marketplace,row.externalId);if(!candidate)throw Error('candidato não persistido');
-        db.db.prepare('INSERT INTO competitor_public_search_observations(id,run_id,account_id,own_product_id,candidate_id,marketplace,source_url,observed_at,observed_order,title,price_cents,sponsored) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(),result.runId,i.accountId,i.ownProductId,candidate.id,i.marketplace,source.origin+source.pathname,i.observedAt,row.observedOrder,row.title,row.priceCents,row.sponsored===null?null:Number(row.sponsored));
+        db.db.prepare('INSERT INTO competitor_public_search_observations(id,run_id,account_id,own_product_id,candidate_id,marketplace,source_url,observed_at,observed_order,title,price_cents,sponsored,brand,universal_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(),result.runId,i.accountId,i.ownProductId,candidate.id,i.marketplace,source.origin+source.pathname,i.observedAt,row.observedOrder,row.title,row.priceCents,row.sponsored===null?null:Number(row.sponsored),row.brand??null,row.universalCode??null);
         const active=db.row<{id:string}>("SELECT id FROM competitor_relations WHERE own_product_id=? AND candidate_id=? AND status='APROVADO' AND monitoring_state='ATIVO'",i.ownProductId,candidate.id);
         if(active && !db.row('SELECT id FROM competitor_monitoring_points WHERE relation_id=? AND captured_at=?',active.id,i.observedAt)){
           db.db.prepare('INSERT INTO competitor_monitoring_points(id,relation_id,captured_at,price_cents,title,sponsored,source_class,evidence_json) VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(),active.id,i.observedAt,row.priceCents,row.title,row.sponsored===null?null:Number(row.sponsored),'A_PRIMARY_UI',JSON.stringify({source:'PUBLIC_SEARCH_CARD',observedOrder:String(row.observedOrder)}));
         }
       }
       this.audit(auth,'COMPETITOR_PUBLIC_SEARCH','own_product',i.ownProductId,'OK',String(i.candidates.length)+' cartões visíveis; ordem observada, não ranking completo');
-      return {...result,observedCards:i.candidates.length,coverageVerified:false};
+      return {...result,observedCards:i.candidates.length,matchedCards:accepted.length,coverageVerified:false};
     }));
     this.register('competitor.search', (payload, auth) => {
       const r = this.competitors.search(payload);

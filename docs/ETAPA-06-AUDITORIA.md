@@ -73,3 +73,34 @@ Versão 3.15.0 candidata, sem publicar release estável ou declarar requisitos p
 - Migration 045 (044 reservada à etapa 07): registros de conteúdo independentes por produto, candidato e loja, com fonte/data. Comparação lexical de descrição e promoções explícitas; imagens por SHA-256 e dHash64, com melhores correspondências. Upload manual calcula hashes localmente sem guardar binários. Extensão captura conteúdo público de página de produto com identidade conferida; CORS pode impedir o hash perceptual. Ausência de campo não significa inexistência.
 - Adicionados testes de regressão de monitoramento, agendamento, conteúdo, isolamento e comparação. Verificação de sintaxe JavaScript e nove verificações direcionadas com fixtures executadas nesta revisão. A CI 219 pertence ao commit anterior 4214c5b, não valida os novos commits.
 - Pendências: execução integral da CI no novo SHA, eventual correção de falhas, publicação na master após revisão, integração da etapa 07 sobre a versão final, e homologação de seletores, API paga e contas reais (dispensada nesta fase). Comparação visual é heurística, não reconhecimento semântico. Escopo remanescente da etapa 05 permanece em sua auditoria.
+
+
+## Revisão do OpenSEO na 3.19.0
+
+Base do aplicativo: commit e559f22 da master. OpenSEO revisado: commit
+6f68494e92a695db17f4b22da25e84b9bf1e582c, licença MIT.
+
+| Área | Cobertura na 3.19.0 |
+|---|---|
+| Palavras-chave e SERP | Volume, sugestões, termos relacionados, ideias, visão geral, SERP e termos ranqueados via DataForSEO. |
+| Concorrentes, domínio e links | Domínios concorrentes, páginas relevantes, resumo e amostras de backlinks, domínios de referência e páginas com backlinks. |
+| Auditoria e visibilidade de IA | Lighthouse por URL e menções por provedor. O crawler completo com descoberta e auditoria em lote do OpenSEO tem fluxo próprio. |
+| Acompanhamento | Histórico e monitoramento autorizados no escopo da loja. OpenSEO possui projetos e serviços de acompanhamento próprios. |
+| Outros módulos do OpenSEO | SEO local dedicado, IndexNow, relatórios Web compartilháveis e a infraestrutura do OpenSEO ficam fora desta integração. Há uma ponte MCP local de leitura. |
+
+Fontes: [OpenSEO no commit revisado](https://github.com/every-app/open-seo/tree/6f68494e92a695db17f4b22da25e84b9bf1e582c/src/server/features) e [conector da 3.19.0](../packages/local-agent/src/connectors/openseo.ts).
+
+## Radar de produto
+
+Radar de Mercado e Concorrência compartilham o produto da loja com marca,
+EAN/UPC/GTIN validado e preço próprio opcional. Ao cadastrar e buscar, a
+extensão online consome o pedido e abre a busca pública do Mercado Livre
+e da Shopee em abas temporárias. O plano busca pelo código quando informado,
+ou pelo produto e marca. A análise inclui somente ofertas com marca explícita
+correspondente. Códigos observados divergentes são excluídos. Código ausente
+fica identificado como tal. A diferença de preço depende dos dois preços.
+
+A migração 053 preserva os cadastros existentes e registra a fila de leitura.
+Um pedido em andamento é reservado uma única vez. O painel mostra conclusão
+parcial quando uma fonte falha. As capturas reais variam conforme o marketplace
+expõe os campos, e a leitura de cartões não comprova cobertura de todo o mercado.
