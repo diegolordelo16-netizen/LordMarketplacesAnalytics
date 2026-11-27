@@ -187,5 +187,54 @@
     }
     return {metrics,evidence};
   }
-  window.MI_DOM = { paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  // Detailed rows require an explicit entity identity; never infer one from position or title.
+  function visibleDetailRows(root,pageKind){
+    const ads=pageKind==='seller_ads';
+    if(!ads&&!['seller_listings','seller_inventory','seller_listing_edit'].includes(pageKind))return [];
+    const spec=ads?[['AD','data-ad-id',['data-campaign-id']],['AD_CAMPAIGN','data-campaign-id',[]]]:[['LISTING_VARIANT','data-variation-id',['data-item-id','data-product-id','data-listing-id','data-asin']],['WAREHOUSE_STOCK','data-warehouse-id',['data-variation-id','data-item-id','data-product-id','data-listing-id','data-asin']]];
+    const allowedId=value=>typeof value==='string'&&/^[A-Za-z0-9_.:-]{1,200}$/.test(value);
+    const out=[],seen=new Set();
+    for(const [kind,attr,parents] of spec){
+      for(const row of root.querySelectorAll('['+attr+']')){
+        if(out.length>=100||!isVisible(row))continue;
+        const id=row.getAttribute(attr);
+        if(!allowedId(id))continue;
+        const parentNode=parents.length?row.closest(parents.map(a=>'['+a+']').join(',')):null;
+        const parentId=parentNode&&parents.map(a=>parentNode.getAttribute(a)).find(allowedId);
+        if(parents.length&&!parentId)continue;
+        // Avoid interpreting a container of multiple ads/variants as one row.
+        if(row.querySelector?.('[data-ad-id],[data-variation-id],[data-warehouse-id]'))continue;
+        const key=[kind,parentId||'',id].join('|');
+        if(seen.has(key))continue;
+        const metrics={},evidence={};
+        const definitions=ads?{
+          adSpend:['investimento em publicidade','gasto com anúncios','ad spend','advertising cost'],
+          adClicks:['cliques','clicks','cliques em anúncios','ad clicks'],
+          paidImpressions:['impressões','impressions','impressões pagas','ad impressions'],
+          adAttributedRevenue:['vendas atribuídas','ad-attributed sales','receita atribuída'],
+          adAttributedOrders:['pedidos atribuídos','ad-attributed orders'],
+          adConversionRatePct:['taxa de conversão','conversion rate','ad conversion rate'],
+        }:{
+          price:['preço','price','preço atual'],originalPrice:['preço original','preço anterior','original price'],
+          stockAvailable:['estoque','stock','available quantity','disponíveis'],
+          promotionDiscountPct:['desconto promocional','percentual de desconto','promotion discount'],
+        };
+        for(const [field,labels] of Object.entries(definitions)){
+          const found=findValueByLabel(row,labels);
+          if(!found)continue;
+          const percentage=field.endsWith('Pct');
+          if(percentage&&!/%\s*$/.test(found.text))continue;
+          const value=parseNumberPtBr(found.text);
+          if(value===null||value<0||(percentage&&value>100)||(['adClicks','paidImpressions','adAttributedOrders','stockAvailable'].includes(field)&&!Number.isInteger(value)))continue;
+          metrics[field]=value;evidence[field]=String(found.label+': '+found.text).slice(0,300);
+        }
+        if(!Object.keys(metrics).length)continue;
+        const labelNode=row.querySelector?.('[data-testid="campaign-name"],[data-testid="ad-name"],[data-testid="variation-name"],[data-testid="warehouse-name"]');
+        const label=labelNode&&isVisible(labelNode)?String(labelNode.innerText??'').trim().slice(0,300):'';
+        seen.add(key);out.push({kind,externalId:id,...(parentId?{parentExternalId:parentId}:{}),...(label?{label}:{}),metrics,evidence});
+      }
+    }
+    return out;
+  }
+  window.MI_DOM = { visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

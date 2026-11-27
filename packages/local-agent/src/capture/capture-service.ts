@@ -17,6 +17,7 @@ export interface IngestResult {
   ok: boolean;
   listingsIngested: number;
   accountSnapshotsIngested: number;
+  detailRowsIngested: number;
   quality: ReturnType<typeof buildQualityReport>;
   errors: string[];
 }
@@ -32,6 +33,7 @@ export class CaptureService {
         ok: false,
         listingsIngested: 0,
         accountSnapshotsIngested: 0,
+        detailRowsIngested:0,
         quality: buildQualityReport([], 0),
         errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
       };
@@ -40,6 +42,7 @@ export class CaptureService {
     const issues: DataQualityIssue[] = [];
     let written = 0;
     let accountSnapshotsWritten = 0;
+    let detailRowsWritten=0;
 
     this.db.transaction(() => {
       // A conta precisa existir, estar ativa e pertencer ao marketplace declarado.
@@ -89,7 +92,7 @@ export class CaptureService {
           data.collectedAt,
           new Date().toISOString(),
           'OK',
-          data.listings.length + (data.accountMetrics ? 1 : 0),
+          data.listings.length + data.details.length + (data.accountMetrics ? 1 : 0),
           0,
           data.method,
         );
@@ -268,9 +271,14 @@ export class CaptureService {
         }
       }
 
-      this.db.db
-        .prepare('UPDATE data_source_runs SET records_written = ? WHERE id = ?')
-        .run(written + accountSnapshotsWritten, runId);
+      const insertDetail=this.db.db.prepare(`INSERT OR IGNORE INTO capture_detail_snapshots
+        (id,account_id,marketplace,kind,external_id,parent_external_id,label,metrics_json,evidence_json,context_json,page_url,captured_at,reference_at,source_class,run_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for(const detail of data.details){
+        const result=insertDetail.run(randomUUID(),data.accountId,data.marketplace,detail.kind,detail.externalId,detail.parentExternalId??'',detail.label??null,JSON.stringify(detail.metrics),JSON.stringify(detail.evidence),JSON.stringify(data.evidence??{}),data.url,data.collectedAt,data.referenceAt,data.sourceClass,runId);
+        detailRowsWritten+=Number(result.changes);
+      }
+      this.db.db.prepare('UPDATE data_source_runs SET records_written = ? WHERE id = ?').run(written + accountSnapshotsWritten+detailRowsWritten, runId);
     });
 
     for (const issue of issues) {
@@ -281,11 +289,12 @@ export class CaptureService {
         .run(new Date().toISOString(), data.accountId, issue.kind, issue.severity, issue.field, issue.message);
     }
 
-    const quality = buildQualityReport(issues, data.listings.length + accountSnapshotsWritten);
+    const quality = buildQualityReport(issues, data.listings.length + accountSnapshotsWritten+detailRowsWritten);
     return {
       ok: quality.criticalCount === 0,
       listingsIngested: written,
       accountSnapshotsIngested: accountSnapshotsWritten,
+      detailRowsIngested:detailRowsWritten,
       quality,
       errors: issues.map((i) => i.message),
     };

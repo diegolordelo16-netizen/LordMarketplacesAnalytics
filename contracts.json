@@ -272,5 +272,9 @@
   "capture.accountSnapshots": {
     "payload": "accountId | limit?",
     "permission": "view_reports"
+  },
+  "capture.details": {
+    "payload": "accountId | kind? | limit?",
+    "permission": "view_reports"
   }
 }

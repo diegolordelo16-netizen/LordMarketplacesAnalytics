@@ -530,7 +530,11 @@
         sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
         return true;
       }
-      try { sendResponse({ ok: true, snapshot: snapshot() }); }
+      try {
+        const observed=snapshot();
+        observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
+        sendResponse({ok:true,snapshot:observed});
+      }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
       return true;
     }

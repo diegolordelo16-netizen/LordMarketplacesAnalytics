@@ -676,3 +676,25 @@ describe('DOM: percentuais explícitos e paginação sem URL', () => {
     expect(window.MI_DOM.paginationUnsupported(root,'https://seller.shopee.com.br/order','shopee')).toBe(true);
   });
 });
+
+
+describe('captura de detalhes por identidade de entidade',()=>{
+  it('extrai métricas de campanha e ignora linha oculta, sem identidade ou sem evidência',()=>{
+    class E{
+      constructor(public innerText:string,public attrs:Record<string,string>={},public nodes:E[]=[],public nextElementSibling:E|null=null,public visible=true){}
+      getBoundingClientRect(){return {width:this.visible?20:0,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(){return this.nodes}
+      querySelector(){return null}
+      closest(){return this}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const metric=new E('Investimento em publicidade',{},[],new E('R$ 12,50'));
+    const row=new E('',{'data-campaign-id':'C1'},[metric]);
+    const hidden=new E('',{'data-campaign-id':'C2'},[metric],null,false);
+    const root={querySelectorAll:(sel:string)=>sel==='[data-campaign-id]'?[row,hidden,new E('',{},[metric])]:[]};
+    expect(window.MI_DOM.visibleDetailRows(root,'seller_ads')).toEqual([{kind:'AD_CAMPAIGN',externalId:'C1',metrics:{adSpend:12.5},evidence:{adSpend:'Investimento em publicidade: R$ 12,50'}}]);
+  });
+});

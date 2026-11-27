@@ -137,7 +137,28 @@ export const capturedAccountMetricsSchema = z.object({
   favorites: z.number().finite().nonnegative().optional(),
 }).partial().refine((metrics) => Object.values(metrics).some((value) => value !== undefined), 'informe ao menos uma métrica de conta');
 
+const capturedDetailSchema=z.object({
+  kind:z.enum(['AD_CAMPAIGN','AD','LISTING_VARIANT','WAREHOUSE_STOCK']),
+  externalId:z.string().trim().min(1).max(200),
+  parentExternalId:z.string().trim().min(1).max(200).optional(),
+  label:z.string().trim().max(300).optional(),
+  metrics:z.object({
+    adSpend:z.number().finite().nonnegative().optional(),adClicks:z.number().int().nonnegative().optional(),
+    paidImpressions:z.number().int().nonnegative().optional(),adAttributedRevenue:z.number().finite().nonnegative().optional(),
+    adAttributedOrders:z.number().int().nonnegative().optional(),adConversionRatePct:z.number().finite().min(0).max(100).optional(),
+    price:z.number().finite().nonnegative().optional(),originalPrice:z.number().finite().nonnegative().optional(),
+    stockAvailable:z.number().int().nonnegative().optional(),promotionDiscountPct:z.number().finite().min(0).max(100).optional(),
+  }).strict().refine(v=>Object.keys(v).length>0,'linha sem indicadores'),
+  evidence:z.record(z.string(),z.string().max(300)).refine(v=>Object.keys(v).length<=15,'evidências excedem limite'),
+}).superRefine((row,ctx)=>{
+  const ads=['AD_CAMPAIGN','AD'].includes(row.kind);
+  if(row.kind!=='AD_CAMPAIGN'&&!row.parentExternalId)ctx.addIssue({code:'custom',message:'identificador pai obrigatório'});
+  const allowed=ads?['adSpend','adClicks','paidImpressions','adAttributedRevenue','adAttributedOrders','adConversionRatePct']:['price','originalPrice','stockAvailable','promotionDiscountPct'];
+  if(Object.keys(row.metrics).some(key=>!allowed.includes(key)||!row.evidence[key]))ctx.addIssue({code:'custom',message:'indicador fora do escopo ou sem evidência'});
+});
+
 export const captureIngestSchema = z.object({
+  details:z.array(capturedDetailSchema).max(100).default([]),
   captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   marketplace: marketplaceIdSchema,
   accountId: z.string().min(1).max(128),
@@ -152,7 +173,7 @@ export const captureIngestSchema = z.object({
   accountMetrics: capturedAccountMetricsSchema.optional(),
   /** Evidências textuais curtas (rótulo → valor lido), para auditoria. */
   evidence: z.record(z.string(), z.string().max(2000)).refine((value) => Object.keys(value).length <= 40 && JSON.stringify(value).length <= 12_000, 'evidências excedem os limites permitidos').optional(),
-}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined, 'captura sem anúncios nem métricas de conta');
+}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined || payload.details.length>0, 'captura sem anúncios, detalhes nem métricas de conta');
 
 export type CaptureIngest = z.infer<typeof captureIngestSchema>;
 

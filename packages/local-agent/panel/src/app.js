@@ -273,6 +273,7 @@ async function viewExec() {
 async function viewListings() {
   const snaps = await api('capture.snapshot', state.accountId ? { accountId: state.accountId } : {});
   const accountSnaps = state.accountId ? await api('capture.accountSnapshots',{accountId:state.accountId,limit:30}) : [];
+  const details=state.accountId?await api('capture.details',{accountId:state.accountId,limit:100}):[];
   const listings = new Map();
   for (const snapshot of snaps) if (!listings.has(snapshot.listing_id)) listings.set(snapshot.listing_id, snapshot);
   return card('Snapshots capturados', table(
@@ -289,6 +290,7 @@ async function viewListings() {
     'Nenhum snapshot. Use a extensão na página do anúncio para capturar.')
     + '<div class="actions"><button class="btn" data-act="nav" data-view="browserSync">Abrir Extensão & Coletas</button></div>')
   + card('Indicadores observados da loja',table(['Área','Conversão exibida','Conversão Ads exibida','Cliques orgânicos','Período/filtros observados','Capturado em'],(accountSnaps||[]).map(s=>`<tr><td>${esc(s.page_kind)}</td><td>${typeof s.metrics?.conversionRatePct==='number'?num(s.metrics.conversionRatePct)+'%':'—'}</td><td>${typeof s.metrics?.adConversionRatePct==='number'?num(s.metrics.adConversionRatePct)+'%':'—'}</td><td>${typeof s.metrics?.organicClicks==='number'?num(s.metrics.organicClicks):'—'}</td><td>${esc(s.evidence?.filtersAndPeriod||'não informado')}</td><td>${dt(s.captured_at)}</td></tr>`),'Selecione uma loja com capturas. Valores ausentes não são zeros.')+'<p class="muted small">Taxas exibidas na origem; não substituem KPIs calculados nem comprovam períodos compatíveis.</p>')
+  + card('Campanhas, anúncios Ads, variações e armazéns capturados',table(['Tipo','Identificador','Entidade pai','Indicadores observados','Origem / filtros','Capturado em'],(details||[]).map(s=>`<tr><td>${esc(s.kind)}</td><td>${esc(s.external_id)}${s.label?`<div class="muted small">${esc(s.label)}</div>`:''}</td><td>${esc(s.parent_external_id||'—')}</td><td>${Object.entries(s.metrics||{}).map(([key,value])=>`${esc(key)}: ${esc(value)}`).join('<br>')}</td><td>${esc(s.context?.filtersAndPeriod||'período não informado')}</td><td>${dt(s.captured_at)}</td></tr>`),'Nenhum detalhe com identidade e dados reconhecidos. Abra uma página correspondente do vendedor.')+'<p class="muted small">Dados capturados por entidade; não são somados aos totais da loja.</p>')
   + card('Detalhe de KPI por anúncio', `
     <div class="form-row">
       <label class="grow">Anúncio <select id="kpi-listing-id">${listings.size ? [...listings.values()].map((item) =>

@@ -109,6 +109,26 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:true});
   });
 
+  it('persiste detalhes de campanha e variação por conta sem somar aos totais e rejeita escopo inválido',async()=>{
+    seedImportAccount('acct-details');
+    seedImportAccount('acct-details-other');
+    const at='2026-11-27T12:00:00.000Z';
+    const base={marketplace:'mercado_livre',accountId:'acct-details',pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[]};
+    const campaign={kind:'AD_CAMPAIGN',externalId:'C1',metrics:{adSpend:12.5},evidence:{adSpend:'Investimento: R$ 12,50'}};
+    const data={...base,captureKey:'b'.repeat(64),details:[campaign]};
+    const first=await call('capture.ingest',data);
+    expect(first.ok).toBe(true);
+    expect((first.result as any).detailRowsIngested).toBe(1);
+    expect((await call('capture.ingest',data)).result).toEqual(first.result);
+    const rows=(await call('capture.details',{accountId:base.accountId})).result as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metrics.adSpend).toBe(12.5);
+    expect((await call('capture.details',{accountId:'acct-details-other'})).result).toEqual([]);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?',base.accountId)?.total).toBe(0);
+    expect((await call('capture.ingest',{...base,captureKey:'c'.repeat(64),details:[{...campaign,kind:'LISTING_VARIANT'}]})).ok).toBe(false);
+    expect((await call('capture.ingest',{...base,captureKey:'d'.repeat(64),details:[{...campaign,evidence:{}}]})).ok).toBe(false);
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';
