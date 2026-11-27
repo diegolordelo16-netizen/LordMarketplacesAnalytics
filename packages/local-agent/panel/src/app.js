@@ -15,6 +15,7 @@ const state = {
   view: 'exec',
   relationsStatus: 'PENDENTE',
   historyPoints: [],
+  execFilters:{marketplace:'',days:30,listingId:'',skuId:''},
 };
 
 if (state.token) {
@@ -211,12 +212,14 @@ function qualityBadge(q) {
 async function viewExec() {
   const generation = viewRenderSequence;
   const selectedAccount=state.accountId;
+  const filters={...state.execFilters};
+  const scope={...(selectedAccount?{accountId:selectedAccount}:{}),...(filters.marketplace?{marketplace:filters.marketplace}:{}),days:filters.days,...(filters.listingId?{listingId:filters.listingId}:{}),...(filters.skuId?{skuId:filters.skuId}:{})};
   const [kpis, missions, alerts, history, realized] = await Promise.all([
-    api('kpi.dashboard', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
+    api('kpi.dashboard', scope).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
     api('alerts.list', {}).catch((e) => ({ error: e.message })),
-    api('kpi.history', { ...(state.accountId ? { accountId: state.accountId } : {}), days: 30 }).catch((e) => ({ error: e.message })),
-    selectedAccount?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
+    api('kpi.history', scope).catch((e) => ({ error: e.message })),
+    selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
   ]);
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   if (generation === viewRenderSequence) state.historyPoints = historyPoints;
@@ -245,12 +248,13 @@ async function viewExec() {
     ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
     ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
+    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas mantêm o escopo próprio.</p>`)}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
-    ${card('Lucro realizado — evidências', !selectedAccount?'<p class="muted">Selecione uma loja para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
+    ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
     ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
-    ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
+    ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
     ${card('Missões do dia', Array.isArray(missions) && missions.length
       ? missions.map((m) => `<div class="mission">
@@ -1512,6 +1516,7 @@ const ACTIONS = {
     renderView();
   },
 
+  'exec-filter': async()=>{state.execFilters={marketplace:$('#exec-market').value,days:Number($('#exec-days').value),listingId:$('#exec-listing').value.trim(),skuId:$('#exec-sku').value.trim()};await renderView();},
   'kpi-drilldown': async (d) => {
     const metric = d.metric;
     const supported = new Set(['gmv','netRevenue','orders','visits','cvr','aov','acos','roas','returnRate']);
@@ -1521,7 +1526,7 @@ const ACTIONS = {
     const result = await run(() => api('kpi.compare.detail', {
       primaryFrom: day(-6), primaryTo: day(0),
       comparisonFrom: day(-13), comparisonTo: day(-7),
-      groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),
+      groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),...(state.execFilters.marketplace?{marketplace:state.execFilters.marketplace}:{}),...(state.execFilters.listingId?{listingId:state.execFilters.listingId}:{}),...(state.execFilters.skuId?{skuId:state.execFilters.skuId}:{}),
     }));
     const metricLabel = { gmv:'GMV', netRevenue:'Receita líquida', orders:'Pedidos', visits:'Visitas', cvr:'CVR', aov:'Ticket médio', acos:'ACoS', roas:'ROAS', returnRate:'Taxa de devolução' }[metric] || metric;
     const format = (value) => value == null ? '—' : ['gmv','netRevenue','aov'].includes(metric) ? brl(Math.round(value * 100)) : ['cvr','acos','returnRate'].includes(metric) ? pct(value) : metric === 'roas' ? num(value, 2) : num(value);
