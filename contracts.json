@@ -1,6 +1,6 @@
 {
   "keyword.upsert": "term | marketplace | intent | language",
-  "seo.external.research": {"mode":"suggestions|related|ideas|serp|ranked|domain|backlinks","query":"keyword or public domain","limit":"integer 1..100","device":"desktop|mobile","confirmed":true},
+  "seo.external.research": {"mode":"suggestions|related|ideas|overview|serp|ranked|domain|competitors|pages|backlinks|backlinkRows|referringDomains|backlinkPages|lighthouse|aiGoogle|aiChatGPT","query":"keyword or public domain","limit":"integer 1..100","device":"desktop|mobile","locationName":"optional canonical SERP location","confirmed":true},
   "keyword.googleVolume": {
     "accountId": "string",
     "terms": "1..20 Google Ads terms",

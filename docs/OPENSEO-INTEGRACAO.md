@@ -10,3 +10,6 @@ Modos: sugestões, relacionados, ideias, SERP Google (10 posições solicitadas)
 Não incluídos: histórico persistente de consultas, agendamento de ranking Google, análise de backlinks individual, auditoria de site, visibilidade em IA, infraestrutura e interface completas do OpenSEO. A autenticação real e o contrato do provedor em produção exigem credenciais/saldo e não foram homologados. Integração isolada na branch de etapa 06, sem alterar master ou PR 5.
 
 Também apresenta volume mensal mais recente e variação percentual quando há dois meses consecutivos válidos, sem preencher lacunas.
+
+## Expansão de módulos
+Foram adaptados os contratos OpenSEO Labs (overview, serp_competitors, relevant_pages), backlinks (lista, domínios, páginas), Lighthouse (resumo de categorias, métricas e problemas numéricos) e AI Optimization (menções de domínio em Google BR/pt ou ChatGPT EUA/en; não é consulta ao modelo desta sessão). SERP aceita localização canônica opcional. Respostas limitadas a 16 MiB. Escopos separados. A lista não equivale a uma reprodução integral do OpenSEO.

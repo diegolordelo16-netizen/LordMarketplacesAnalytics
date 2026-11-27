@@ -32,6 +32,19 @@ describe('OpenSEO / DataForSEO',()=>{
     expect(decodeSeoResponse(envelope({items:[{keyword_data,ranked_serp_element:{serp_item:{rank_absolute:3,url:'https://example.com/a',etv:4}}}]}),{...input,mode:'ranked'}).rows[0]).toMatchObject({position:3,estimatedTraffic:4});
     expect(decodeSeoResponse(envelope({target:'example.com',backlinks:0,referring_domains:2}),{...input,mode:'backlinks'})).toMatchObject({scope:'GLOBAL_WEB_BACKLINKS',rows:[{backlinks:0,referringDomains:2,rank:null}]});
   });
+  it('usa contratos adicionais e não confunde escopo regional de IA',()=>{
+    expect(seoRequest({...input,mode:'competitors'}).path).toContain('serp_competitors');
+    expect(seoRequest({...input,mode:'overview'}).body).toMatchObject({keywords:['capacete']});
+    expect(seoRequest({...input,mode:'aiChatGPT',query:'example.com'}).body).toMatchObject({platform:'chat_gpt',location_code:2840,language_code:'en'});
+    expect(seoRequest({...input,mode:'serp',locationName:'Sao Paulo,State of Sao Paulo,Brazil'}).body).toMatchObject({location_name:'Sao Paulo,State of Sao Paulo,Brazil'});
+    expect(()=>seoRequest({...input,mode:'lighthouse',query:'https://example.com/?secret=1'})).toThrow();
+    expect(()=>seoRequest({...input,mode:'lighthouse',query:'https://host.internal/'})).toThrow();
+    const l=decodeSeoResponse(envelope({finalUrl:'https://example.com/',categories:{performance:{score:0.9},seo:{score:1}},audits:{'largest-contentful-paint':{numericValue:1200,numericUnit:'millisecond'}}}),{...input,mode:'lighthouse'});
+    expect(l).toMatchObject({status:'OK',scope:'PUBLIC_WEB_LIGHTHOUSE',rows:[{metric:'performance',value:90},{metric:'seo',value:100},{metric:'largest-contentful-paint',value:1200}]});
+    const mention=decodeSeoResponse(envelope({items:[{question:'Q',answer:'A',ai_search_volume:0,sources:[{url:'https://example.com'}]}]}),{...input,mode:'aiChatGPT'});
+    expect(mention).toMatchObject({scope:'DATAFORSEO_CHATGPT_US_EN',rows:[{aiSearchVolume:0,citedSources:'https://example.com'}]});
+    expect(decodeSeoResponse(envelope({items:[{url_from:'https://ref.com',dofollow:false,backlink_spam_score:0}]}),{...input,mode:'backlinkRows'})).toMatchObject({scope:'GLOBAL_WEB_BACKLINKS',rows:[{dofollow:'false',spamScore:0}]});
+  });
   it('exige autorização e credenciais, não repete falha nem devolve segredos',async()=>{
     const mock=vi.fn<typeof fetch>(async()=>{throw Error('secret');});
     await expect(researchSeo({...input,confirmed:false},{},mock)).rejects.toThrow();
