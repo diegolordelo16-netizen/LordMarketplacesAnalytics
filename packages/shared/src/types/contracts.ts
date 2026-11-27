@@ -223,6 +223,8 @@ export const IPC_METHODS = [
   'listing.browser.result',
   'listing.browser.verify',
   'listing.browser.list',
+  'operation.limits.get',
+  'operation.limits.set',
   'offer.variation.prepare',
   'offer.variation.list',
   'offer.variation.review',
