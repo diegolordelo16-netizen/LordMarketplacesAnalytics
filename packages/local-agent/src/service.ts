@@ -1082,6 +1082,8 @@ export class LocalService {
         groupBy: z.enum(['account','product','listing']).default('listing'),
         accountId: z.string().optional(),
         marketplace: z.enum(['mercado_livre','shopee','amazon']).optional(),
+        listingId:z.string().min(1).max(200).optional(),
+        skuId:z.string().min(1).max(200).optional(),
       }).parse(payload ?? {});
       const dateRange = (from: string, to: string) => {
         const start = new Date(`${from}T00:00:00.000Z`);
@@ -1089,7 +1091,9 @@ export class LocalService {
         if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start.toISOString().slice(0,10) !== from || end.toISOString().slice(0,10) !== to || start > end) {
           throw new Error('intervalo de datas inválido');
         }
-        return { start: start.toISOString(), end: end.toISOString() };
+        const days=Math.round((end.getTime()-start.getTime()+1)/86400000);
+        if(days>366)throw new Error('cada intervalo deve ter no máximo 366 dias');
+        return { start: start.toISOString(), end: end.toISOString(),days };
       };
       const primary = dateRange(i.primaryFrom,i.primaryTo);
       const comparison = dateRange(i.comparisonFrom,i.comparisonTo);
@@ -1097,9 +1101,9 @@ export class LocalService {
       if (i.accountId && !db.row('SELECT id FROM accounts WHERE id=? AND is_active=1', i.accountId)) throw new Error('conta ativa não encontrada');
       const records = db.rows<{
         listing_id:string; account_id:string; captured_at:string; metrics_json:string; external_id:string; title:string|null;
-        marketplace:string; product_id:string|null; product_name:string|null; account_name:string;
+        marketplace:string; product_id:string|null; product_name:string|null; account_name:string; evidence_json:string; source_class:string;
       }>(
-        `SELECT s.listing_id,s.account_id,s.captured_at,s.metrics_json,l.external_id,l.title,l.marketplace,
+        `SELECT s.listing_id,s.account_id,s.captured_at,s.metrics_json,s.evidence_json,s.source_class,l.external_id,l.title,l.marketplace,
                 cp.id AS product_id,cp.name AS product_name,a.display_name AS account_name
            FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id
            JOIN accounts a ON a.id=s.account_id
@@ -1107,8 +1111,9 @@ export class LocalService {
            LEFT JOIN catalog_products cp ON cp.id=sku.catalog_product_id AND cp.account_id=l.account_id
           WHERE ((s.captured_at>=? AND s.captured_at<=?) OR (s.captured_at>=? AND s.captured_at<=?))
             AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?)
+            AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?)
           ORDER BY s.captured_at DESC`,
-        primary.start,primary.end,comparison.start,comparison.end,i.accountId ?? null,i.accountId ?? null,i.marketplace ?? null,i.marketplace ?? null,
+        primary.start,primary.end,comparison.start,comparison.end,i.accountId ?? null,i.accountId ?? null,i.marketplace ?? null,i.marketplace ?? null,i.listingId??null,i.listingId??null,i.skuId??null,i.skuId??null,
       );
       type RecordItem = typeof records[number] & { metrics: Record<string,unknown> };
       const latest = new Map<string,RecordItem>();
@@ -1153,14 +1158,30 @@ export class LocalService {
           return { listingCount:items.length,metrics };
         };
         const current=build(group.periods.primary), previous=build(group.periods.comparison);
-        const deltaPct:Record<string,number|null>={};
+        const currentIds=group.periods.primary.map(x=>x.listing_id).sort(),previousIds=group.periods.comparison.map(x=>x.listing_id).sort();
+        const sameListings=currentIds.length>0&&JSON.stringify(currentIds)===JSON.stringify(previousIds);
+        const equalDuration=primary.days===comparison.days;
+        const windowMatches=(items:RecordItem[],from:string,to:string)=>items.length>0&&items.every(item=>{
+          if(item.source_class!=='A_PRIMARY_UI')return false;
+          const evidence=parseJsonObject(item.evidence_json??'{}');
+          if(typeof evidence.filtersAndPeriod!=='string')return false;
+          const entries=evidence.filtersAndPeriod.split('|').map(entry=>entry.split('='));
+          if(entries.some(entry=>entry.length!==2))return false;
+          const starts=entries.filter(([k])=>/^(start_date|date_from|data inicial|start date)$/.test(k??''));
+          const ends=entries.filter(([k])=>/^(end_date|date_to|data final|end date)$/.test(k??''));
+          return starts.length===1&&ends.length===1&&starts[0]?.[1]===from&&ends[0]?.[1]===to;
+        });
+        const sourceWindowsVerified=windowMatches(group.periods.primary,i.primaryFrom,i.primaryTo)&&windowMatches(group.periods.comparison,i.comparisonFrom,i.comparisonTo);
+        const comparable=equalDuration&&sameListings&&sourceWindowsVerified&&primary.end<nowIso()&&comparison.end<nowIso();
+        const deltaPct:Record<string,number|null>={},verifiedDeltaPct:Record<string,number|null>={};
         for (const key of [...metricKeys,'cvr','aov','returnRate','roas','acos']) {
           const a=current.metrics[key],b=previous.metrics[key];
-          deltaPct[key]=typeof a==='number'&&typeof b==='number'&&b!==0?(a-b)/Math.abs(b)*100:null;
+          deltaPct[key]=sameListings&&typeof a==='number'&&typeof b==='number'&&b!==0?(a-b)/Math.abs(b)*100:null;
+          verifiedDeltaPct[key]=comparable?deltaPct[key]??null:null;
         }
-        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct };
+        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,comparisonQuality:{equalDuration,sameListings,sourceWindowsVerified,comparable} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
-      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,method:'último snapshot por anúncio dentro de cada período; métricas ausentes permanecem nulas; não soma capturas repetidas' };
+      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,method:'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
     });
 
     this.register('missions.today', (payload) => {
