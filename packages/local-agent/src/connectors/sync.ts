@@ -81,19 +81,21 @@ export async function verifyMarketplace(id:ConnectorId,c:Config,s:Secrets,reques
     if(String(v.id)!==c.sellerId||v.site_id!=='MLB')throw new ProviderError('IDENTIDADE_DIVERGENTE');
   }else if(id==='shopee_official_api'){
     const v=await request(shopeeUrl('/api/v2/shop/get_shop_info',c,s),{});
+    if(v.error==='error_auth'||v.error==='error_access_token'||v.error==='error_token_expired')throw new ProviderError('HTTP_401');
     if(v.error||v.region!=='BR'||typeof v.shop_name!=='string'||!v.shop_name||v.shop_id!==undefined&&String(v.shop_id)!==c.shopId)throw new ProviderError('IDENTIDADE_DIVERGENTE');
   }else if(id==='amazon_sp_api'){
     // The listings endpoint is explicitly seller-scoped, unlike marketplace participations.
     await amazonListings(c,s,request);
   }
 }
-async function amazonListings(c:Config,s:Secrets,request:RequestFn){
-  const url='https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items/'+encodeURIComponent(c.sellerId!)+'?marketplaceIds=A2Q3Y263D00KWC&includedData=summaries&pageSize=20';
-  const v=await request(url,{headers:{'x-amz-access-token':s.accessToken!,'user-agent':'MarketplaceIntelligence/3.17.0 (Language=JavaScript)'}});
+async function amazonListings(c:Config,s:Secrets,request:RequestFn,cursor?:string){
+  const url=new URL('https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items/'+encodeURIComponent(c.sellerId!)+'?marketplaceIds=A2Q3Y263D00KWC&includedData=summaries&pageSize=20');
+  if(cursor)url.searchParams.set('pageToken',cursor);
+  const v=await request(url.toString(),{headers:{'x-amz-access-token':s.accessToken!,'user-agent':'MarketplaceIntelligence/3.17.0 (Language=JavaScript)'}});
   if(v.errors)throw new ProviderError('RESPOSTA_INESPERADA');
   return v;
 }
-export async function readReport(id:ConnectorId,c:Config,s:Secrets,from:string,to:string,request:RequestFn):Promise<{rows:SyncRow[];partial:boolean;kind:string;note:string}>{
+export async function readReport(id:ConnectorId,c:Config,s:Secrets,from:string,to:string,request:RequestFn,cursor?:string):Promise<{rows:SyncRow[];partial:boolean;kind:string;note:string;nextCursor?:string}>{
   const headers={authorization:'Bearer '+s.accessToken,'content-type':'application/json'};
   if(id==='google_analytics4'){
     windowDays(from,to);
@@ -111,18 +113,25 @@ export async function readReport(id:ConnectorId,c:Config,s:Secrets,from:string,t
   }
   if(id==='mercado_livre_official_api'){
     await verifyMarketplace(id,c,s,request);
-    const v=await request('https://api.mercadolibre.com/users/'+c.sellerId+'/items/search?limit=50&offset=0',{headers});
+    const offset=cursor?Number(cursor):0;if(!Number.isSafeInteger(offset)||offset<0||offset>950)throw new ProviderError('CURSOR_INVALIDO');
+    const v=await request('https://api.mercadolibre.com/users/'+c.sellerId+'/items/search?limit=50&offset='+offset,{headers});
     const ids=arr(v.results);if(ids.some(x=>typeof x!=='string'||!/^MLB\d+$/.test(x)))throw new ProviderError('RESPOSTA_INESPERADA');
-    return {rows:ids.map(x=>({key:String(x),values:{externalId:String(x)}})),partial:Number(obj(v.paging??{}).total??ids.length)>ids.length||ids.length===50,kind:'ML_LISTING_IDS',note:'Primeira página de IDs do vendedor; não confirma vendas ou estoque.'};
+    const more=Number(obj(v.paging??{}).total??offset+ids.length)>offset+ids.length||ids.length===50;
+    return {rows:ids.map(x=>({key:String(x),values:{externalId:String(x)}})),partial:offset>0||more,kind:'ML_LISTING_IDS',note:'Página de IDs do vendedor; limite de offset 950. Não confirma vendas ou estoque.',...(more&&ids.length&&offset+50<=950?{nextCursor:String(offset+50)}:{})};
   }
   if(id==='shopee_official_api'){
     await verifyMarketplace(id,c,s,request);
-    const u=new URL(shopeeUrl('/api/v2/product/get_item_list',c,s));u.searchParams.set('offset','0');u.searchParams.set('page_size','50');u.searchParams.append('item_status','NORMAL');
-    const v=await request(u.toString(),{});if(v.error)throw new ProviderError('SHOPEE_API_ERROR');
+    const offset=cursor?Number(cursor):0;if(!Number.isSafeInteger(offset)||offset<0||offset>1000000)throw new ProviderError('CURSOR_INVALIDO');
+    const u=new URL(shopeeUrl('/api/v2/product/get_item_list',c,s));u.searchParams.set('offset',String(offset));u.searchParams.set('page_size','50');u.searchParams.append('item_status','NORMAL');
+    const v=await request(u.toString(),{});if(v.error==='error_auth'||v.error==='error_access_token'||v.error==='error_token_expired')throw new ProviderError('HTTP_401');if(v.error)throw new ProviderError('SHOPEE_API_ERROR');
     const response=obj(v.response),rows=arr(response.item??[]).map(raw=>{const x=obj(raw),key=String(x.item_id??'');if(!/^\d+$/.test(key))throw new ProviderError('RESPOSTA_INESPERADA');return {key,values:{externalId:key,status:typeof x.item_status==='string'?x.item_status:null}};});
-    return {rows,partial:response.has_next_page===true||rows.length===50,kind:'SHOPEE_LISTING_IDS',note:'Primeira página de itens NORMAL; não confirma métricas comerciais.'};
+    const next=Number(response.next_offset);const more=response.has_next_page===true;
+    if(more&&(!Number.isSafeInteger(next)||next<=offset||next>1000000))throw new ProviderError('CURSOR_INVALIDO');
+    return {rows,partial:offset>0||more,kind:'SHOPEE_LISTING_IDS',note:'Página de itens NORMAL; não confirma métricas comerciais.',...(more?{nextCursor:String(next)}:{})};
   }
-  const v=await amazonListings(c,s,request);
+  const v=await amazonListings(c,s,request,cursor);
   const rows=arr(v.items).map(raw=>{const x=obj(raw),key=typeof x.sku==='string'?x.sku:'';if(!key||key.length>250)throw new ProviderError('RESPOSTA_INESPERADA');const sum=arr(x.summaries??[]).map(obj).find(y=>y.marketplaceId==='A2Q3Y263D00KWC');if(!sum)throw new ProviderError('RESPOSTA_INESPERADA');return {key,values:{sku:key,asin:typeof sum.asin==='string'?sum.asin:null,title:typeof sum.itemName==='string'?sum.itemName.slice(0,500):null}};});
-  return {rows,partial:!!obj(v.pagination??{}).nextToken||Number(v.numberOfResults??rows.length)>rows.length||rows.length===20,kind:'AMAZON_LISTING_SKUS',note:'Primeira página de SKUs do vendedor no Brasil; não confirma métricas comerciais.'};
+  const next=obj(v.pagination??{}).nextToken;
+  if(next!==undefined&&(typeof next!=='string'||!next||next.length>4096||next===cursor))throw new ProviderError('CURSOR_INVALIDO');
+  return {rows,partial:!!cursor||!!next||Number(v.numberOfResults??rows.length)>rows.length,kind:'AMAZON_LISTING_SKUS',note:'Página de SKUs do vendedor no Brasil; não confirma métricas comerciais.',...(typeof next==='string'?{nextCursor:next}:{})};
 }
