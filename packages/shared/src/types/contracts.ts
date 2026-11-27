@@ -187,6 +187,7 @@ export const IPC_METHODS = [
   'agent.budget',
   'autoupgrade.propose',
   'autoupgrade.list',
+  'autoupgrade.inspect',
   'autoupgrade.apply',
   'autoupgrade.rollback',
   'connector.registry',
