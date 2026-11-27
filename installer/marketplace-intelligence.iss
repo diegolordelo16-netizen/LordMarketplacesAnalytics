@@ -75,6 +75,7 @@ Source: "{#SourceRoot}\packages\local-agent\panel\src\*"; DestDir: "{app}\local-
 ; Utilitários
 Source: "{#SourceRoot}\installer\scripts\update-manager.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\start-panel.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceRoot}\installer\scripts\start-panel.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\install-extension.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\abrir-extensoes.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\abrir-navegador.cmd"; DestDir: "{app}"; Flags: ignoreversion

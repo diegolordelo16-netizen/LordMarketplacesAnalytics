@@ -31,3 +31,6 @@ Base: 820adcd6165d90efa38a1679a8f313a72cf1bae3 (3.18.0, PR 13). CI 279 aprovada 
 3. Consolidar a matriz com evidências verificáveis por requisito; registrar testes reais dispensados como não executados, sem simular resultado.
 4. Integrar PRs empilhados em ordem, conferindo o SHA e CI da master, sem force push.
 5. Somente depois de validação e autorização de publicação, promover release estável.
+
+## Revisão adicional do inicializador
+O launcher anterior concatenava caminhos a uma URL que já continha token, consultava status HTTP sem validar a resposta e copiava arquivos temporários para o diretório de instalação. O serviço também imprimia a URL com token no stdout redirecionado ao log. O novo launcher usa apenas porta validada e loopback, verifica JSON de health/protocolo, monta a rota correta e não copia credenciais ou temporários para a pasta do programa. O serviço grava e imprime URL sem token; o painel usa a recuperação same-origin existente. Foram adicionados quatro testes de regressão. Logs históricos e sessões antigas não são automaticamente apagados nesta correção; devem ser tratados com política de retenção/revogação. A execução do novo launcher no Windows instalado ainda exige validação, além dos testes de suas funções.

@@ -559,3 +559,29 @@ test('duplicação assistida procura apenas um novo candidato no mesmo recorte d
   assert.equal(calls[1].payload.observedExternalId,candidate.listingId);
   assert.deepEqual(removed,[29,29,29]);
 });
+
+import { parsePort, readyUrl } from '../installer/scripts/start-panel.mjs';
+
+test('launcher aceita exclusivamente portas numéricas válidas', () => {
+  for (const raw of ['0','65536','1e3','http://example.org','47811&whoami','']) assert.equal(parsePort(raw),null);
+  assert.equal(parsePort('47811\r\n'),47811);
+});
+test('launcher usa health check sem token e abre rota correta', async () => {
+  const observed=[];
+  const health=async (url, options)=>{observed.push([url,options.redirect]);return {ok:true,json:async()=>({ok:true,protocolVersion:1,version:'3.19.0'})};};
+  assert.equal(await readyUrl(47811,'prestart',health),'http://127.0.0.1:47811/prestart');
+  assert.equal(await readyUrl(47811,'panel',health),'http://127.0.0.1:47811/');
+  assert.deepEqual(observed,[['http://127.0.0.1:47811/api/health','error'],['http://127.0.0.1:47811/api/health','error']]);
+});
+test('launcher rejeita respostas HTTP inválidas, serviços incompatíveis e falhas', async () => {
+  assert.equal(await readyUrl(47811,'panel',async()=>({ok:false})),null);
+  assert.equal(await readyUrl(47811,'panel',async()=>({ok:true,json:async()=>({ok:true})})),null);
+  assert.equal(await readyUrl(47811,'panel',async()=>{throw Error('offline');}),null);
+  assert.equal(await readyUrl(0,'panel',async()=>{throw Error('não deve chamar');}),null);
+});
+test('serviço não persiste nem imprime token na URL do launcher', () => {
+  const main=readFileSync(new URL('../packages/local-agent/src/main.ts',import.meta.url),'utf8');
+  assert.ok(!main.includes('/?token=\${fresh}'));
+  assert.ok(!main.includes('?token=\${app.token}'));
+  assert.ok(main.includes("const panelUrl = app.url ?? '';"));
+});
