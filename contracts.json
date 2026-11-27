@@ -301,5 +301,10 @@
   "navigation.graph": {
     "payload": "accountId | origin",
     "permission": "execute_task"
+  },
+  "navigation.summary": {
+    "payload": "accountId",
+    "permission": "view_reports",
+    "behavior": "Read learned routes and observed transitions for the selected verified account."
   }
 }
