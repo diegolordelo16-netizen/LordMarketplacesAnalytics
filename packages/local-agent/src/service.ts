@@ -2673,7 +2673,7 @@ export class LocalService {
       const listings=db.rows<{id:string;title:string|null;external_id:string;sku_id:string|null;product_id:string|null;product_name:string|null}>(`SELECT l.id,l.title,l.external_id,l.sku_id,cp.id product_id,cp.name product_name FROM listings l LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=l.account_id LEFT JOIN catalog_products cp ON cp.id=s.catalog_product_id AND cp.account_id=l.account_id WHERE l.account_id=? ORDER BY l.id`,i.accountId);
       const results=listings.map(l=>{
         const matches=rows.filter(r=>r.listing_id===l.id),r=matches[0];
-        const valid=matches.length===1&&!!r&&profitFields.every(k=>knownNumber(r,k)!==null)&&Object.keys(parseJsonObject(String(r.evidence_json??''))).length>0;
+        const valid=matches.length===1&&!!r&&profitFields.every(k=>knownNumber(r,k)!==null)&&parseJsonObject(String(r.evidence_json??'')).costFieldsConfirmed===true;
         const net=valid?knownNumber(r!,'net_revenue_cents'):null;
         const profit=net===null?null:net-profitFields.slice(1).reduce((s,k)=>s+Number(r![k]),0);
         return {...l,netRevenueCents:net,profitCents:profit,marginPct:profit!==null&&net!==null&&net>0?profit/net*100:null,negative:profit!==null&&profit<0,status:matches.length>1?'CONFLICT':valid?'RECORDED':'NO_DATA',sourceClass:valid?r!.source_class:null};
@@ -2901,7 +2901,7 @@ export class LocalService {
     });
     this.register('operation.receipt.list',(payload)=>{
       const i=z.object({accountId:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
-      return db.rows('SELECT * FROM operation_manual_receipts WHERE account_id=? ORDER BY performed_at DESC,id LIMIT 200',i.accountId).map(row=>({...row,status:'HUMAN_REPORTED',remoteVerified:false}));
+      return db.rows<Record<string,unknown>>('SELECT * FROM operation_manual_receipts WHERE account_id=? ORDER BY performed_at DESC,id LIMIT 200',i.accountId).map(row=>({...row,status:'HUMAN_REPORTED',remoteVerified:false}));
     });
 
     this.register('operation.measure',(payload)=>{
