@@ -37,3 +37,6 @@ O launcher anterior concatenava caminhos a uma URL que já continha token, consu
 
 ## Native Messaging — correção de empacotamento
 O manifesto anterior atribuía a `path` uma linha de comando Node + argumento JS, não um caminho de arquivo. O build agora gera um wrapper Windows `native-host.bat`, que usa o runtime embarcado e encaminha os argumentos da extensão. O instalador inclui o wrapper e o registro valida ID, arquivos e caminho absoluto antes de gravar o manifesto. Referência: https://github.com/GoogleChrome/chrome-extensions-samples/blob/main/api-samples/nativeMessaging/host/com.google.chrome.example.echo-win.json. Foi adicionada uma regressão estática. A mudança do registro/launcher requer reinstalação com o instalador completo; atualização de payload isolada não reconfigura o registro de versões antigas. O funcionamento em Chrome/Edge reais ainda não foi comprovado.
+
+## Validação adicional planejada na CI
+Acrescentado smoke de instalação e desinstalação do EXE em runner Windows descartável: registro Chrome/Edge, manifesto real, frame do host pelo wrapper, inicialização sem autorun obrigatório, health, remoção do runtime/registro e preservação do banco. O teste não executa os navegadores reais; precisa passar no SHA final e não substitui homologação real. Não executar em máquina de produção.

@@ -88,6 +88,8 @@ jobs:
         env:
           ISCC_PATH: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
         run: npm run package:win
+      - name: Smoke do instalador real, registro nativo e desinstalação
+        run: node installer/scripts/installer-windows-smoke.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: MarketplaceIntelligence-Windows-candidate
