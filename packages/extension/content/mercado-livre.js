@@ -587,11 +587,11 @@
       const field=unique(controls.filter(el=>el.tagName==='INPUT'&&el.type===type&&el.form===form&&visible(el)&&isEditableVisible(el)&&!el.getAttribute('form')&&pattern.test(operationLabel(el))),'campo '+key+' não comprovado');
       fields[key]=field;const raw=String(field.value??'');
       if(key==='priceCents'){
-        if(raw===''&&action==='CREATE_VARIATION'&&!allowFilled)values[key]=null;
+        if(raw===''&&action==='CREATE_VARIATION')values[key]=null;
         else if(/^\d+(?:\.\d{1,2})?$/.test(raw)&&Number.isSafeInteger(Math.round(Number(raw)*100)))values[key]=Math.round(Number(raw)*100);
         else throw Error('preço inválido');
       }else if(key==='stock'){
-        if(raw===''&&action==='CREATE_VARIATION'&&!allowFilled)values[key]=null;
+        if(raw===''&&action==='CREATE_VARIATION')values[key]=null;
         else if(/^\d+$/.test(raw)&&Number.isSafeInteger(Number(raw)))values[key]=Number(raw);
         else throw Error('estoque inválido');
       }else values[key]=raw.trim();
@@ -625,10 +625,12 @@
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
       if(!setter)throw Error('setter nativo ausente');
       const wanted=g.action==='CREATE_VARIATION'?{name:p.name,option:p.option,priceCents:p.priceCents,stock:p.stock}:{priceCents:p.priceCents,stock:p.stock};
+      const expected={...again.values};
       for(const [key,value] of Object.entries(wanted)){
         const now=listingOperationContext(g.action,g.externalListingId,g.variationId,touched);
-        if(!contextMatches(now)||now.button!==again.button||now.fields[key]!==again.fields[key])throw Error('contexto mudou durante o preenchimento');
+        if(!contextMatches(now)||now.button!==again.button||Object.keys(again.fields).some(k=>now.fields[k]!==again.fields[k]||now.values[k]!==expected[k]))throw Error('contexto mudou durante o preenchimento');
         touched=true;setter.call(now.fields[key],key==='priceCents'?(Number(value)/100).toFixed(2):String(value));
+        expected[key]=value;
         now.fields[key].dispatchEvent(new Event('input',{bubbles:true}));now.fields[key].dispatchEvent(new Event('change',{bubbles:true}));
       }
       await new Promise(resolve=>setTimeout(resolve,300));
