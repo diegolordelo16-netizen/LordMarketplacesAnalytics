@@ -1335,7 +1335,7 @@ function collectPublicProductContent(){
         const canvas=document.createElement('canvas');canvas.width=9;canvas.height=8;
         const ctx=canvas.getContext('2d',{willReadFrequently:true});
         ctx.fillStyle='#fff';ctx.fillRect(0,0,9,8);ctx.drawImage(img,0,0,9,8);
-        const d=ctx.getImageData(0,0,9,8).data,gray=i=>d[i*4]*299+d[i*4+1]*587+d[i*4+2]*114;
+        const d=ctx.getImageData(0,0,9,8).data;const gray=i=>d[i*4]*299+d[i*4+1]*587+d[i*4+2]*114;
         let hash='';for(let y=0;y<8;y++)for(let x=0;x<8;x+=4){let n=0;for(let k=0;k<4;k++)n=(n<<1)|Number(gray(y*9+x+k)>gray(y*9+x+k+1));hash+=n.toString(16);}
         item.dhash64=hash;
       }catch{/* CORS ou canvas indisponível: URL não comprova semelhança visual */}

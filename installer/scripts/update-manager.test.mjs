@@ -70,3 +70,10 @@ test('recovery refuses an active updater and handles a completed journal',async 
   await assert.rejects(recoverUpdate(f),/ainda ativo/);rmSync(marker);
   assert.equal((await recoverUpdate(f)).version,'3.17.0');
 });
+
+test('failed recovery keeps a durable startup fence',async t=>{
+  const f=fixture(t);f.hooks.startAndVerify=async()=>{throw Error('health failed');};
+  await assert.rejects(installUpdate(f),/health failed/);
+  assert.equal(JSON.parse(readFileSync(join(f.data,'updates/current.json'),'utf8')).phase,'RECOVERY_REQUIRED');
+  assert.equal(existsSync(join(f.data,'update-in-progress.json')),true);
+});

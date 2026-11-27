@@ -283,7 +283,7 @@ describe('monitoramento', () => {
   });
 
   it('registra histórico e devolve comparação com o produto próprio', async () => {
-    const agora = new Date();
+    const agora = new Date(Date.now()-2*3600_000);
     await call('competitor.monitoring.record', { relationId, capturedAt: agora.toISOString(), priceCents: 43900, position: 3, rating: 4.7, reviews: 128 });
     await call('competitor.monitoring.record', {
       relationId,
@@ -298,12 +298,14 @@ describe('monitoramento', () => {
     expect(h.competitorPriceCents).toBe(41900);
     expect(h.minPriceCents).toBe(41900);
     expect(h.ownPriceCents).toBe(45900);
+    await expect(call('competitor.monitoring.record',{relationId,capturedAt:new Date(Date.now()+3600_000).toISOString(),priceCents:1})).rejects.toThrow(/futuro/);
   });
 
   it('pausar mantém o histórico', async () => {
     await call('competitor.monitoring.set', { relationId, state: 'PAUSADO' });
     const h = await call('competitor.monitoring.history', { relationId });
     expect(h.monitoringState).toBe('PAUSADO');
+    await expect(call('competitor.monitoring.record',{relationId,priceCents:1})).rejects.toThrow(/ativo/);
     expect(h.points).toHaveLength(2);
   });
 });

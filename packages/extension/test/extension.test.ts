@@ -572,7 +572,7 @@ describe('extensão: o worker executa de verdade', () => {
     const builtins = new Set([
       'console', 'fetch', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
       'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
-      'structuredClone', 'queueMicrotask',
+      'structuredClone', 'queueMicrotask', 'getComputedStyle',
     ]);
     // palavras que o regex pega dentro de comentários/strings em português
     const noise = new Set([

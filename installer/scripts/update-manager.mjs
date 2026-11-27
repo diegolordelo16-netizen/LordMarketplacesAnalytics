@@ -81,12 +81,17 @@ async function restore(s,root,data,base,hooks,token){
   const {backup,dbFile}=checkState(s,root,data,base);
   await hooks.quiesce(root);
   const database=join(data,'marketplace-intelligence.db');
-  if(existsSync(database))dbSnapshot(database,join(base,s.id,'before-rollback-'+randomUUID()+'.db'));
+  if(existsSync(database)){
+    const preserved=join(base,s.id,'before-rollback-'+randomUUID()+'.db');
+    try{dbSnapshot(database,preserved);}catch{
+      for(const suffix of ['','-wal','-shm','-journal'])if(existsSync(database+suffix))cpSync(database+suffix,preserved+suffix,{force:false,errorOnExist:true});
+    }
+  }
   replaceTrees(backup,root);
   for(const suffix of ['-wal','-shm','-journal'])rmSync(database+suffix,{force:true});
   cpSync(dbFile,database,{force:true});
   if(digest(database)!==s.dbSha256)throw Error('restauração SQLite divergente');
-  await hooks.startAndVerify(root,data,s.from,token,false);
+  await hooks.startAndVerify(root,data,s.from,token,true);
 }
 export async function installUpdate({root,data,payload,expectedDigest,approved,hooks}){
   if(approved!==true)throw Error('aprovação explícita necessária');
@@ -119,21 +124,22 @@ export async function installUpdate({root,data,payload,expectedDigest,approved,h
       state.error=String(e);writeJournal(journal,state);
     }
     throw e;
-  }finally{guard.release();}
+  }finally{if(state?.phase!=='RECOVERY_REQUIRED')guard.release();}
 }
 export async function rollbackUpdate({root,data,approved,hooks}){
   if(approved!==true)throw Error('aprovação explícita de rollback necessária');
   root=resolve(root);data=resolve(data);assertLocations(root,data);
   const guard=lock(data),journal=join(guard.base,'current.json');
+  let needsRecovery=false;
   try{
     const state=readJson(journal);
     if(!['APPLIED','INSTALLING','RECOVERY_REQUIRED','PREPARED'].includes(state.phase))throw Error('não há atualização reversível');
     checkState(state,root,data,guard.base);
-    state.phase='RECOVERY_REQUIRED';writeJournal(journal,state);
+    state.phase='RECOVERY_REQUIRED';writeJournal(journal,state);needsRecovery=true;
     await restore(state,root,data,guard.base,hooks,guard.token);
-    state.phase='ROLLED_BACK';state.rolledBackAt=new Date().toISOString();writeJournal(journal,state);
+    state.phase='ROLLED_BACK';state.rolledBackAt=new Date().toISOString();writeJournal(journal,state);needsRecovery=false;
     return {ok:true,version:state.from,backupId:state.id};
-  }finally{guard.release();}
+  }finally{if(!needsRecovery)guard.release();}
 }
 export async function recoverUpdate({root,data,approved,hooks}){
   if(approved!==true)throw Error('aprovação explícita de recuperação necessária');
