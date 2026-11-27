@@ -138,3 +138,7 @@ git diff --check
 
 Continue pela branch da Etapa 05, em ciclos de implementação, debug,
 regressão e CI. Atualize a matriz e preserve o que já foi publicado.
+
+Atualização posterior. O painel já consulta preço e estoque do snapshot
+exato de candidatos de criação e duplicação, sem atribuir a origem.
+A homologação real foi adiada por autorização do usuário.

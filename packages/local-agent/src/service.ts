@@ -3182,7 +3182,7 @@ export class LocalService {
       type ExecutionInterval={created_at:string;updated_at:string;result_json:string};
       const assisted = receipt ? undefined : i.proposalKind==='CAMPAIGN'
         ? db.row<ExecutionInterval>("SELECT created_at,updated_at,result_json FROM campaign_budget_executions WHERE account_id=? AND proposal_id=? AND status='UI_READBACK_MATCHED'",i.accountId,i.proposalId)
-        : db.row<ExecutionInterval>("SELECT created_at,updated_at,result_json FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND proposal_id=? AND action='EDIT_VARIATION' AND status='UI_READBACK_MATCHED'",i.accountId,i.proposalKind,i.proposalId);
+        : db.row<ExecutionInterval>("SELECT created_at,updated_at,result_json FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND proposal_id=? AND status IN ('UI_READBACK_MATCHED','CANDIDATE_OBSERVED')",i.accountId,i.proposalKind,i.proposalId);
       if(!receipt&&!assisted)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
       const start=receipt?.performed_at??assisted!.created_at;
       const end=receipt?.performed_at??assisted!.updated_at;
@@ -3199,9 +3199,30 @@ export class LocalService {
         const table=i.proposalKind==='VARIATION'?'offer_variation_proposals':'listing_change_proposals';
         const p=db.row<{listing_id:string;kind?:string}>(`SELECT listing_id${i.proposalKind==='LISTING_CHANGE'?',kind':''} FROM ${table} WHERE id=? AND account_id=? AND status='APPROVED'`,i.proposalId,i.accountId);
         if(!p)throw Error('proposta de anúncio não disponível');
+        const result=parseJsonObject(receipt?.observation_json??assisted?.result_json??'{}');
+        if(result.status==='CANDIDATE_OBSERVED'){
+          const {observedSnapshotId,observedExternalId}=result;
+          if(typeof observedSnapshotId!=='string'||typeof observedExternalId!=='string')throw Error('evidência de candidato incompleta');
+          const listing=db.row<{external_id:string}>('SELECT external_id FROM listings WHERE id=? AND account_id=? AND marketplace=?',p.listing_id,i.accountId,account.marketplace);
+          const snapshot=p.kind==='DUPLICATE'
+            ? db.row<Observation>(`SELECT s.id,s.captured_at,s.source_class,s.metrics_json,s.evidence_json FROM listing_snapshots s
+                JOIN listings l ON l.id=s.listing_id AND l.account_id=s.account_id
+                WHERE s.id=? AND s.account_id=? AND l.marketplace=? AND l.external_id=? AND l.id<>? AND s.source_class='A_PRIMARY_UI'`,
+                observedSnapshotId,i.accountId,account.marketplace,observedExternalId,p.listing_id)
+            : listing&&db.row<Observation>('SELECT id,captured_at,source_class,metrics_json,context_json AS evidence_json '+variantCaptureScope+' AND id=?',
+                i.accountId,account.marketplace,listing.external_id,observedExternalId,observedSnapshotId);
+          if(!snapshot||snapshot.captured_at<=start||snapshot.captured_at>nowIso()||parseJsonObject(snapshot.evidence_json).coverageWarnings){
+            return {status:'CANDIDATE_EVIDENCE_UNAVAILABLE',metrics:null,remoteVerified:false,causalityVerified:false};
+          }
+          const data=parseJsonObject(snapshot.metrics_json);
+          const price=knownNumber(data,'price');
+          return {status:'CANDIDATE_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,
+            candidateObservation:{externalId:observedExternalId,snapshotId:snapshot.id,capturedAt:snapshot.captured_at,
+              priceCents:price!==null&&Number.isSafeInteger(Math.round(price*100))?Math.round(price*100):null,
+              stock:knownNumber(data,'stockAvailable')}};
+        }
         if(p.kind==='DUPLICATE')return {status:'NEW_LISTING_ID_NOT_VERIFIED',metrics:null,remoteVerified:false};
         if(i.proposalKind==='VARIATION'){
-          const result=parseJsonObject(receipt?.observation_json??assisted?.result_json??'{}');
           const {baselineSnapshotId,observedSnapshotId,observedExternalId}=result;
           if(result.status==='UI_READBACK_MATCHED'&&typeof baselineSnapshotId==='string'&&typeof observedSnapshotId==='string'&&typeof observedExternalId==='string'){
             const listing=db.row<{external_id:string}>('SELECT external_id FROM listings WHERE id=? AND account_id=? AND marketplace=?',p.listing_id,i.accountId,account.marketplace);

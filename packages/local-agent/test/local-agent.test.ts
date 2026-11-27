@@ -533,6 +533,14 @@ describe('capacidades adicionais 3.10.3', () => {
     const copy='MLB3456789';
     expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:after,collectedAt:after,method:'content_script_dom',listings:[{listingId:copy,title:'Produto',price:12}]})).ok).toBe(true);
     expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:copy})).result).toMatchObject({status:'CANDIDATE_OBSERVED',observedExternalId:copy,remoteVerified:false});
+    const candidateMeasure={accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id};
+    expect((await call('operation.measure',candidateMeasure)).result).toMatchObject({
+      status:'CANDIDATE_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,
+      candidateObservation:{externalId:copy,priceCents:1200,stock:null},
+    });
+    expect((await call('operation.measure',{...candidateMeasure,accountId:other})).result)
+      .toMatchObject({status:'EXECUTION_EVIDENCE_REQUIRED'});
+
   });
 
   it('persiste a captura exata antes e depois de uma edição assistida de variação',async()=>{
