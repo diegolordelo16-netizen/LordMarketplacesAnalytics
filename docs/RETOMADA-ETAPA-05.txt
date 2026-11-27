@@ -174,3 +174,5 @@ proposta é {"removeVariationId":"ID"}, com preço atual e estoque zero.
 A API exige prova de zero vendas e outra variação no anúncio. A leitura
 posterior verifica a ausência do ID. O teste simulado cobre a recusa de
 variação vendida e bloqueio de repetição.
+
+Atualização: edição de estoque de variação legada por API (editVariationId, beforePriceCents, beforeStock), sem mudar preço. Migration 039. Metadados da candidata em 3.14.0. CI do novo SHA pendente de confirmação.

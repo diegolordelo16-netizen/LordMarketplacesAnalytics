@@ -13,6 +13,8 @@ export const legacyVariationOption = z.object({
     .refine(ids => new Set(ids).size === ids.length, 'imagens repetidas'),
 }).strict();
 export type LegacyVariationOption = z.infer<typeof legacyVariationOption>;
+export const legacyStockOption=z.object({editVariationId:z.string().regex(/^\d{1,20}$/),beforePriceCents:z.number().int().positive(),beforeStock:z.number().int().nonnegative()}).strict();
+export type LegacyStockOption=z.infer<typeof legacyStockOption>;
 
 const identitySchema = z.object({id:remoteId,nickname:z.string().min(1),site_id:z.literal('MLB'),tags:z.array(z.string())});
 const itemSchema = z.object({
@@ -78,6 +80,29 @@ export class MercadoLivreVariations {
         variant.price===undefined||Math.round(variant.price*100)!==priceCents){
       throw Error('remoção exige outra variação no anúncio e um alvo sem estoque, sem vendas e com preço aprovado');
     }
+  }
+
+  checkStockEdit(item:z.infer<typeof itemSchema>, option:LegacyStockOption, priceCents:number, stock:number) {
+    const variant=item.variations.find(row=>row.id===option.editVariationId);
+    if(!variant||new Set(item.variations.map(row=>row.id)).size!==item.variations.length||
+      variant.price===undefined||Math.round(variant.price*100)!==option.beforePriceCents||
+      variant.available_quantity!==option.beforeStock||priceCents!==option.beforePriceCents||stock===option.beforeStock){
+      throw Error('estoque anterior, preço inalterado e ID único da variação devem corresponder à proposta');
+    }
+  }
+
+  async editStock(item:z.infer<typeof itemSchema>, option:LegacyStockOption, stock:number) {
+    await this.request('/items/'+item.id,{variations:item.variations.map(row=>row.id===option.editVariationId
+      ?{id:row.id,available_quantity:stock}:{id:row.id})},'PUT');
+  }
+
+  async matchesStock(item:z.infer<typeof itemSchema>, variation:string, priceCents:number, stock:number) {
+    const id=remoteId.parse(variation);
+    const rows=item.variations.filter(row=>row.id===id);
+    if(rows.length!==1||rows[0].price===undefined||Math.round(rows[0].price*100)!==priceCents||rows[0].available_quantity!==stock)return false;
+    const observed=z.object({id:remoteId,price:z.number().positive(),available_quantity:z.number().int().nonnegative()})
+      .parse(await this.request('/items/'+item.id+'/variations/'+id));
+    return observed.id===id&&Math.round(observed.price*100)===priceCents&&observed.available_quantity===stock;
   }
 
   async remove(item:string, variation:string) {

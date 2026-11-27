@@ -1,6 +1,6 @@
 # Etapa 05 — Auditoria dos requisitos
 
-Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa-05. Metadados de distribuição ainda 3.13.0.
+Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa-05. Metadados da candidata sincronizados em 3.14.0; integração depende da CI e do escopo concluído.
 
 | ID | Requisito | Evidência de implementação e limite |
 |---|---|---|
@@ -51,3 +51,5 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - A migração 036 registra o estado inicial e o estado aprovado. Pausa e reativação exigem formulário dedicado, orçamento constante dentro do teto configurado e conferência do status e do orçamento em nova aba. A migração 035 já está reservada no PR da etapa 06.
 - A migração 037 registra a criação pela API oficial de variações legadas. A proposta aprovada informa atributos e IDs das imagens. O executor compara o apelido autenticado e a titularidade do anúncio, aplica os limites da loja, reserva a operação antes do POST e guarda o ID retornado. O GET separado confirma preço, estoque, atributos e imagens. Se a resposta se perder, a operação fica pendente e não repete a escrita.
 - A migração 038 registra a remoção de variação legada pela API oficial. A execução exige uma proposta específica, preço correspondente, estoque zero, nenhuma venda e outra variação no anúncio. A confirmação depende de uma nova leitura da lista do anúncio e a remoção nunca é reenviada automaticamente.
+
+- Migration 039: edição de estoque por API em variação legada ativa, com preço mantido, baseline aprovado, lista completa de IDs, reserva única e dupla releitura. Adicionada proteção de conflito entre publicação de tarefas e tentativas assistidas pendentes. Homologação real dispensada; CI do novo SHA deve ser verificada.

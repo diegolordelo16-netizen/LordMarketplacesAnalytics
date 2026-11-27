@@ -492,14 +492,20 @@ describe('capacidades adicionais 3.10.3', () => {
       maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20,
     }})).ok).toBe(true);
     const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
-    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0,hideCreated=false,sellerId=23;
+    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0,hideCreated=false,sellerId=23,remoteStock=0,putCount=0;
     const mock=vi.fn(async (url:URL,init:RequestInit)=>{
       expect(url.origin).toBe('https://api.mercadolibre.com');
       expect(init.redirect).toBe('error');
       if(url.pathname==='/users/me')return Response.json({id:23,nickname,site_id:'MLB',tags:[]});
+      if(url.pathname==='/items/'+itemId&&init.method==='PUT'){
+        putCount++;
+        const body=JSON.parse(String(init.body));
+        expect(body.variations).toEqual([{id:'41'},{id:'42',available_quantity:3}]);
+        remoteStock=3;return Response.json({id:itemId});
+      }
       if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:sellerId,site_id:'MLB',currency_id:'BRL',status:'active',
         user_product_id:null,pictures:[{id:'PIC1'}],variations:[{id:41,attribute_combinations:[{id:'COLOR',value_id:'1'}]},
-          ...(created&&!deleted&&!hideCreated?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:sold}]:[])]});
+          ...(created&&!deleted&&!hideCreated?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:remoteStock,sold_quantity:sold}]:[])]});
       if(url.pathname==='/items/'+itemId+'/variations'&&init.method==='POST'){
         postCount++;
         expect(JSON.parse(String(init.body))).toEqual({attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:0,picture_ids:['PIC1']});
@@ -508,7 +514,7 @@ describe('capacidades adicionais 3.10.3', () => {
       if(url.pathname==='/items/'+itemId+'/variations/42'){
         if(init.method==='DELETE'){deleteCount++;deleted=true;return new Response(null,{status:204});}
         if(failReadback)throw Error('timeout simulado');
-        return Response.json({id:42,price:12,available_quantity:0,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
+        return Response.json({id:42,price:12,available_quantity:remoteStock,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
       }
       throw Error('rota inesperada');
     });
@@ -538,6 +544,21 @@ describe('capacidades adicionais 3.10.3', () => {
         createdVariation:{externalId:'42',priceCents:1200,stock:0},
       });
       expect(JSON.stringify(list.result)).not.toContain(request.accessToken);
+      const edit=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Editar estoque Azul',
+        options:[{editVariationId:'42',beforePriceCents:1200,beforeStock:0}],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:edit.id,decision:'APPROVED',reason:'Edição autorizada'})).ok).toBe(true);
+      const editRequest={...request,proposalId:edit.id};
+      remoteStock=1;
+      expect((await call('variation.api.editStock',editRequest)).ok).toBe(false);
+      expect(putCount).toBe(0);
+      remoteStock=0;
+      expect((await call('variation.api.editStock',editRequest)).result).toMatchObject({status:'REMOTE_VERIFIED',action:'EDIT_VARIATION',variationId:'42'});
+      expect((await call('variation.api.editStock',editRequest)).ok).toBe(false);
+      expect(putCount).toBe(1);
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_STOCK_CONFIRMED',editedVariation:{externalId:'42',beforeStock:0,stock:3,priceCents:1200},
+      });
+      remoteStock=0;
       const removal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Remover Azul',
         options:[{removeVariationId:'42'}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
       expect((await call('offer.variation.review',{accountId,id:removal.id,decision:'APPROVED',reason:'Remoção autorizada'})).ok).toBe(true);
@@ -1571,6 +1592,10 @@ describe('tarefas e guard', () => {
     expect(approved.ok).toBe(true);
     const approval = approved.result as { approvalIds: string[]; requiresPerListingBrowserConfirmation: boolean };
     expect(approval.requiresPerListingBrowserConfirmation).toBe(true);
+    db.db.prepare("INSERT INTO listing_browser_executions(id,proposal_kind,proposal_id,account_id,listing_id,external_listing_id,action,plan_json,context_json,token_hash,status,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run('busy-browser','VARIATION','busy-proposal','ml:publish','listing-publish','MLBPUBLISH1','CREATE_VARIATION','{}','{}','hash','NEEDS_VERIFICATION',now,now,now);
+    expect((await call('task.claimNextPublish',{marketplace:'mercado_livre',accountId:'ml:publish',externalListingId:'MLBPUBLISH1'})).result).toBeNull();
+    db.db.prepare("UPDATE listing_browser_executions SET status='CANCELLED' WHERE id=?").run('busy-browser');
     const claim = await call('task.claimNextPublish', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
     const publish = claim.result as { approvalId: string; task: { mode: string }; item: { id: string; baselineTitle: string; baselineDescription: string } };
     expect(publish.task.mode).toBe('PUBLISH');

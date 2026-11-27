@@ -485,6 +485,12 @@
     "accessToken": "transient Mercado Livre OAuth token",
     "confirmed": true
   },
+  "variation.api.editStock": {
+    "accountId": "string",
+    "proposalId": "approved legacy stock-only edit proposal with beforePriceCents and beforeStock",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
   "variation.api.verify": {
     "accountId": "string",
     "proposalId": "string",
