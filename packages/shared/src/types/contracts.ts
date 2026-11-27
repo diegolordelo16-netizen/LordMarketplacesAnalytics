@@ -181,6 +181,8 @@ export const IPC_METHODS = [
   'agent.recommendations',
   'agent.feedback',
   'agent.debate',
+  'agent.workspace.ask',
+  'agent.workspace.history',
   'agent.memory',
   'agent.budget',
   'autoupgrade.propose',
