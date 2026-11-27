@@ -329,3 +329,13 @@ test('cadastro financeiro exige evidência e todos os valores explícitos, inclu
   inputs['rp-from']='2026-02-30';
   assert.throws(payload,/período válido/);
 });
+
+test('publicidade distingue receita ausente de zero e protege divisões',()=>{
+  const ctx=vm.createContext({Number});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function observedAdsMetrics('),dashboard.indexOf('async function viewAds()')),ctx);
+  const m=vm.runInContext('observedAdsMetrics({adSpend:100,adAttributedRevenue:0,adClicks:10,paidImpressions:200})',ctx);
+  assert.equal(m.roas,0);assert.equal(m.acos,null);assert.equal(m.ctr,5);assert.equal(m.cpc,10);
+  assert.equal(m.signal,'INVESTIMENTO_SEM_RECEITA_ATRIBUIDA');
+  const unknown=vm.runInContext('observedAdsMetrics({adSpend:100})',ctx);
+  assert.equal(unknown.revenue,null);assert.equal(unknown.roas,null);assert.equal(unknown.signal,null);
+});
