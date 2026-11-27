@@ -1185,19 +1185,52 @@ function observedAdsMetrics(metrics){
   const spend=known('adSpend'),revenue=known('adAttributedRevenue'),clicks=known('adClicks'),impressions=known('paidImpressions'),orders=known('adAttributedOrders');
   return {spend,revenue,clicks,impressions,orders,roas:spend!==null&&spend>0&&revenue!==null?revenue/spend:null,acos:revenue!==null&&revenue>0&&spend!==null?spend/revenue*100:null,ctr:impressions!==null&&impressions>0&&clicks!==null?clicks/impressions*100:null,cpc:clicks!==null&&clicks>0&&spend!==null?spend/clicks:null,signal:spend!==null&&spend>0&&revenue===0?'INVESTIMENTO_SEM_RECEITA_ATRIBUIDA':spend!==null&&revenue!==null&&spend>revenue?'INVESTIMENTO_SUPERIOR_RECEITA_ATRIBUIDA':null};
 }
+function operationDates(){
+  const to=new Date(Date.now()-86400000).toISOString().slice(0,10),from=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  return {from,to};
+}
+const opFilters={ads:{...operationDates(),kind:'',externalId:''},profit:operationDates(),inventory:{days:30}};
+function operationDateInputs(prefix,filter){
+  return '<label>Início (UTC)<input type="date" id="'+prefix+'-from" value="'+esc(filter.from)+'"></label><label>Fim (UTC)<input type="date" id="'+prefix+'-to" value="'+esc(filter.to)+'"></label>';
+}
+function operationInterval(prefix){
+  const from=$('#'+prefix+'-from').value,to=$('#'+prefix+'-to').value;
+  if(!from||!to||from>to)throw Error('Informe datas válidas.');
+  return {from,to};
+}
+const operationRange=f=>({from:f.from+'T00:00:00.000Z',to:f.to+'T23:59:59.999Z'});
 async function viewAds(){
-  if(!state.accountId)return card('Publicidade e campanhas','<p class="muted">Selecione uma loja para consultar dados de Ads.</p>');
-  const [campaigns,ads]=await Promise.all([
-    api('capture.details',{accountId:state.accountId,kind:'AD_CAMPAIGN',limit:100}),
-    api('capture.details',{accountId:state.accountId,kind:'AD',limit:100})
+  const accountId=state.accountId;
+  if(!accountId)return card('Publicidade e campanhas','<p class="muted">Selecione uma loja para consultar dados de Ads.</p>');
+  const f={...opFilters.ads};
+  const [result,proposals]=await Promise.all([
+    api('ads.dashboard',{accountId,...operationRange(f),kind:f.kind||undefined,externalId:f.externalId||undefined}),
+    api('campaign.change.list',{accountId,limit:100})
   ]);
   const money=n=>n===null?'—':brl(Math.round(n*100));
   const display=(rows)=>table(['Identificador','Campanha pai','Investimento','Receita atribuída','Cliques','Impressões','Pedidos atribuídos','ROAS','ACoS','CTR','CPC','Sinal','Período e origem','Captura'],rows.map(r=>{
     const m=observedAdsMetrics(r.metrics);
-    return '<tr><td>'+esc(r.label||r.external_id)+'<div class="muted small">'+esc(r.external_id)+'</div></td><td>'+esc(r.parent_external_id||'—')+'</td><td>'+money(m.spend)+'</td><td>'+money(m.revenue)+'</td><td>'+num(m.clicks)+'</td><td>'+num(m.impressions)+'</td><td>'+num(m.orders)+'</td><td>'+num(m.roas,2)+'</td><td>'+pct(m.acos)+'</td><td>'+pct(m.ctr)+'</td><td>'+money(m.cpc)+'</td><td>'+esc(m.signal||'—')+'</td><td>'+esc(r.context?.filtersAndPeriod||'Não comprovado')+' · '+esc(r.source_class)+'</td><td>'+dt(r.captured_at)+'</td></tr>';
+    return '<tr><td>'+esc(r.label||r.external_id)+'<div class="muted small">'+esc(r.external_id)+'</div></td><td>'+esc(r.parent_external_id||'—')+'</td><td>'+money(m.spend)+'</td><td>'+money(m.revenue)+'</td><td>'+num(m.clicks)+'</td><td>'+num(m.impressions)+'</td><td>'+num(m.orders)+'</td><td>'+num(m.roas,2)+'</td><td>'+pct(m.acos)+'</td><td>'+pct(m.ctr)+'</td><td>'+money(m.cpc)+'</td><td>'+esc(r.verified?(m.signal||'—'):'Janela não comprovada')+'</td><td>'+esc(r.context?.filtersAndPeriod||'Não comprovado')+' · '+esc(r.source_class)+'</td><td>'+dt(r.captured_at)+'</td></tr>';
   }),'Nenhuma observação disponível. Capture a área de publicidade na extensão.');
-  return card('Publicidade — observações por loja','<p class="muted small">Até 100 snapshots recentes por tipo; linhas não são somadas, pois podem representar períodos repetidos. Ausência não é zero. Sinais são observações, não comprovação de prejuízo. TACoS requer GMV com janela e escopo equivalentes.</p><button class="btn" data-act="nav" data-view="browserSync">Abrir coletas</button>')
-    +card('Campanhas',display(campaigns))+card('Anúncios patrocinados',display(ads));
+  return card('Publicidade — observações por loja','<div class="form-grid">'+operationDateInputs('ads',f)+'<label>Tipo<select id="ads-kind">'+[['','Todos'],['AD_CAMPAIGN','Campanha'],['AD','Anúncio']].map(([v,l])=>'<option value="'+v+'" '+(f.kind===v?'selected':'')+'>'+l+'</option>').join('')+'</select></label><label>Identificador externo<input id="ads-external" maxlength="200" value="'+esc(f.externalId)+'"></label></div><button class="btn" data-act="ads-filter">Aplicar filtros</button><p>TACoS da loja: '+pct(result.tacosPct)+'</p><p class="muted small">Última observação por entidade, até 500 snapshots de origem; não soma campanhas e anúncios. '+(result.truncated?'Limite de consulta atingido. ':'')+'TACoS exige janelas e escopos compatíveis; cobertura integral não comprovada.</p><button class="btn" data-act="nav" data-view="browserSync">Abrir coletas</button>')
+    +card('Campanhas',display(result.items.filter(r=>r.kind==='AD_CAMPAIGN')))+card('Anúncios patrocinados',display(result.items.filter(r=>r.kind==='AD')))
+    +card('Propor alteração de campanha','<p class="muted small">Rascunho local. Aprovação não executa alteração remota.</p><div class="form-grid"><label>Marketplace<select id="campaign-market"><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label><label>Campanha (ID externo)<input id="campaign-ref" maxlength="200"></label><label>Estado observado (JSON)<textarea id="campaign-baseline" rows="3"></textarea></label><label>Alterações propostas (JSON)<textarea id="campaign-changes" rows="3"></textarea></label><label>Motivo<input id="campaign-reason" maxlength="2000"></label></div><button class="btn" data-act="campaign-prepare">Salvar proposta</button>')
+    +card('Propostas de campanhas',table(['Campanha','Alteração proposta','Status','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.campaign_ref)+'</td><td>'+esc(JSON.stringify(p.changes))+'</td><td>'+esc(p.status)+'</td><td>'+(p.status==='DRAFT'?'<button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="REJECTED">Rejeitar</button>':'—')+'</td></tr>'),'Nenhuma proposta.'));
+}
+async function viewProfitability(){
+  if(!state.accountId)return card('Rentabilidade','<p class="muted">Selecione uma loja.</p>');
+  const f={...opFilters.profit},range=operationRange(f);
+  const result=await api('finance.profitability',{accountId:state.accountId,periodStart:range.from,periodEnd:range.to});
+  return card('Rentabilidade realizada','<div class="form-grid">'+operationDateInputs('profit',f)+'</div><button class="btn" data-act="profit-filter">Aplicar intervalo exato</button><p class="muted small">'+esc(result.method)+'</p><button class="btn" data-act="nav" data-view="finance">Registrar conciliação</button>')
+    +card('Anúncios e margem negativa',table(['Anúncio','SKU','Receita líquida','Lucro registrado','Margem','Situação'],result.listings.map(r=>'<tr><td>'+esc(r.title||r.external_id)+'</td><td>'+esc(r.sku_id||'—')+'</td><td>'+brl(r.netRevenueCents)+'</td><td>'+brl(r.profitCents)+'</td><td>'+pct(r.marginPct)+'</td><td>'+esc(r.negative?'MARGEM NEGATIVA / PREJUÍZO':r.status)+'</td></tr>'),'Nenhum anúncio.'))
+    +card('Comparação entre produtos',table(['Produto','Anúncios conhecidos','Receita líquida','Lucro','Margem'],result.products.map(r=>'<tr><td>'+esc(r.label)+'</td><td>'+num(r.knownListings)+' / '+num(r.listingCount)+'</td><td>'+brl(r.netRevenueCents)+'</td><td>'+brl(r.profitCents)+'</td><td>'+pct(r.marginPct)+'</td></tr>'),'Nenhum produto vinculado.'));
+}
+async function viewInventory(){
+  if(!state.accountId)return card('Estoque','<p class="muted">Selecione uma loja.</p>');
+  const days=opFilters.inventory.days;
+  const result=await api('inventory.dashboard',{accountId:state.accountId,days});
+  return card('Estoque e operação','<label>Recência da captura<select id="inventory-days">'+[1,7,30,90,365].map(d=>'<option value="'+d+'" '+(days===d?'selected':'')+'>'+d+' dias</option>').join('')+'</select></label><button class="btn" data-act="inventory-filter">Aplicar</button><p class="muted small">'+esc(result.method)+'</p>')
+    +card('Estoque por anúncio e SKU',table(['Anúncio','SKU','Estoque','Unidades observadas','Cobertura (dias)','Investimento Ads','Perguntas pendentes','Sinais','Captura'],result.items.map(r=>'<tr><td>'+esc(r.title||r.external_id)+'</td><td>'+esc(r.sku_id||'—')+'</td><td>'+num(r.stock)+'</td><td>'+num(r.units)+'</td><td>'+num(r.coverageDays,1)+'</td><td>'+brl(r.adSpend===null?null:Math.round(r.adSpend*100))+'</td><td>'+num(r.questionsPending)+'</td><td>'+esc(r.signals.join(', ')||'—')+'</td><td>'+dt(r.capturedAt)+'</td></tr>'),'Nenhum anúncio.'));
 }
 const VIEWS = {
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
@@ -1206,6 +1239,8 @@ const VIEWS = {
   listings: { label: 'Anúncios & Captura', icon: '▤', render: viewListings },
   finance: { label: 'Financeiro', icon: '⊞', render: viewFinance },
   ads: { label: 'Publicidade & Ads', icon: '◈', render: viewAds },
+  profitability: { label: 'Rentabilidade', icon: '⊞', render: viewProfitability },
+  inventory: { label: 'Estoque & Operação', icon: '▤', render: viewInventory },
   keywords: { label: 'SEO & Keywords', icon: '⌕', render: viewKeywords },
   market: { label: 'Radar de mercado', icon: '◎', render: viewMarket },
   competition: { label: 'Concorrência', icon: '⚔', render: viewCompetition },
@@ -1598,6 +1633,15 @@ const ACTIONS = {
     renderView();
   },
 
+  'ads-filter': async()=>{opFilters.ads={...operationInterval('ads'),kind:$('#ads-kind').value,externalId:$('#ads-external').value.trim()};await renderView();},
+  'profit-filter': async()=>{opFilters.profit=operationInterval('profit');await renderView();},
+  'inventory-filter': async()=>{opFilters.inventory.days=Number($('#inventory-days').value);await renderView();},
+  'campaign-prepare': async()=>{
+    if(!state.accountId)throw Error('Selecione uma loja.');
+    const obj=id=>{const v=JSON.parse($('#'+id).value);if(!v||Array.isArray(v)||typeof v!=='object')throw Error('Informe um objeto JSON.');return v;};
+    await run(()=>api('campaign.change.prepare',{accountId:state.accountId,marketplace:$('#campaign-market').value,campaignRef:$('#campaign-ref').value.trim(),baseline:obj('campaign-baseline'),changes:obj('campaign-changes'),reason:$('#campaign-reason').value.trim()}),'Proposta local salva. Nenhuma alteração remota.');await renderView();
+  },
+  'campaign-review': async d=>{const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;await run(()=>api('campaign.change.review',{proposalId:d.id,decision:d.decision,reason}),'Revisão registrada; execução remota bloqueada.');await renderView();},
   'finance-realized-save': async()=>{
     const accountId=state.accountId,generation=viewRenderSequence,host=$('#rp-out');
     const payload=realizedPayload(id=>$('#'+id).value,accountId);
