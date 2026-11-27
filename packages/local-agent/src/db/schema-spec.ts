@@ -61,6 +61,8 @@ export const TABLE_SPECS: TableSpec[] = [
   { name: 'visibility_share_snapshots', purpose: 'share of visibility observado (não é market share)', scope: ['account_id'], retention: 'permanente' },
 
   // ---------------------------------------------------------------- concorrência & mercado
+  { name: 'competitor_content_observations', purpose: 'descrições, promoções e evidência visual comparável com origem e data', scope: ['account_id','own_product_id','candidate_id'], retention: 'permanente' },
+  { name: 'competitor_public_search_observations', purpose: 'cartões públicos observados por produto/conta, sem inferir ranking absoluto', scope: ['account_id','own_product_id','candidate_id'], retention: 'permanente' },
   { name: 'competitors', purpose: 'concorrentes cadastrados/descobertos', scope: ['account_id'], retention: 'permanente' },
   { name: 'competitor_listings', purpose: 'anúncios do concorrente e vínculo ao produto próprio', scope: ['competitor_id'], retention: 'permanente' },
   { name: 'competitor_snapshots', purpose: 'estado observado (preço, frete, nota, posição)', scope: ['competitor_listing_id'], retention: 'permanente' },
@@ -113,6 +115,8 @@ export const TABLE_SPECS: TableSpec[] = [
   { name: 'auto_upgrade_proposals', purpose: 'patches propostos com diff, risco e testes', scope: [], retention: 'permanente' },
 
   // ---------------------------------------------------------------- conectores, previsão, alertas
+  { name: 'seo_external_runs', purpose: 'histórico externo Google, backlinks e IA com proveniência e custo', scope: ['account_id'], retention: 'permanente' },
+  { name: 'seo_rank_watches', purpose: 'monitoramento Google opt-in com limite finito de chamadas', scope: ['account_id'], retention: 'permanente' },
   { name: 'connector_registry', purpose: 'conectores disponíveis, limites e custos', scope: [], retention: 'permanente' },
   { name: 'connector_credentials_metadata', purpose: 'metadados de credencial (NUNCA o segredo)', scope: ['connector_id'], retention: 'permanente' },
   { name: 'connector_usage_costs', purpose: 'consumo/custo estimado por conector', scope: ['connector_id'], retention: '365 dias' },

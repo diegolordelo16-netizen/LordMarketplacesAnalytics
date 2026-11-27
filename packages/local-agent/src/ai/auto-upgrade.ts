@@ -153,6 +153,7 @@ export class AutoUpgradeEngine {
     });
     if (!res.ok) return { ok: false, message: res.message };
 
+    if(!validatePatchSyntax(res.text))return {ok:false,message:'Gemini não retornou um diff válido; nenhuma proposta registrada'};
     const preview = analyzePatch(res.text);
     const id = randomUUID();
     this.db.db
@@ -166,7 +167,7 @@ export class AutoUpgradeEngine {
         input.module,
         `diagnóstico via Gemini (${preview.summary}); arquivos críticos: ${preview.touchesCritical.join(', ') || 'nenhum'}`,
         res.text,
-        preview.touchesCritical.length > 0 ? 'CRITICAL' : preview.files[0]?.risk ?? 'MEDIUM',
+        preview.touchesCritical.length > 0 ? 'CRITICAL' : preview.files.some(f=>f.risk==='HIGH')?'HIGH':preview.files.some(f=>f.risk==='MEDIUM')?'MEDIUM':'LOW',
         JSON.stringify([{ command: input.testCommand, passed: false, output: 'não executado' }]),
       );
     return { ok: true, proposalId: id, message: `proposta ${id} criada; aguardando testes e aprovação` };
@@ -178,23 +179,32 @@ export class AutoUpgradeEngine {
     );
   }
 
+  inspect(proposalId:string){
+    const row=this.db.row<{id:string;module:string;diff_text:string;status:ProposalStatus;risk:UpgradeRisk;tests_json:string}>('SELECT id,module,diff_text,status,risk,tests_json FROM auto_upgrade_proposals WHERE id=?',proposalId);
+    if(!row)throw Error('proposta inexistente');
+    return {id:row.id,module:row.module,status:row.status,risk:row.risk,diff:row.diff_text,checksum:diffChecksum(row.diff_text),preview:analyzePatch(row.diff_text),syntaxValid:validatePatchSyntax(row.diff_text),tests:JSON.parse(row.tests_json||'[]'),note:'Validação sintática não equivale a testes de execução. A instalação distribuída exige atualização por build validado.'};
+  }
+
   /** Grava o patch em área de staging, roda testes e registra o resultado real. */
   async stageAndTest(
     proposalId: string,
     runner: (diff: string) => Promise<{ passed: boolean; output: string }>,
   ): Promise<{ passed: boolean; output: string; stagingPath: string }> {
     const row = this.db.db
-      .prepare('SELECT diff_text, module FROM auto_upgrade_proposals WHERE id = ?')
+      .prepare("SELECT diff_text, module FROM auto_upgrade_proposals WHERE id = ? AND status IN ('PROPOSTO','TESTANDO')")
       .get(proposalId) as { diff_text: string; module: string } | undefined;
     if (!row) throw new Error(`proposta inexistente: ${proposalId}`);
 
+    if(!/^[a-f0-9-]{36}$/i.test(proposalId)||!validatePatchSyntax(row.diff_text))throw Error('proposta ou diff inválido');
     const stagingDir = join(this.baseDir, 'staging', proposalId);
     mkdirSync(stagingDir, { recursive: true });
     const stagingPath = join(stagingDir, 'proposal.diff');
     writeFileSync(stagingPath, row.diff_text, 'utf8');
 
     this.db.db.prepare("UPDATE auto_upgrade_proposals SET status = 'TESTANDO' WHERE id = ?").run(proposalId);
-    const result = await runner(row.diff_text);
+    let result:{passed:boolean;output:string};
+    try{result=await runner(row.diff_text);}catch(e){result={passed:false,output:e instanceof Error?e.message:String(e)};}
+
     const tests = [{ command: 'vitest (módulo afetado)', passed: result.passed, output: result.output.slice(0, 4000) }];
     this.db.db
       .prepare('UPDATE auto_upgrade_proposals SET tests_json = ? WHERE id = ?')
@@ -221,9 +231,12 @@ export class AutoUpgradeEngine {
       | undefined;
     if (!row) return { applied: false, reasons: ['proposta inexistente'] };
 
+    if(row.status!=='TESTANDO'||row.risk==='CRITICAL')return {applied:false,reasons:['estado não testado ou alteração crítica exige release revisada']};
+    if(input.approverRole!=='super_admin'||!input.superAdminApproved)return {applied:false,reasons:['aprovação explícita do super_admin necessária']};
     const tests = JSON.parse(row.tests_json ?? '[]') as Array<{ passed: boolean }>;
     const testsPassed = tests.length > 0 && tests.every((t) => t.passed);
     const syntaxValid = validatePatchSyntax(row.diff_text);
+    if(!testsPassed||!syntaxValid)return {applied:false,reasons:['testes ou sintaxe inválidos']};
 
     // Backup obrigatório antes de checar o resto (para que a decisão seja auditável).
     const backup = this.db.backup(`pré-aplicação auto-upgrade ${row.id}`);
@@ -275,7 +288,7 @@ export class AutoUpgradeEngine {
   /** Rollback em 1 clique: restaura o backup e marca a proposta como revertida. */
   rollback(proposalId: string, targetRoot: string, readFile: (rel: string) => string | null, writeFile: (rel: string, content: string) => void): { ok: boolean; message: string } {
     const row = this.db.db
-      .prepare('SELECT id, diff_text FROM auto_upgrade_proposals WHERE id = ?')
+      .prepare("SELECT id, diff_text FROM auto_upgrade_proposals WHERE id = ? AND status='APLICADO'")
       .get(proposalId) as { id: string; diff_text: string } | undefined;
     if (!row) return { ok: false, message: 'proposta inexistente' };
     const snapshotDir = join(this.baseDir, 'upgrade-snapshots', proposalId);
@@ -316,7 +329,8 @@ export class AutoUpgradeEngine {
 
 /** Validação mínima de sintaxe do diff (não executa código). */
 export function validatePatchSyntax(diff: string): boolean {
-  if (!diff.includes('---') || !diff.includes('+++')) return false;
+  if (!diff.includes('---') || !diff.includes('+++')||diff.length>200000) return false;
+  try{if(!extractTargetPaths(diff).length)return false;}catch{return false;}
   const hunks = diff.split('\n').filter((l) => l.startsWith('@@'));
   if (hunks.length === 0) return false;
   for (const h of hunks) {
@@ -324,7 +338,7 @@ export function validatePatchSyntax(diff: string): boolean {
   }
   // Nunca aceitar patch que altere verificação de segurança.
   const forbidden = [/^\+.*disableGuard/i, /^\+.*skipAuth/i, /^\+.*allowAll/i, /^\+.*process\.env\.NODE_TLS_REJECT_UNAUTHORIZED/i];
-  for (const f of forbidden) if (f.test(diff)) return false;
+  for (const f of forbidden) if (diff.split('\n').some(line=>f.test(line))) return false;
   return true;
 }
 
@@ -375,21 +389,26 @@ export function applyUnifiedDiff(
       errors.push(`arquivo base não encontrado: ${source}`);
       continue;
     }
+    if(source!==target||pendingWrites.some(x=>x.target===target)){errors.push('renomeação ou arquivo repetido não suportado');continue;}
+    if(!hunks.length){errors.push('arquivo sem hunks');continue;}
     let content: string = baseContent;
     let ok = true;
+    let offset=0;
     for (const hunk of hunks) {
       const lines = hunk.split('\n');
       const header = lines[0] as string;
-      const hm = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(header);
+      const hm = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(header);
       if (!hm) {
         ok = false;
         errors.push(`hunk inválido: ${header}`);
         break;
       }
-      const oldStart = Number.parseInt(hm[1] as string, 10) - 1;
+      const oldCount=Number(hm[2]??1),newCount=Number(hm[4]??1);
+      const oldStart=Number(hm[1])-(oldCount===0?0:1)+offset;
       const body = lines.slice(1).filter((l) => l.length > 0 && !l.startsWith('\\'));
       const oldLines = body.filter((l) => l.startsWith(' ') || l.startsWith('-')).map((l) => l.slice(1));
       const newLines = body.filter((l) => l.startsWith(' ') || l.startsWith('+')).map((l) => l.slice(1));
+      if(oldLines.length!==oldCount||newLines.length!==newCount||oldStart<0){ok=false;errors.push('contagem de hunk inválida');break;}
       const current: string[] = content.split('\n');
       const slice = current.slice(oldStart, oldStart + oldLines.length);
       if (slice.join('\n') !== oldLines.join('\n')) {
@@ -399,10 +418,12 @@ export function applyUnifiedDiff(
       }
       current.splice(oldStart, oldLines.length, ...newLines);
       content = current.join('\n');
+      offset+=newLines.length-oldLines.length;
     }
     if (ok) pendingWrites.push({ target, original: baseContent, content });
   }
 
+  if(!pendingWrites.length&&!errors.length)errors.push('diff sem alterações suportadas');
   if (errors.length === 0) {
     const committed: typeof pendingWrites = [];
     try {

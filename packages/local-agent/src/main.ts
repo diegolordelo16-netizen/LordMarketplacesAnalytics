@@ -115,6 +115,11 @@ export interface Bootstrap {
 export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
   const dataDir = options.dataDir ?? defaultDataDir();
   mkdirSync(dataDir, { recursive: true });
+  const updateMarker=join(dataDir,'update-in-progress.json');
+  if(existsSync(updateMarker)){
+    const marker=JSON.parse(readFileSync(updateMarker,'utf8')) as {token?:string};
+    if(!marker.token||process.env.MI_UPDATE_HEALTH_TOKEN!==marker.token)throw Error('Atualização em andamento: aguarde ou execute recuperação do atualizador.');
+  }
 
   const db = new LocalDatabase({
     file: join(dataDir, 'marketplace-intelligence.db'),
@@ -140,7 +145,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     knowledge,
     autoUpgrade,
     capture,
-    version: options.version ?? process.env.MI_VERSION ?? '3.13.0',
+    version: options.version ?? process.env.MI_VERSION ?? '3.16.0',
   });
 
   // Token de sessão do painel: gerado a cada início, nunca persistido em disco.
@@ -150,7 +155,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     db,
     service,
     gemini,
-    version: options.version ?? process.env.MI_VERSION ?? '3.13.0',
+    version: options.version ?? process.env.MI_VERSION ?? '3.16.0',
     token,
     dataDir,
     close: async () => {
@@ -273,6 +278,7 @@ export async function start(options: BootstrapOptions = {}): Promise<StartedApp>
   const extensionDir = options.extensionDir ?? join(__dirname, '..', 'extension');
   const panel = await startPanelServer({
     port: options.port ?? 0,
+    version: app.version,
     token: app.token,
     publicDir: existsSync(publicDir) ? publicDir : undefined,
     service: (req) => app.service.handle(req),

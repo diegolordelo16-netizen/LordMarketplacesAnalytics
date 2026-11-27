@@ -39,6 +39,9 @@ export const GUARD_ACTIONS = [
   'change_price',
   'duplicate_listing',
   'toggle_ads',
+  'change_campaign_budget',
+  'create_variation',
+  'edit_variation',
 ] as const;
 export type GuardAction = (typeof GUARD_ACTIONS)[number];
 
@@ -48,6 +51,7 @@ export interface GuardContext {
   marketplace: { id: string; enabled: boolean };
   account: { id: string; marketplace: string; sessionState: string; verified: boolean } | null;
   listing: { id: string; accountId: string; externalId: string; status: string } | null;
+  campaign?: {id:string;accountId:string}|null;
   currentState: Record<string, unknown> | null;
   financialLimits: {
     maxPriceChangePct?: number;
@@ -57,6 +61,14 @@ export interface GuardContext {
     currentDailyAdSpendCents?: number;
     minMarginPct?: number;
     resultingMarginPct?: number;
+    targetDailyBudgetCents?:number;
+    maxCampaignDailyBudgetCents?:number;
+    minVariationPriceCents?:number;
+    maxVariationPriceCents?:number;
+    targetVariationPriceCents?:number;
+    maxVariationStock?:number;
+    targetVariationStock?:number;
+    maxVariationPriceChangePct?:number;
   } | null;
   requiredData: { missing: string[] };
   platformRules: { violations: string[] };
@@ -84,11 +96,29 @@ const ACTION_PERMISSION: Record<GuardAction, Permission> = {
   change_price: 'manage_financial_limits',
   duplicate_listing: 'edit_listing',
   toggle_ads: 'manage_financial_limits',
+  change_campaign_budget: 'manage_financial_limits',
+  create_variation: 'manage_financial_limits',
+  edit_variation: 'manage_financial_limits',
 };
 
 /** Verificação financeira: nenhuma mudança pode furar limites ou margem mínima. */
 function checkFinancial(ctx: GuardContext): GuardCheckResult {
   const f = ctx.financialLimits;
+  const validInt=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
+  if(ctx.action==='change_campaign_budget'){
+    const cap=f?.maxCampaignDailyBudgetCents,target=f?.targetDailyBudgetCents;
+    const ok=validInt(cap)&&validInt(target)&&Number(target)>0&&Number(target)<=Number(cap);
+    return {check:'financial_limits',ok,detail:ok?'orçamento por campanha dentro do teto explícito':'orçamento excede teto explícito ou limite não configurado'};
+  }
+  if(ctx.action==='create_variation'||ctx.action==='edit_variation'){
+    const price=f?.targetVariationPriceCents,stock=f?.targetVariationStock,min=f?.minVariationPriceCents,max=f?.maxVariationPriceCents,stockMax=f?.maxVariationStock;
+    let ok=[price,stock,min,max,stockMax].every(validInt)&&Number(price)>0&&Number(price)>=Number(min)&&Number(price)<=Number(max)&&Number(stock)<=Number(stockMax);
+    if(ctx.action==='edit_variation'){
+      const current=f?.currentPriceCents,pct=f?.maxVariationPriceChangePct;
+      ok=ok&&validInt(current)&&Number(current)>0&&typeof pct==='number'&&Number.isFinite(pct)&&pct>=0&&Math.abs(Number(price)-Number(current))/Number(current)*100<=pct;
+    }
+    return {check:'financial_limits',ok,detail:ok?'preço e estoque dentro dos limites explícitos':'preço, estoque ou variação excedem limites explícitos ou não configurados'};
+  }
   if (ctx.action === 'change_price') {
     if (!f || typeof f.currentPriceCents !== 'number' || typeof f.newPriceCents !== 'number') {
       return { check: 'financial_limits', ok: false, detail: 'preço atual/novo ausente: mudança de preço bloqueada' };
@@ -148,8 +178,8 @@ export function evaluateGuard(ctx: GuardContext): GuardDecision {
 
   checks.push({
     check: 'listing',
-    ok: !!ctx.listing && !!ctx.account && ctx.listing.accountId === ctx.account.id && ctx.listing.status !== 'CLOSED',
-    detail: !ctx.listing
+    ok: ctx.action==='change_campaign_budget'?Boolean(ctx.campaign?.id&&ctx.account&&ctx.campaign.accountId===ctx.account.id):!!ctx.listing && !!ctx.account && ctx.listing.accountId === ctx.account.id && ctx.listing.status !== 'CLOSED',
+    detail: ctx.action==='change_campaign_budget'?(ctx.campaign?.id?'campanha '+ctx.campaign.id+' vinculada à conta':'campanha ausente'):!ctx.listing
       ? 'anúncio não encontrado'
       : ctx.listing.accountId !== ctx.account?.id
         ? 'anúncio pertence a outra conta'
@@ -202,7 +232,7 @@ export function evaluateGuard(ctx: GuardContext): GuardDecision {
     allowed: blocked.length === 0,
     checks,
     blockedReasons: blocked.map((c) => `${GUARD_CHECK_LABEL[c.check]}: ${c.detail}`),
-    requiresApproval: ctx.action === 'change_price' || ctx.action === 'toggle_ads' || ctx.action === 'duplicate_listing',
+    requiresApproval: ['change_price','toggle_ads','duplicate_listing','change_campaign_budget','create_variation','edit_variation'].includes(ctx.action),
   };
 }
 

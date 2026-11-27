@@ -410,9 +410,13 @@ async function viewFinance() {
 
 // ------------------------------------------------------------------ SEO & KEYWORDS
 async function viewKeywords() {
-  const [kws, gaps] = await Promise.all([
+  const accountId=state.accountId;
+  const [kws, gaps, seoHistory, seoWatches, seoConfig] = await Promise.all([
     api('keyword.list', {}).catch(() => []),
     api('keyword.gap', { accountId: state.accountId || 'local:default' }).catch(() => []),
+    accountId?api('seo.external.history',{accountId}).catch(()=>[]):[],
+    accountId?api('seo.watch.list',{accountId}).catch(()=>[]):[],
+    api('seo.config.status').catch(()=>({configured:false,schedulesEnabled:false})),
   ]);
   return card('Adicionar palavra-chave', `
     <div class="form-grid">
@@ -429,6 +433,19 @@ async function viewKeywords() {
         <option value="IMPORTACAO">Importação</option></select></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="kw-add">Adicionar termo</button></div>`)
+  + card('Conexão SEO externa — DataForSEO',`<p class="muted small">${seoConfig.configured?'Credencial disponível · '+esc(seoConfig.source):'Não configurado'} · Agendamento ${seoConfig.schedulesEnabled?'habilitado':'desabilitado'}. Nenhum teste pago automático.</p><div class="form-grid"><label>Login da API<input id="seo-config-login" autocomplete="off" maxlength="254"></label><label>Senha da API<input id="seo-config-password" type="password" autocomplete="off" maxlength="256"></label><label><input id="seo-config-schedules" type="checkbox" ${seoConfig.schedulesEnabled?'checked':''}> Permitir agendamentos tarifados autorizados individualmente</label></div><button class="btn" data-act="seo-config-save">Salvar conexão local</button> <button class="btn ghost" data-act="seo-config-clear">Desconectar</button>`)
+  + (accountId?card('Pesquisa SEO externa — OpenSEO / DataForSEO', `
+    <p class="muted small">Google Brasil em português; ChatGPT externo EUA/en; backlinks da web global. Selecione outra localização canônica somente para SERP. Não representa volume ou posição no Mercado Livre, Shopee ou Amazon. Cada consulta pode ser cobrada pela DataForSEO, inclusive falhas. Configure a conexão acima; as consultas ficam no histórico da loja.</p>
+    <div class="form-grid"><label>Pesquisa<select id="seo-external-mode"><option value="suggestions">Sugestões de palavras-chave</option><option value="googleVolume">Volume Google Ads (até 20 termos, um por linha)</option><option value="related">Termos relacionados</option><option value="ideas">Ideias de palavras-chave</option><option value="serp">Resultados Google (SERP)</option><option value="ranked">Palavras-chave de domínio concorrente</option><option value="domain">Visibilidade de domínio</option><option value="backlinks">Resumo de backlinks</option><option value="overview">Visão geral da palavra-chave</option><option value="competitors">Concorrentes na SERP</option><option value="pages">Páginas orgânicas de domínio</option><option value="backlinkRows">Backlinks individuais</option><option value="referringDomains">Domínios de referência</option><option value="backlinkPages">Páginas com backlinks</option><option value="lighthouse">Auditoria técnica Lighthouse (URL HTTPS)</option><option value="aiGoogle">Menções em IA Google (BR/pt)</option><option value="aiChatGPT">Menções ChatGPT (EUA/en)</option></select></label>
+    <label>Termo, domínio ou termos Google Ads<textarea id="seo-external-query" maxlength="1620" rows="2" placeholder="capacete ou exemplo.com.br"></textarea></label><label>Limite<input id="seo-external-limit" type="number" min="1" max="100" value="25"></label><label>Dispositivo (SERP)<select id="seo-external-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica (somente SERP, opcional)<input id="seo-external-location" maxlength="160" placeholder="Sao Paulo,State of Sao Paulo,Brazil"></label></div>
+    <button class="btn" data-act="seo-external-research">Consultar fonte externa</button><div id="seo-external-out" class="out" aria-live="polite"></div>`):card("SEO externo","Selecione uma conta para guardar o histórico."))
+  + (accountId?card('Histórico SEO externo da loja',table(['Data','Consulta','Modo','Escopo','Status','Custo USD','Ações'],seoHistory.map(r=>'<tr><td>'+dt(r.requested_at)+'</td><td>'+esc(r.query)+'</td><td>'+esc(r.mode)+'</td><td>'+esc(r.scope)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.cost_usd??'—')+'</td><td><button class="btn tiny" data-act="seo-run-show" data-id="'+esc(r.id)+'">Abrir</button> '+(['suggestions','related','ideas','overview','ranked','googleVolume'].includes(r.mode)&&r.status==='OK'?'<button class="btn tiny" data-act="seo-run-groups" data-id="'+esc(r.id)+'">Agrupar</button>':'')+'</td></tr>'),'Nenhuma consulta.')+
+    '<div class="form-grid"><label>Amostra do domínio próprio<select id="seo-gap-own"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Amostra concorrente<select id="seo-gap-other"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label></div><button class="btn" data-act="seo-gap">Comparar Keyword Gap</button><div class="form-grid"><label>Pesquisa de termos<select id="seo-opportunities-run"><option value="">Selecione</option>'+seoHistory.filter(r=>['suggestions','related','ideas','overview','ranked','googleVolume'].includes(r.mode)&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Início do período financeiro (UTC)<input id="seo-opportunities-from" type="date"></label><label>Fim do período financeiro (UTC)<input id="seo-opportunities-to" type="date"></label></div><button class="btn" data-act="seo-opportunities">Cruzar com margem, estoque, vendas e Ads</button><div id="seo-history-out" class="out" aria-live="polite"></div>')+
+    card('Monitoramento Google — opt-in',`
+    <p class="muted small">Desativado por padrão. Habilite os agendamentos na conexão SEO acima e autorize cada monitoramento. Cada execução pode ser tarifada; limite finito de consultas, não de dólares. Falhas suspendem o monitoramento; sem retry.</p>
+    <div class="form-grid"><label>Palavra-chave<input id="seo-watch-keyword" maxlength="200"></label><label>Domínio próprio<input id="seo-watch-domain" maxlength="200"></label><label>Dispositivo<select id="seo-watch-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica opcional<input id="seo-watch-location" maxlength="160"></label><label>Intervalo (dias)<input id="seo-watch-interval" type="number" value="7" min="1" max="30"></label><label>Máximo de consultas<input id="seo-watch-max" type="number" value="4" min="1" max="30"></label></div>
+    <button class="btn" data-act="seo-watch-create">Autorizar monitoramento</button>`+
+    table(['Termo','Domínio','Dispositivo','Próxima','Restantes','Estado','Ações'],seoWatches.map(r=>'<tr><td>'+esc(r.keyword)+'</td><td>'+esc(r.domain)+'</td><td>'+esc(r.device)+'</td><td>'+dt(r.next_run_at)+'</td><td>'+num(r.remaining)+'</td><td>'+esc(r.enabled?'Ativo · '+(r.last_status||'Aguardando'):'Desativado · '+(r.last_status||'—'))+'</td><td><button class="btn tiny" data-act="seo-watch-history" data-id="'+esc(r.id)+'">Histórico</button> '+(r.enabled?'<button class="btn tiny" data-act="seo-watch-disable" data-id="'+esc(r.id)+'">Desativar</button>':'')+'</td></tr>'),'Nenhum monitoramento.')+'<div id="seo-watch-out" class="out" aria-live="polite"></div>'):'')
   + card('Banco de palavras-chave', table(['Termo', 'Intenção', 'Marketplace', 'Origem', 'Sinal', 'Confiança'],
     (kws || []).slice(0, 200).map((k) => `<tr>
       <td>${esc(k.term)}</td><td>${esc(k.intent || '—')}</td><td>${esc(k.marketplace || '—')}</td>
@@ -473,6 +490,50 @@ async function viewMarket() {
 }
 
 // ------------------------------------------------------------------ CONCORRÊNCIA (núcleo)
+async function localImageFingerprint(file){
+  if(!['image/jpeg','image/png','image/webp','image/gif','image/bmp'].includes(file.type)||file.size>8*1024*1024)throw Error('Use imagens JPEG, PNG, WebP, GIF ou BMP de até 8 MiB.');
+  const bitmap=await createImageBitmap(file);
+  try{
+    if(bitmap.width*bitmap.height>40000000)throw Error('Imagem excede 40 megapixels.');
+    const canvas=document.createElement('canvas');canvas.width=9;canvas.height=8;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('Canvas indisponível.');
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,9,8);ctx.drawImage(bitmap,0,0,9,8);
+    const data=ctx.getImageData(0,0,9,8).data;
+    const gray=i=>data[4*i]*299+data[4*i+1]*587+data[4*i+2]*114;
+    let hash='';
+    for(let y=0;y<8;y++)for(let x=0;x<8;x+=4){
+      let nibble=0;for(let k=0;k<4;k++)nibble=(nibble<<1)|Number(gray(y*9+x+k)>gray(y*9+x+k+1));
+      hash+=nibble.toString(16);
+    }
+    const digest=await crypto.subtle.digest('SHA-256',await file.arrayBuffer());
+    return {label:file.name.slice(0,200),sha256:Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join(''),dhash64:hash};
+  }finally{bitmap.close();}
+}
+function contentEvidenceView(content,relationId){
+  const desc=content?.description?.comparison,promo=content?.promotions?.comparison,images=content?.images?.comparison;
+  const origin=v=>v?esc(v.sourceClass)+' · '+dt(v.capturedAt):'—';
+  const rows=[
+    ['Descrição: similaridade lexical',desc?.lexicalSimilarityPct==null?'—':num(desc.lexicalSimilarityPct)+'%'],
+    ['Descrição: termos exclusivos concorrente',desc?.rivalOnlyTerms?.join(', ')||'—'],
+    ['Descrição: termos exclusivos próprios',desc?.ownOnlyTerms?.join(', ')||'—'],
+    ['Promoções comuns',promo?.common?.join(' | ')||'—'],
+    ['Promoções exclusivas concorrente',promo?.rivalOnly?.join(' | ')||'—'],
+    ['Promoções exclusivas próprias',promo?.ownOnly?.join(' | ')||'—'],
+    ['Imagens: pares comparáveis',images?.comparableVisualPairs??'—'],
+    ['Imagens: arquivos idênticos',images?.identicalPairs??'—'],
+    ['Imagens: melhor correspondência por concorrente',images?.bestMatches?.map((p,i)=>'Imagem '+(i+1)+': '+(p?p.visualSimilarityPct+'% (própria '+(p.ownIndex+1)+')':'não comparável')).join(' | ')||'—']
+  ];
+  const origins=['description','promotions','images'].map(k=>'<tr><td>'+esc({description:'Descrição',promotions:'Promoções',images:'Imagens'}[k])+'</td><td>'+origin(content?.[k]?.own)+'</td><td>'+origin(content?.[k]?.rival)+'</td></tr>');
+  return '<h3>Descrição, promoções e similaridade visual</h3>'+table(['Comparação','Resultado'],rows.map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+esc(v)+'</td></tr>'),'Sem dados')+
+    table(['Evidência','Produto próprio','Concorrente'],origins,'Sem evidências')+
+    '<p class="muted small">'+esc(content?.note||'Sem amostras comparáveis.')+' · '+esc(images?.note||'dHash estima semelhança estrutural.')+'</p>'+
+    '<div class="form-grid"><label>Origem do registro manual<select data-content-side><option value="OWN">Produto próprio</option><option value="RIVAL">Concorrente</option></select></label>'+
+    '<label class="wide">Descrição observada<textarea data-content-description maxlength="30000"></textarea></label>'+
+    '<label><input type="checkbox" data-content-promo-known> Promoções verificadas (lista vazia = nenhuma observada)</label>'+
+    '<label class="wide">Promoções (uma por linha)<textarea data-content-promotions maxlength="40000"></textarea></label>'+
+    '<label class="wide">Imagens locais (até 20; somente hashes são armazenados)<input data-content-files type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,image/bmp"></label></div>'+
+    '<button class="btn" data-act="content-save" data-id="'+esc(relationId)+'">Registrar evidência manual</button>';
+}
 async function viewCompetition() {
   const generation = viewRenderSequence;
   const accountId = state.accountId;
@@ -507,7 +568,7 @@ async function viewCompetition() {
       <div class="grow">
         <div class="tiny muted">Marketplaces</div>
         <span class="checks">
-          ${['mercado_livre', 'shopee', 'amazon', 'tiktok_shop', 'magalu', 'shein', 'netshoes']
+          ${['mercado_livre', 'shopee', 'amazon']
             .map((m) => `<label class="chk"><input type="checkbox" class="mp-chk" value="${m}" ${m === 'mercado_livre' ? 'checked' : ''}> ${esc(m)}</label>`).join('')}
         </span>
       </div>
@@ -516,10 +577,11 @@ async function viewCompetition() {
       <label class="grow">Candidatos capturados (JSON da extensão) <textarea id="search-candidates" rows="4" placeholder='[{"marketplace":"mercado_livre","title":"...","brand":"...","priceCents":43900}]'></textarea></label>
     </div>
     <div class="actions">
-      <button class="btn primary" data-act="search">Buscar concorrentes</button>
+      <button class="btn" data-act="search-plan">Preparar buscas por título, SKU e atributos</button>
+      <button class="btn primary" data-act="search">Analisar candidatos informados</button>
       <button class="btn ghost" data-act="search-demo">Carregar exemplo (MODO DEMONSTRATIVO)</button>
     </div>
-    <div id="search-out" class="out"></div>`)
+    <p class="muted small">Candidatos colados manualmente são identificados como entrada do operador; a demonstração não é salva.</p><div id="search-plan-out" class="out"></div><div id="search-out" class="out"></div>`)
   + `<div class="kpi-grid">
       <div class="kpi pend"><div class="l">Pendentes</div><div class="v">${num(s.pending)}</div></div>
       <div class="kpi ok"><div class="l">Aprovados</div><div class="v">${num(s.approved)}</div></div>
@@ -628,8 +690,12 @@ async function viewPricing() {
 
 // ------------------------------------------------------------------ VOZ DO CLIENTE
 async function viewVoc() {
-  const topics = state.accountId ? await api('voc.topics', { accountId: state.accountId }).catch(() => []) : [];
-  const items=state.accountId?await api('voc.items',{accountId:state.accountId,limit:100}):[];
+  const accountId=state.accountId;
+  const [topics,items,overview,insights]=accountId?await Promise.all([
+    api('voc.topics',{accountId}),api('voc.items',{accountId,limit:100}),api('voc.overview',{accountId,days:30}),api('voc.insights',{accountId,days:30}),
+  ]):[[],[],null,null];
+  const kinds={REVIEW:'Avaliação',QUESTION:'Pergunta',COMPLAINT:'Reclamação',RETURN_REASON:'Devolução',MESSAGE:'Mensagem'};
+  const sources={A_PRIMARY_UI:'Marketplace',B_PLATFORM_EXPORT:'Exportação',F_USER_INPUT:'Registro manual'};
   return card('Registrar item da voz do cliente', `
     <div class="form-grid">
       <label>Tipo <select id="voc-type">
@@ -641,10 +707,14 @@ async function viewVoc() {
     <div class="actions"><button class="btn primary" data-act="voc-add">Registrar</button></div>
     <p class="muted small">Dados pessoais são removidos antes do armazenamento.</p>`)
   + (state.accountId ? '' : '<div class="note warn">Selecione uma conta no topo para ver os temas detectados.</div>')
+  + (overview?card('Pós-venda nos últimos 30 dias',table(['Tipo','Fonte','Registros','Com nota','Nota média'],overview.summary.map(row=>`<tr><td>${esc(kinds[row.kind]||row.kind)}</td><td>${esc(sources[row.source_class]||row.source_class)}</td><td>${num(row.count)}</td><td>${row.kind==='REVIEW'?num(row.rated):'—'}</td><td>${row.average_rating==null?'—':num(row.average_rating,2)}</td></tr>`),'Nenhum registro no período.')):'')
+  + (overview?card('Histórico de reputação',table(['Captura','Nota','Avaliações','Cobertura'],overview.reputation.map(row=>`<tr><td>${dt(row.capturedAt)}</td><td>${row.rating==null?'—':num(row.rating,2)}</td><td>${row.reviewCount==null?'—':num(row.reviewCount)}</td><td>${row.partial?'Parcial':'Sem alerta na captura'}</td></tr>`),'Nenhuma captura no período.')+(overview.reputationTruncated?'<p class="muted">Exibindo as 100 capturas mais recentes.</p>':'')):'')
+  + (overview?card('Motivos de devolução recorrentes',table(['Motivo informado','Fonte','Registros'],overview.returnReasons.map(row=>`<tr><td>${esc(row.reason)}</td><td>${esc(sources[row.source_class]||row.source_class)}</td><td>${num(row.count)}</td></tr>`),'Nenhum motivo com texto idêntico em dois ou mais registros.')+(overview.returnReasonsTruncated?'<p class="muted">Exibindo os 20 motivos mais frequentes.</p>':'')):'')
+  + (insights?card('Objeções, qualidade e oportunidades de pós-venda',`<p class="muted small">${esc(insights.note)} · ${num(insights.analyzed)} registros analisados${insights.truncated?' (amostra limitada)':''}</p>`+table(['Tema','Tipo','Fonte','Menções','Anúncios','Revisão sugerida'],insights.groups.map(r=>`<tr><td>${esc(r.label)}</td><td>${esc(kinds[r.kind]||r.kind)}</td><td>${esc(sources[r.source]||r.source)}</td><td>${num(r.count)}${r.recurring?' · recorrente':''}</td><td>${num(r.listingCount)}</td><td>${esc(r.action)}</td></tr>`),'Nenhuma menção identificada.')):'')
   + card('Feedback capturado por anúncio',table(['Tipo','Anúncio','Vínculo','Nota','Texto','Data'],items.map(item=>`<tr><td>${esc(item.kind)}</td><td>${esc(item.linked_external_id||item.external_listing_id||'—')}${item.listing_title?`<div class="muted small">${esc(item.listing_title)}</div>`:''}</td><td>${item.listing_id?'Vinculado':item.external_listing_id?'Aguardando anúncio':'Sem identificação'}</td><td>${esc(item.rating??'—')}</td><td>${esc(item.text_redacted)}</td><td>${dt(item.observed_at)}</td></tr>`),'Nenhum feedback capturado.'))
   + card('Temas detectados', table(['Tema', 'Ocorrências', 'Sentimento', 'Impacto'],
-    (topics || []).map((t) => `<tr><td>${esc(t.topic || t.theme)}</td><td>${num(t.count)}</td>
-      <td>${esc(t.sentiment || '—')}</td><td>${esc(t.impact || '—')}</td></tr>`),
+    (topics || []).map((t) => `<tr><td>${esc(t.label)}</td><td>${num(t.frequency)}</td>
+      <td>${t.sentiment==null?'—':num(t.sentiment,2)}</td><td>${t.financial_impact_cents==null?'—':brl(t.financial_impact_cents)}</td></tr>`),
     'Nenhum tema ainda.'));
 }
 
@@ -693,19 +763,20 @@ async function viewGrowth() {
 
 // ------------------------------------------------------------------ AGENTES DE IA
 async function viewAgents() {
-  const [runs, budget, memory, recommendations] = await Promise.all([
-    api('agent.runs', {}).catch(() => []),
-    api('agent.budget', {}).catch(() => null),
-    api('agent.memory', {}).catch(() => []),
+  const [runs, budget, memory, recommendations,debates] = await Promise.all([
+    api('agent.runs', {accountId:state.accountId||undefined}).catch(() => []),
+    api('agent.budget', {accountId:state.accountId||undefined}).catch(() => null),
+    api('agent.memory', {accountId:state.accountId||undefined}).catch(() => []),
     api('agent.recommendations', { accountId: state.accountId || undefined, limit: 100 }).catch(() => []),
+    state.accountId?api('agent.workspace.history',{accountId:state.accountId}).catch(()=>[]):Promise.resolve([]),
   ]);
   const b = budget || {};
   return card('Orçamento e consumo do Gemini', `
     <div class="kpi-grid">
-      <div class="kpi"><div class="l">Chamadas hoje</div><div class="v">${num(b.callsToday)}</div></div>
+      <div class="kpi"><div class="l">Chamadas (24h)</div><div class="v">${num(b.callsToday)}</div></div>
       <div class="kpi"><div class="l">Tokens entrada</div><div class="v">${num(b.tokensIn)}</div></div>
       <div class="kpi"><div class="l">Tokens saída</div><div class="v">${num(b.tokensOut)}</div></div>
-      <div class="kpi"><div class="l">Custo hoje (US$)</div><div class="v">${num(b.costUsd, 4)}</div></div>
+      <div class="kpi"><div class="l">Custo estimado (24h, US$)</div><div class="v">${num(b.costUsd, 4)}</div></div>
       <div class="kpi"><div class="l">Limite diário (US$)</div><div class="v">${num(b.dailyCostLimitUsd, 2)}</div></div>
     </div>`)
   + card('Executar agentes especializados', `
@@ -718,7 +789,7 @@ async function viewAgents() {
         <option value="performance_experiments">Performance &amp; Experimentação</option><option value="market_category">Mercado &amp; Categoria</option>
         <option value="keyword_rank">Keyword Intelligence</option><option value="voice_of_customer">Voz do Cliente</option>
         <option value="forecast_planning">Forecast</option><option value="growth_strategy">Growth &amp; Retenção</option></select></label>
-      <label>Marketplace <input id="ag-mp" value="mercado_livre"></label>
+      <label>Escopo <input value="Loja selecionada no topo" disabled></label>
       <label>Anúncio <input id="ag-listing" placeholder="MLB..."></label>
       <label>Janela (dias) <input id="ag-days" type="number" value="30"></label>
     </div>
@@ -728,30 +799,27 @@ async function viewAgents() {
     </div>
     <div id="agent-out" class="out"></div>`)
   + card('Análises operacionais por profundidade', `
-    <div class="form-row"><label>Modo <select id="analysis-mode"><option value="RAPIDA">Rápida — 4 agentes</option><option value="PADRAO" selected>Padrão — 8 agentes</option><option value="FORENSE">Detalhada / Forense — 14 agentes por anúncio</option><option value="360">360° da conta — 14 agentes em todos os anúncios</option></select></label><label>Anúncio (opcional) <input id="analysis-listing" placeholder="ID interno ou deixe vazio"></label><label>Produto (opcional) <input id="analysis-product" placeholder="ID do produto canônico"></label><label>Janela <input id="analysis-days" type="number" min="1" max="365" value="30"></label><button class="btn primary" data-act="analysis-run">Executar análise</button></div>
+    <div class="form-row"><label>Modo <select id="analysis-mode"><option value="RAPIDA">Rápida — 4 agentes</option><option value="PADRAO" selected>Padrão — 8 agentes</option><option value="FORENSE">Detalhada / Forense — 14 agentes por anúncio</option><option value="360">360° da conta — 14 agentes em todos os anúncios</option></select></label><label>Anúncio (opcional) <input id="analysis-listing" placeholder="ID interno ou deixe vazio"></label><label>Produto (opcional) <input id="analysis-product" placeholder="ID do produto canônico"></label><label>Janela <input id="analysis-days" type="number" min="1" max="365" value="30"></label><label>Deslocamento (paginação)<input id="analysis-offset" type="number" min="0" value="0"></label><button class="btn primary" data-act="analysis-run">Executar análise</button></div>
     <div id="analysis-out" class="out"></div>
-    <p class="muted small">A análise usa snapshots locais reais. Dados ausentes são explicitados; FORENSE/360 executam até 300 anúncios por chamada.</p>`)
+    <p class="muted small">A análise usa snapshots locais reais. Dados ausentes são explicitados; FORENSE/360 executam até 300 anúncios por página. Informe janela compatível com a captura.</p>`)
   + card('Workspace de debate com o Gemini', `
     <div class="form-row">
       <label class="grow">Pergunta <textarea id="debate-q" rows="3" placeholder="Minha margem caiu 8% e o concorrente baixou o preço. O que fazer sem destruir margem?"></textarea></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="debate">Debater com o Gemini</button></div>
-    <div id="debate-out" class="out"></div>`)
+    <p class="muted small">Consulta externa paga mediante confirmação. Envia métricas numéricas e referências da loja selecionada, sem textos de clientes ou credenciais. Histórico local por usuário.</p><div id="debate-out" class="out"></div>`)
+  + card('Histórico de debates',table(['Data','Pergunta','Status','Resultado'],(debates||[]).map(r=>`<tr><td>${dt(r.started_at)}</td><td>${esc(r.topic)}</td><td>${esc(r.decision)}</td><td><details><summary>Ver registro</summary><pre class="json">${esc(JSON.stringify(r.context,null,2))}</pre></details></td></tr>`),'Nenhum debate nesta loja.'))
   + card('Histórico de execuções', table(['Quando', 'Agente', 'Recomendações', 'Conflitos'],
-    (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
+    (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.started_at||r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
       <td>${num(r.recommendation_count ?? (r.recommendations || []).length)}</td><td>${num(r.conflict_count ?? 0)}</td></tr>`),
     'Nenhuma execução de agente.'))
   + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
-    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
+    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.scope || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
       <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
-    'Memória vazia.'));
+    'Memória vazia.'))
   + card('Feedback e resultados das recomendações', table(['Diagnóstico','Ação sugerida','Confiança','Status','Registrar resultado'],
     (recommendations || []).map((r) => `<tr><td>${esc(r.diagnosis || '—')}</td><td>${esc(r.action_proposed || '—')}</td><td>${pct((Number(r.confidence)||0)*100)}</td><td>${badge(r.status || 'PROPOSTA')}</td><td><div class="actions"><button class="btn tiny" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="ACEITO">Aceitar</button><button class="btn tiny ghost" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="REJEITADO">Rejeitar</button><button class="btn tiny" data-act="agent-feedback-implemented" data-id="${esc(r.id)}">Implementada</button><button class="btn tiny ghost" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="FALHOU">Falhou</button></div></td></tr>`),
-    'Nenhuma recomendação para a conta selecionada.'))
-  + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
-    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
-      <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
-    'Memória vazia.'));
+    'Nenhuma recomendação para a conta selecionada.'));
 }
 
 /**
@@ -759,19 +827,11 @@ async function viewAgents() {
  * As métricas entram como null quando não foram coletadas: o agente então
  * declara dado ausente em vez de supor número.
  */
-function agentContext() {
-  const days = Number($('#ag-days').value) || 30;
-  const end = new Date();
-  const start = new Date(end.getTime() - days * 86400000);
-  return {
-    accountId: state.accountId || 'local:default',
-    marketplace: $('#ag-mp').value.trim() || 'mercado_livre',
-    listingId: $('#ag-listing').value.trim() || '',
-    window: { start: start.toISOString(), end: end.toISOString(), days },
-    metrics: {},
-    dataConfidence: 0,
-    missingData: ['métricas ainda não coletadas para este anúncio'],
-  };
+function agentContext(){
+  if(!state.accountId)throw Error('Selecione uma loja para executar os agentes.');
+  const days=Number($('#ag-days').value);
+  if(!Number.isInteger(days)||days<1||days>365)throw Error('Janela deve ter 1 a 365 dias.');
+  return {accountId:state.accountId,listingId:$('#ag-listing').value.trim()||undefined,days};
 }
 
 // ------------------------------------------------------------------ TAREFAS
@@ -982,14 +1042,14 @@ async function viewAdmin() {
       <td><button class="btn tiny" data-act="backup-restore" data-id="${esc(b.id)}">Restaurar</button></td></tr>`), 'Nenhum backup.')}`)
   + card('Auto-upgrade governado', `
     <div class="form-row">
-      <label class="grow">Sintoma observado <input id="au-sym" placeholder="Seletor de preço do Mercado Livre parou de funcionar"></label>
+      <label class="grow">Módulo <input id="au-mod" maxlength="200" placeholder="adapters/mercado-livre"></label><label class="grow">Sintoma observado <input id="au-sym" maxlength="8000" placeholder="Seletor de preço parou de funcionar"></label>
       <button class="btn" data-act="au-propose">Propor diagnóstico</button>
+    </div><label class="wide">Código atual (sem credenciais ou dados pessoais)<textarea id="au-code" maxlength="40000" rows="5"></textarea></label><p class="muted small">A proposta usa Gemini mediante confirmação. Não executa código gerado; exporte e valide o diff em ambiente isolado antes de distribuir uma atualização.</p><p class="muted small">Atualização efetiva de versões: use o atualizador Windows instalado, com pacote de CI aprovada e SHA-256 confirmado. Feche o navegador antes de executar. <a href="https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/actions" target="_blank" rel="noopener noreferrer">Consultar builds e artefatos</a>. O rollback preserva o banco atual antes de restaurar o anterior.</p><pre class="json">node.exe update-manager.mjs install &lt;pasta do pacote&gt; &lt;SHA-256 aprovado&gt; --approve\nnode.exe update-manager.mjs rollback --approve\nnode.exe update-manager.mjs recover --approve</pre><div id="au-out" class="out"></div><div hidden>
     </div>
     ${table(['Quando', 'Módulo', 'Risco', 'Status', 'Ações'],
       (upgrades || []).map((u) => `<tr><td>${dt(u.created_at)}</td><td>${esc(u.module || '—')}</td>
-        <td>${badge(u.risk || '—', u.risk === 'ALTO' ? 'bad' : 'warn')}</td><td>${esc(u.status || '—')}</td>
-        <td><button class="btn tiny" data-act="au-apply" data-id="${u.id}">Aplicar</button>
-            <button class="btn tiny ghost" data-act="au-rollback" data-id="${u.id}">Reverter</button></td></tr>`),
+        <td>${badge(u.risk || '—', ['HIGH','CRITICAL'].includes(u.risk) ? 'bad' : 'warn')}</td><td>${esc(u.status || '—')}</td>
+        <td><button class="btn tiny" data-act="au-inspect" data-id="${esc(u.id)}">Revisar diff</button></td></tr>`),
       'Nenhuma proposta de upgrade.')}`)
   + card('Trilha de auditoria', table(['Quando', 'Ação', 'Ator', 'Alvo', 'Resultado'],
     (audit || []).slice(0, 100).map((a) => `<tr><td>${dt(a.created_at)}</td><td>${esc(a.action)}</td>
@@ -1180,12 +1240,110 @@ async function showBrowserSyncBatch() {
 }
 
 // ------------------------------------------------------------------ roteador de views
+function observedAdsMetrics(metrics){
+  const known=k=>typeof metrics?.[k]==='number'&&Number.isFinite(metrics[k])&&metrics[k]>=0?metrics[k]:null;
+  const spend=known('adSpend'),revenue=known('adAttributedRevenue'),clicks=known('adClicks'),impressions=known('paidImpressions'),orders=known('adAttributedOrders');
+  return {spend,revenue,clicks,impressions,orders,roas:spend!==null&&spend>0&&revenue!==null?revenue/spend:null,acos:revenue!==null&&revenue>0&&spend!==null?spend/revenue*100:null,ctr:impressions!==null&&impressions>0&&clicks!==null?clicks/impressions*100:null,cpc:clicks!==null&&clicks>0&&spend!==null?spend/clicks:null,signal:spend!==null&&spend>0&&revenue===0?'INVESTIMENTO_SEM_RECEITA_ATRIBUIDA':spend!==null&&revenue!==null&&spend>revenue?'INVESTIMENTO_SUPERIOR_RECEITA_ATRIBUIDA':null};
+}
+function operationDates(){
+  const to=new Date(Date.now()-86400000).toISOString().slice(0,10),from=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  return {from,to};
+}
+const opFilters={ads:{...operationDates(),kind:'',externalId:''},profit:operationDates(),inventory:{days:30}};
+function operationDateInputs(prefix,filter){
+  return '<label>Início (UTC)<input type="date" id="'+prefix+'-from" value="'+esc(filter.from)+'"></label><label>Fim (UTC)<input type="date" id="'+prefix+'-to" value="'+esc(filter.to)+'"></label>';
+}
+function operationInterval(prefix){
+  const from=$('#'+prefix+'-from').value,to=$('#'+prefix+'-to').value;
+  if(!from||!to||from>to)throw Error('Informe datas válidas.');
+  return {from,to};
+}
+const operationRange=f=>({from:f.from+'T00:00:00.000Z',to:f.to+'T23:59:59.999Z'});
+async function viewAds(){
+  const accountId=state.accountId;
+  if(!accountId)return card('Publicidade e campanhas','<p class="muted">Selecione uma loja para consultar dados de Ads.</p>');
+  const f={...opFilters.ads};
+  const [result,proposals,budgetRuns]=await Promise.all([
+    api('ads.dashboard',{accountId,...operationRange(f),kind:f.kind||undefined,externalId:f.externalId||undefined}),
+    api('campaign.change.list',{accountId,limit:100}),api('campaign.budget.list',{accountId})
+  ]);
+  const money=n=>n===null?'—':brl(Math.round(n*100));
+  const display=(rows)=>table(['Identificador','Campanha pai','Investimento','Receita atribuída','Cliques','Impressões','Pedidos atribuídos','ROAS','ACoS','CTR','CPC','Lucro atribuído informado','Sinal','Período e origem','Captura'],rows.map(r=>{
+    const m=observedAdsMetrics(r.metrics);
+    return '<tr><td>'+esc(r.label||r.external_id)+'<div class="muted small">'+esc(r.external_id)+'</div><div class="muted small">Snapshot: '+esc(r.id)+'</div></td><td>'+esc(r.parent_external_id||'—')+'</td><td>'+money(m.spend)+'</td><td>'+money(m.revenue)+'</td><td>'+num(m.clicks)+'</td><td>'+num(m.impressions)+'</td><td>'+num(m.orders)+'</td><td>'+num(m.roas,2)+'</td><td>'+pct(m.acos)+'</td><td>'+pct(m.ctr)+'</td><td>'+money(m.cpc)+'</td><td>'+brl(r.profitCents)+(r.profitSource?'<div class="muted small">'+esc(r.profitSource)+'</div>':'')+'</td><td>'+esc(r.verified?(r.signal||m.signal||'—'):'Janela não comprovada')+'</td><td>'+esc(r.context?.filtersAndPeriod||'Não comprovado')+' · '+esc(r.source_class)+'</td><td>'+dt(r.captured_at)+'</td></tr>';
+  }),'Nenhuma observação disponível. Capture a área de publicidade na extensão.');
+  return card('Publicidade — observações por loja','<div class="form-grid">'+operationDateInputs('ads',f)+'<label>Tipo<select id="ads-kind">'+[['','Todos'],['AD_CAMPAIGN','Campanha'],['AD','Anúncio']].map(([v,l])=>'<option value="'+v+'" '+(f.kind===v?'selected':'')+'>'+l+'</option>').join('')+'</select></label><label>Identificador externo<input id="ads-external" maxlength="200" value="'+esc(f.externalId)+'"></label></div><button class="btn" data-act="ads-filter">Aplicar filtros</button><p>TACoS da loja: '+pct(result.tacosPct)+'</p><p class="muted small">Última observação por entidade, até 500 snapshots de origem; não soma campanhas e anúncios. '+(result.truncated?'Limite de consulta atingido. ':'')+'TACoS exige janelas e escopos compatíveis; cobertura integral não comprovada.</p><button class="btn" data-act="nav" data-view="browserSync">Abrir coletas</button>')
+    +card('Campanhas',display(result.items.filter(r=>r.kind==='AD_CAMPAIGN')))+card('Anúncios patrocinados',display(result.items.filter(r=>r.kind==='AD')))
+    +card('Conciliação de campanha','<p class="muted small">Valores atribuídos ao mesmo escopo e período do snapshot. Informe receita líquida e custos que ainda não foram deduzidos, sem duplicar descontos. O investimento vem da observação; não estime o lucro nem o impacto incremental.</p><div class="form-grid"><label>Snapshot da campanha<select id="ads-reconcile-snapshot"><option value="">Selecione</option>'+result.items.filter(r=>r.kind==='AD_CAMPAIGN'&&r.verified).map(r=>'<option value="'+esc(r.id)+'">'+esc(r.label||r.external_id)+' · '+dt(r.captured_at)+'</option>').join('')+'</select></label><label>Receita líquida atribuída (R$)<input id="ads-net" inputmode="decimal"></label>'+REALIZED_FIELDS.filter(([key])=>!['netRevenueCents','adSpendCents'].includes(key)).map(([key,label])=>'<label>'+esc(label)+' (R$)<input id="ads-cost-'+esc(key)+'" inputmode="decimal"></label>').join('')+'<label>Referência da conciliação<input id="ads-source" maxlength="1000"></label></div><button class="btn" data-act="ads-reconcile">Registrar conciliação</button>')
+    +card('Anúncios para revisar investimento',table(['Anúncio','Estoque','Investimento','Receita atribuída','Pedidos atribuídos','Lucro registrado','Período'],result.listingCandidates.map(r=>'<tr><td>'+esc(r.label)+'</td><td>'+num(r.stock)+'</td><td>'+money(r.spend)+'</td><td>'+money(r.revenue)+'</td><td>'+num(r.orders)+'</td><td>'+brl(r.profitCents)+'</td><td>'+esc(r.window.from)+' a '+esc(r.window.to)+'</td></tr>'),'Nenhum anúncio com evidências simultâneas suficientes.')+'<p class="muted small">Revisar investimento não é ordem de aumentar verba. Margem incremental não comprovada.</p>')
+    +card('Propor alteração de campanha','<p class="muted small">Rascunho local. Para orçamento diário assistido, informe apenas dailyBudgetCents (centavos) em ambos os objetos. Para pausar ou reativar, use status ACTIVE ou PAUSED em cada objeto e mantenha dailyBudgetCents igual. Para ROAS objetivo, use roasTargetHundredths (100 a 3500, por exemplo 500 = 5x) nos dois objetos e mantenha dailyBudgetCents igual. Aprovação não executa; abra a extensão na campanha e configure limites na tela Anúncios &amp; Variações.</p><div class="form-grid"><label>Marketplace<select id="campaign-market"><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label><label>Campanha (ID externo)<input id="campaign-ref" maxlength="200"></label><label>Estado observado (JSON)<textarea id="campaign-baseline" rows="3"></textarea></label><label>Alterações propostas (JSON)<textarea id="campaign-changes" rows="3"></textarea></label><label>Motivo<input id="campaign-reason" maxlength="2000"></label></div><button class="btn" data-act="campaign-prepare">Salvar proposta</button>')
+    +card('Propostas de campanhas',table(['Campanha','Alteração proposta','Status','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.campaign_ref)+'<div class="muted small">Proposta: '+esc(p.id)+'</div></td><td>'+esc(JSON.stringify(p.changes))+'</td><td>'+esc(p.status)+'</td><td>'+(p.status==='DRAFT'?'<button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="campaign-review" data-id="'+esc(p.id)+'" data-decision="REJECTED">Rejeitar</button>':p.status==='APPROVED'&&!budgetRuns.some(r=>r.proposal_id===p.id)?operationReceiptAction('CAMPAIGN',p.id):'—')+'</td></tr>'),'Nenhuma proposta.'))
+    +card('Execuções assistidas de campanha',table(['Proposta','Campanha','Antes','Aprovado','Estado','Data'],budgetRuns.map(r=>'<tr><td>'+esc(r.proposal_id)+'</td><td>'+esc(r.campaign_ref)+'</td><td>'+(r.before_campaign_status?esc(r.before_campaign_status)+' · ':r.before_roas_target!=null?num(r.before_roas_target/100,2)+'x · ':'')+brl(r.before_cents)+'</td><td>'+(r.target_campaign_status?esc(r.target_campaign_status)+' · ':r.target_roas_target!=null?num(r.target_roas_target/100,2)+'x · ':'')+brl(r.target_cents)+'</td><td>'+esc(r.status)+'</td><td>'+dt(r.updated_at)+(r.status==='UI_READBACK_MATCHED'?'<div>'+operationMeasureAction('CAMPAIGN',r.proposal_id)+'</div>':'')+'</td></tr>'),'Nenhuma tentativa.')+'<p class="muted small">UI_READBACK_MATCHED indica valor observado após recarga, não causalidade. Confira no painel lateral; não repita tentativa incerta.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
+}
+async function viewProfitability(){
+  if(!state.accountId)return card('Rentabilidade','<p class="muted">Selecione uma loja.</p>');
+  const f={...opFilters.profit},range=operationRange(f);
+  const result=await api('finance.profitability',{accountId:state.accountId,periodStart:range.from,periodEnd:range.to});
+  return card('Rentabilidade realizada','<div class="form-grid">'+operationDateInputs('profit',f)+'</div><button class="btn" data-act="profit-filter">Aplicar intervalo exato</button><p class="muted small">'+esc(result.method)+'</p><button class="btn" data-act="nav" data-view="finance">Registrar conciliação</button>')
+    +card('Anúncios e margem negativa',table(['Anúncio','SKU','Receita líquida','Lucro registrado','Margem','Situação'],result.listings.map(r=>'<tr><td>'+esc(r.title||r.external_id)+'</td><td>'+esc(r.sku_id||'—')+'</td><td>'+brl(r.netRevenueCents)+'</td><td>'+brl(r.profitCents)+'</td><td>'+pct(r.marginPct)+'</td><td>'+esc(r.negative?'MARGEM NEGATIVA / PREJUÍZO':r.status)+'</td></tr>'),'Nenhum anúncio.'))
+    +card('Comparação entre produtos',table(['Produto','Anúncios conhecidos','Receita líquida','Lucro','Margem'],result.products.map(r=>'<tr><td>'+esc(r.label)+'</td><td>'+num(r.knownListings)+' / '+num(r.listingCount)+'</td><td>'+brl(r.netRevenueCents)+'</td><td>'+brl(r.profitCents)+'</td><td>'+pct(r.marginPct)+'</td></tr>'),'Nenhum produto vinculado.'));
+}
+async function viewInventory(){
+  if(!state.accountId)return card('Estoque','<p class="muted">Selecione uma loja.</p>');
+  const days=opFilters.inventory.days;
+  const result=await api('inventory.dashboard',{accountId:state.accountId,days});
+  return card('Estoque e operação','<label>Recência da captura<select id="inventory-days">'+[1,7,30,90,365].map(d=>'<option value="'+d+'" '+(days===d?'selected':'')+'>'+d+' dias</option>').join('')+'</select></label><button class="btn" data-act="inventory-filter">Aplicar</button><p class="muted small">'+esc(result.method)+(result.truncated?' Histórico limitado aos registros mais recentes.':'')+'</p>')
+    +card('Estoque por anúncio e SKU',table(['Anúncio','SKU','Estoque','Unidades observadas','Cobertura (dias)','Investimento Ads','Perguntas pendentes','Sinais','Captura'],result.items.map(r=>'<tr><td>'+esc(r.title||r.external_id)+'</td><td>'+esc(r.sku_id||'—')+'</td><td>'+num(r.stock)+'</td><td>'+num(r.units)+'</td><td>'+num(r.coverageDays,1)+'</td><td>'+brl(r.adSpend===null?null:Math.round(r.adSpend*100))+'</td><td>'+num(r.questionsPending)+'</td><td>'+esc(r.signals.join(', ')||'—')+'</td><td>'+dt(r.capturedAt)+'</td></tr>'),'Nenhum anúncio.'))
+    +card('Histórico de estoque',table(['Anúncio','SKU','Estoque','Origem','Data'],result.history.map(r=>'<tr><td>'+esc(r.external_id)+'</td><td>'+esc(r.sku_id||'—')+'</td><td>'+num(r.stock)+'</td><td>'+esc(r.source_class)+'</td><td>'+dt(r.captured_at)+'</td></tr>'),'Nenhum snapshot.'))
+    +card('Armazéns e estoque observado',table(['Identificador','Entidade pai','Estoque','Data'],result.warehouses.map(r=>'<tr><td>'+esc(r.external_id)+'</td><td>'+esc(r.parent_external_id||'—')+'</td><td>'+num(r.metrics.stockAvailable)+'</td><td>'+dt(r.captured_at)+'</td></tr>'),'Nenhum armazém observado.'))
+    +card('Questões e problemas operacionais',table(['Área','Indicadores observados','Período/filtros','Data'],result.areas.map(r=>'<tr><td>'+esc(r.page_kind)+'</td><td>'+esc(JSON.stringify(r.metrics))+'</td><td>'+esc(r.evidence.filtersAndPeriod||'Não comprovado')+'</td><td>'+dt(r.captured_at)+'</td></tr>'),'Nenhuma observação da área operacional.'));
+}
+function operationMeasureAction(kind,id){
+  return '<button class="btn tiny" data-act="operation-measure" data-kind="'+esc(kind)+'" data-id="'+esc(id)+'">Medir antes/depois</button>';
+}
+function operationReceiptAction(kind,id){
+  return '<button class="btn tiny" data-act="operation-receipt" data-kind="'+esc(kind)+'" data-id="'+esc(id)+'">Registrar execução manual</button>';
+}
+async function viewProductOperations(){
+  const accountId=state.accountId;
+  if(!accountId)return card('Anúncios e variações','<p class="muted">Selecione uma loja.</p>');
+  const [proposals,variants,media,receipts,attempts,limitsResult,apiAttempts]=await Promise.all([api('listing.change.list',{accountId}),api('offer.variation.list',{accountId}),api('media.list',{accountId}),api('operation.receipt.list',{accountId}),api('listing.browser.list',{accountId}),api('operation.limits.get',{accountId}),api('variation.api.list',{accountId})]);
+  const limits=limitsResult.limits||{};
+  const limitFields=[['maxCampaignDailyBudgetCents','Teto diário por campanha (centavos)'],['minVariationPriceCents','Preço mínimo da variação (centavos)'],['maxVariationPriceCents','Preço máximo da variação (centavos)'],['maxVariationStock','Estoque máximo da variação'],['maxVariationPriceChangePct','Variação máxima do preço (%)']];
+  const apiReady=variants.filter(p=>p.status==='APPROVED'&&p.options?.length===1&&(typeof p.options[0]?.removeVariationId==='string'||typeof p.options[0]?.editVariationId==='string'||typeof p.options[0]?.userProductId==='string'||(Array.isArray(p.options[0]?.attributeCombinations)&&
+    Array.isArray(p.options[0]?.pictureIds)))&&!apiAttempts.some(a=>a.proposal_id===p.id)&&
+    !attempts.some(a=>a.proposal_kind==='VARIATION'&&a.proposal_id===p.id)&&!receipts.some(a=>a.proposal_kind==='VARIATION'&&a.proposal_id===p.id));
+  const reviewed=(kind,row)=>row.status==='DRAFT'?'<button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="REJECTED">Rejeitar</button>':row.status==='APPROVED'&&!receipts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)&&!attempts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)&&(kind!=='VARIATION'||!apiAttempts.some(r=>r.proposal_id===row.id))?operationReceiptAction(kind,row.id):'—';
+  return card('Limites de execução assistida por loja','<p class="muted small">Confirme os limites antes de executar orçamento ou variações. O teto é por campanha, não orçamento total da conta. Nenhuma ação automática em segundo plano.</p><div class="form-grid">'+limitFields.map(([k,label])=>'<label>'+esc(label)+'<input id="assisted-'+k+'" type="number" min="0" step="'+(k.endsWith('Pct')?'0.1':'1')+'" value="'+esc(limits[k]??'')+'"></label>').join('')+'</div><button class="btn" data-act="assisted-limits-save">Confirmar limites</button>')
+    +card('Preparar capa ou duplicação','<p class="muted small">Propostas locais. Duplicação assistida somente na extensão do Mercado Livre quando o controle explícito estiver visível e autorizado. Troca de capa permanece manual. Confira se a plataforma permite duplicar.</p><div class="form-grid"><label>ID interno do anúncio<input id="product-listing"></label><label>Operação<select id="product-kind"><option value="COVER">Troca de capa</option><option value="DUPLICATE">Duplicação</option></select></label><label>Imagem da loja<select id="product-media"><option value="">Nenhuma</option>'+media.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.filename)+'</option>').join('')+'</select></label><label>Motivo<input id="product-reason" maxlength="2000"></label></div><button class="btn" data-act="product-preview">Prévia da imagem</button> <button class="btn" data-act="product-prepare">Salvar rascunho</button><div id="product-preview-out" class="out" aria-live="polite"></div><p><button class="btn" data-act="nav" data-view="media">Biblioteca de imagens</button></p>')
+    +card('Propostas de anúncios',table(['Anúncio','Tipo','Imagem','Estado','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.title||p.external_id)+'<div class="muted small">Proposta: '+esc(p.id)+' · ID externo: '+esc(p.external_id)+'</div></td><td>'+esc(p.kind)+'</td><td>'+esc(p.filename||'—')+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('LISTING_CHANGE',p)+'</td></tr>'),'Nenhuma proposta.'))
+    +card('Gerenciar variações e ofertas','<p class="muted small">Rascunhos locais. Executor assistido experimental: criação simples com uma opção {&quot;name&quot;:&quot;Azul&quot;}; edição com {&quot;externalId&quot;:&quot;ID&quot;,&quot;beforePriceCents&quot;:1000,&quot;beforeStock&quot;:5}. Para edição, use o nome observado da variação; preço e estoque finais são obrigatórios.</p><div class="form-grid"><label>ID do rascunho para edição (opcional)<input id="variation-id"></label><label>ID interno do anúncio<input id="variation-listing"></label><label>Nome da variação<input id="variation-name" maxlength="120"></label><label>Opções (JSON: lista de objetos)<textarea id="variation-options" rows="4">[]</textarea></label><label>Preço (centavos, opcional)<input type="number" min="0" step="1" id="variation-price"></label><label>Estoque (opcional)<input type="number" min="0" step="1" id="variation-stock"></label></div><button class="btn" data-act="variation-save">Salvar rascunho</button>')
+    +card('Propostas de variações',table(['ID','Anúncio','Nome','Opções','Status','Ações'],variants.map(p=>'<tr><td>'+esc(p.id)+'</td><td>'+esc(p.listing_id)+'</td><td>'+esc(p.variation_name)+'</td><td>'+esc(JSON.stringify(p.options))+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('VARIATION',p)+(p.status==='DRAFT'?' <button class="btn tiny" data-act="variation-delete" data-id="'+esc(p.id)+'">Excluir</button>':'')+'</td></tr>'),'Nenhum rascunho.'))
+    +card('Variações e ofertas pela API oficial do Mercado Livre','<p class="muted small">Para anúncios legados ativos ou ofertas User Products compatíveis. Prepare e aprove uma proposta com uma opção contendo attributeCombinations (lista de objetos id e value_id) e pictureIds (IDs de imagens do anúncio). Para remoção, informe somente removeVariationId na opção e registre o preço atual e estoque zero. Para editar apenas estoque, informe editVariationId, beforePriceCents e beforeStock, mantendo o preço e alterando o estoque final. Para nova condição de venda de User Product existente, opção com userProductId, categoryId, listingTypeId (gold_special ou gold_pro), beforePriceCents e beforeStock; estoque final deve ser o mesmo (compartilhado). Use um token OAuth da mesma loja.</p>'+
+      '<div class="form-grid"><label>Proposta aprovada<select id="variation-api-proposal"><option value="">Selecione</option>'+apiReady.map(p=>'<option value="'+esc(p.id)+'" data-remove="'+esc(p.options[0]?.removeVariationId||'')+'" data-edit="'+esc(p.options[0]?.editVariationId||'')+'" data-up="'+esc(p.options[0]?.userProductId||'')+'">'+(p.options[0]?.removeVariationId?'Remover: ':p.options[0]?.editVariationId?'Editar estoque: ':p.options[0]?.userProductId?'Nova oferta UP: ':'Criar: ')+esc(p.variation_name)+' · '+esc(p.id)+'</option>').join('')+
+      '</select></label><label>Token OAuth<input id="variation-api-token" type="password" maxlength="4096" autocomplete="off"></label></div>'+
+      '<button class="btn" data-act="variation-api-create" '+(apiReady.length?'':'disabled')+' >Executar proposta aprovada</button>'+
+      table(['Proposta','Anúncio','Variação','Estado','Conferência'],apiAttempts.map(p=>'<tr><td>'+esc(p.proposal_id)+'</td><td>'+esc(p.item_id)+'</td><td>'+esc(p.variation_id||'—')+'</td><td>'+esc(p.status)+'</td><td>'+
+        (p.status==='REMOTE_VERIFIED'?'<button class="btn tiny" data-act="operation-measure" data-kind="VARIATION" data-id="'+esc(p.proposal_id)+'">Ver estado confirmado</button>':
+          p.variation_id?'<button class="btn tiny" data-act="variation-api-verify" data-id="'+esc(p.proposal_id)+'">Conferir na API</button>':'—')+'</td></tr>'),'Nenhuma execução pela API.'))
+    +card('Tentativas assistidas e conferência',table(['Proposta','Anúncio','Ação','Estado','Conferência'],attempts.map(r=>'<tr><td>'+esc(r.proposal_id)+'</td><td>'+esc(r.external_listing_id)+'</td><td>'+esc(r.action)+'</td><td>'+esc(r.status)+'</td><td>'+(['CLAIMED','NEEDS_VERIFICATION'].includes(r.status)?'<button class="btn tiny" data-act="listing-browser-verify" data-id="'+esc(r.proposal_id)+'">Conferir captura posterior</button>':['UI_READBACK_MATCHED','CANDIDATE_OBSERVED'].includes(r.status)?operationMeasureAction(r.proposal_kind,r.proposal_id):'—')+'</td></tr>'),'Nenhuma tentativa.')+'<p class="muted small">CANDIDATE_OBSERVED é uma nova entidade compatível observada, não prova de duplicação/criação. UI_READBACK_MATCHED indica campos observados correspondentes. Não repita cliques.</p>')
+    +card('Execuções relatadas e medição',table(['Tipo','Proposta','Data','Referência','Conferência','Medição'],receipts.map(r=>{
+      const canVerify=r.proposal_kind==='VARIATION'||proposals.some(p=>p.id===r.proposal_id&&p.kind==='DUPLICATE');
+      const observationLabels={UI_READBACK_MATCHED:'Captura corresponde à proposta',CANDIDATE_OBSERVED:'Nova entidade compatível observada'};
+      const check=r.observation?esc(observationLabels[r.observation.status]||r.observation.status)+'<div class="muted small">'+esc(r.observation.observedExternalId)+'</div>':canVerify?'<button class="btn tiny" data-act="operation-receipt-verify" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Conferir captura</button>':'—';
+      return '<tr><td>'+esc(r.proposal_kind)+'</td><td>'+esc(r.proposal_id)+'</td><td>'+dt(r.performed_at)+'</td><td>'+esc(r.evidence_reference)+'</td><td>'+check+'</td><td><button class="btn tiny" data-act="operation-measure" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Medir antes/depois</button></td></tr>';
+    }),'Nenhum relato humano.')+'<p class="muted small">A conferência registra o que a loja exibe após a operação. A medição exige janelas compatíveis.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
+}
 const VIEWS = {
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
   prestart: { label: 'Pré-Start & Diagnóstico', icon: '✓', render: viewPrestart },
   browserSync: { label: 'Extensão & Coletas', icon: '⇄', render: viewBrowserSync },
   listings: { label: 'Anúncios & Captura', icon: '▤', render: viewListings },
   finance: { label: 'Financeiro', icon: '⊞', render: viewFinance },
+  ads: { label: 'Publicidade & Ads', icon: '◈', render: viewAds },
+  profitability: { label: 'Rentabilidade', icon: '⊞', render: viewProfitability },
+  inventory: { label: 'Estoque & Operação', icon: '▤', render: viewInventory },
+  productOperations: { label: 'Anúncios & Variações', icon: '▤', render: viewProductOperations },
   keywords: { label: 'SEO & Keywords', icon: '⌕', render: viewKeywords },
   market: { label: 'Radar de mercado', icon: '◎', render: viewMarket },
   competition: { label: 'Concorrência', icon: '⚔', render: viewCompetition },
@@ -1440,7 +1598,7 @@ const ACTIONS = {
     const listingId = $('#analysis-listing').value.trim();
     const catalogProductId = $('#analysis-product').value.trim();
     if (listingId && catalogProductId) throw new Error('Escolha um anúncio ou produto, não ambos.');
-    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30 }), 'Análise concluída.');
+    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30,offset:Number($('#analysis-offset').value)||0 }), 'Análise concluída.');
     $('#analysis-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result, null, 2))}</pre>`;
   },
 
@@ -1470,14 +1628,16 @@ const ACTIONS = {
   'own-select': (d) => { state.ownProductId = d.id; toast('Produto selecionado.'); renderView(); },
 
   'search-demo': () => {
-    $('#search-candidates').value = JSON.stringify([
-      { marketplace: 'mercado_livre', title: 'Capacete Motociclista Fechado Norisk FF 302 Fosco 58', brand: 'Norisk', model: 'FF302', category: 'Capacetes', priceCents: 43900, seller: 'Loja A' },
-      { marketplace: 'mercado_livre', title: 'Capacete Pro Tork Vision Preto Fechado', brand: 'Pro Tork', model: 'VISION', category: 'Capacetes', priceCents: 39900, seller: 'Loja B' },
-      { marketplace: 'shopee', title: 'Luvas de moto couro tamanho G', brand: 'X11', category: 'Luvas', priceCents: 8900, seller: 'Loja C' },
-    ], null, 2);
-    toast('MODO DEMONSTRATIVO / EXEMPLO — dados de exemplo, não reais.');
+    $('#search-out').innerHTML='<p class="muted small">Exemplo ilustrativo, sem gravação no banco.</p>'+table(['Título fictício','Marketplace','Preço fictício'],['<tr><td>Capacete demonstrativo</td><td>Mercado Livre</td><td>R$ 439,00</td></tr>'],'');
+    initializeTables($('#search-out'));
   },
-
+  'search-plan':async()=>{
+    const accountId=state.accountId,ownProductId=state.ownProductId,generation=viewRenderSequence,host=$('#search-plan-out'),marketplaces=$$('.mp-chk').filter(c=>c.checked).map(c=>c.value);
+    const r=await api('competitor.searchPlan',{accountId,ownProductId,marketplaces});
+    if(generation!==viewRenderSequence||state.accountId!==accountId||state.ownProductId!==ownProductId||host!==$('#search-plan-out'))return;
+    host.innerHTML='<p>'+esc(r.note)+'</p>'+table(['Marketplace','Critério','Termo','Abrir busca'],r.links.map(row=>'<tr><td>'+esc(row.marketplace)+'</td><td>'+esc(row.kind)+'</td><td>'+esc(row.term)+'</td><td><a href="'+esc(row.url)+'" target="_blank" rel="noopener noreferrer">Abrir resultados</a></td></tr>'),'Sem termos disponíveis.');
+    initializeTables(host);
+  },
   search: async () => {
     if (!state.ownProductId) { toast('Cadastre e selecione um produto próprio primeiro.', 'bad'); return; }
     let candidates = [];
@@ -1497,6 +1657,7 @@ const ACTIONS = {
       category: c.category ?? null,
       priceCents: typeof c.priceCents === 'number' ? c.priceCents : (typeof c.price === 'number' ? Math.round(c.price * 100) : null),
       url: c.url ?? null,
+      externalId: c.externalId ?? null,attributes:c.attributes??null,rating:c.rating??null,reviews:c.reviews??null,imageHash:c.imageHash??null,
       seller: c.seller ?? null,
     })).filter((c) => c.title);
     const r = await run(() => api('competitor.search', {
@@ -1504,7 +1665,7 @@ const ACTIONS = {
       marketplaces: mps,
       candidates: normalized,
       discoveryMethod: 'BUSCA_ASSISTIDA',
-      sourceClass: 'A_PRIMARY_UI',
+      sourceClass: 'F_USER_INPUT',
     }), 'Busca concluída.');
     if (r) {
       $('#search-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
@@ -1558,18 +1719,55 @@ const ACTIONS = {
     renderView();
   },
   history: async (d) => {
-    const h = await run(() => api('competitor.monitoring.history', { relationId: d.id }));
-    const out = document.querySelector(`[data-out="${d.id}"]`);
-    if (!out || !h) return;
+    const generation=viewRenderSequence,accountId=state.accountId,productId=state.ownProductId,status=state.relationsStatus;
+    const out=document.querySelector(`[data-out="${CSS.escape(d.id)}"]`);
+    if(!out)return;
+    const [h,evidence]=await run(()=>Promise.all([
+      api('competitor.monitoring.history',{relationId:d.id,accountId}),
+      api('competitor.evidence.compare',{relationId:d.id,accountId}).catch(()=>null),
+    ]))||[];
+    if(!h||generation!==viewRenderSequence||accountId!==state.accountId||productId!==state.ownProductId||
+       status!==state.relationsStatus||!out.isConnected)return;
+    const difference=(value,format)=>value==null?'—':format(value);
+    const comparison=evidence?table(['Indicador','Valor observado'],[
+      ['Diferença de preço (concorrente menos próprio)',difference(evidence.priceDifferenceCents,brl)],
+      ['Diferença de frete',difference(evidence.shippingDifferenceCents,brl)],
+      ['Prazo mínimo',difference(evidence.deliveryDaysMinDifference,value=>num(value,1)+' dias')],
+      ['Prazo máximo',difference(evidence.deliveryDaysMaxDifference,value=>num(value,1)+' dias')],
+      ['Anúncio concorrente patrocinado',evidence.sponsored==null?'—':evidence.sponsored?'Sim':'Não'],
+      ['Arquivos de imagem idênticos',num(evidence.images.identicalHashes)],
+      ['Nota concorrente',num(evidence.competitorRating,2)],['Avaliações concorrente',num(evidence.competitorReviews)],['Posição capturada',num(evidence.position)],['Termos adicionais do concorrente',(evidence.catalogComparison?.rivalOnlyTerms||[]).join(', ')||'—'],['Atributos divergentes/ausentes',(evidence.catalogComparison?.attributeDifferences||[]).map(r=>r.attribute+': '+(r.own??'—')+' × '+r.rival).join(' | ')||'—'],
+    ].map(([label,value])=>`<tr><td>${esc(label)}</td><td>${esc(value)}</td></tr>`),'Sem evidências comparáveis.')+
+    `<p class="muted small">${evidence.observedAt?'Captura: '+dt(evidence.observedAt)+' · ':''}${esc(evidence.images.explanation)} · ${esc(evidence.catalogComparison?.note||'')}</p>`:'<p class="muted small">Comparativo de evidências indisponível.</p>';
     const pts = h.points || [];
     const max = Math.max(...pts.map((p) => p.price_cents || 0), h.ownPriceCents || 0, 1);
     out.innerHTML = `
+      ${comparison}
+      ${contentEvidenceView(evidence?.content,d.id)}
       <div class="small">Preço atual: ${brl(h.competitorPriceCents)} · mínimo: ${brl(h.minPriceCents)} · meu preço: ${brl(h.ownPriceCents)}</div>
       <div class="spark">${pts.map((p) => `<div class="bar" style="height:${Math.max(4, ((p.price_cents || 0) / max) * 60)}px" title="${brl(p.price_cents)} · ${dt(p.captured_at)}"></div>`).join('')}</div>
       ${table(['Quando', 'Preço', 'Posição', 'Nota', 'Avaliações'],
         pts.map((p) => `<tr><td>${dt(p.captured_at)}</td><td>${brl(p.price_cents)}</td>
           <td>${p.position ?? '—'}</td><td>${p.rating ?? '—'}</td><td>${p.reviews ?? '—'}</td></tr>`), 'Sem pontos coletados.')}
+      <h3>Resultados de busca pública observados</h3>${table(['Data','Marketplace','Ordem nos cartões reconhecidos','Preço','Patrocinado'],(h.publicObservations||[]).map(r=>`<tr><td>${dt(r.observed_at)}</td><td>${esc(r.marketplace)}</td><td>${num(r.observed_order)}</td><td>${brl(r.price_cents)}</td><td>${r.sponsored==null?'—':r.sponsored?'Sim':'Não'}</td></tr>`),'Nenhuma captura pública para este candidato.')}
       ${h.note ? `<div class="muted small">${esc(h.note)}</div>` : ''}`;
+  },
+  'content-save':async d=>{
+    const accountId=state.accountId,ownProductId=state.ownProductId,generation=viewRenderSequence;
+    const out=document.querySelector(`[data-out="${CSS.escape(d.id)}"]`);
+    if(!out||!accountId||!ownProductId)return;
+    const side=out.querySelector('[data-content-side]').value;
+    const description=out.querySelector('[data-content-description]').value.trim();
+    const promoText=out.querySelector('[data-content-promotions]').value.trim(),promoKnown=out.querySelector('[data-content-promo-known]').checked;
+    const promotions=promoKnown||promoText?promoText.split(/\r?\n/).map(x=>x.trim()).filter(Boolean):undefined;
+    const files=Array.from(out.querySelector('[data-content-files]').files||[]);
+    if(files.length>20)throw Error('Limite de 20 imagens.');
+    if(!description&&promotions===undefined&&!files.length)throw Error('Informe ao menos uma evidência.');
+    const images=[];for(const file of files)images.push(await localImageFingerprint(file));
+    if(generation!==viewRenderSequence||accountId!==state.accountId||ownProductId!==state.ownProductId||!out.isConnected)return;
+    await api('competitor.content.record',{accountId,ownProductId,side,...(side==='RIVAL'?{relationId:d.id}:{}),sourceClass:'F_USER_INPUT',...(description?{description}:{}),...(promotions!==undefined?{promotions}:{}),...(images.length?{images}:{})});
+    toast('Evidência manual registrada.');
+    if(generation===viewRenderSequence&&out.isConnected)await ACTIONS.history(d);
   },
   'rebuild-rules': async () => {
     if (!state.ownProductId) { toast('Selecione um produto próprio.', 'bad'); return; }
@@ -1578,6 +1776,149 @@ const ACTIONS = {
     renderView();
   },
 
+  'assisted-limits-save': async()=>{
+    const keys=['maxCampaignDailyBudgetCents','minVariationPriceCents','maxVariationPriceCents','maxVariationStock','maxVariationPriceChangePct'];
+    const limits=Object.fromEntries(keys.map(k=>{const raw=$('#assisted-'+k).value.trim();if(!raw)throw Error('Informe todos os limites explicitamente.');return [k,Number(raw)];}));
+    if(!confirm('Confirma estes limites para a loja selecionada?'))return;
+    await run(()=>api('operation.limits.set',{accountId:state.accountId,limits,confirmed:true}),'Limites salvos.');await renderView();
+  },
+  'listing-browser-verify': async d=>{
+    const observedExternalId=prompt('ID externo observado na captura posterior (novo anúncio ou variação):');if(!observedExternalId)return;
+    const result=await api('listing.browser.verify',{accountId:state.accountId,proposalId:d.id,observedExternalId:observedExternalId.trim()});toast(result.status+' — observação, não causalidade comprovada');await renderView();
+  },
+  'product-preview': async()=>{
+    const accountId=state.accountId,id=$('#product-media').value,host=$('#product-preview-out'),generation=viewRenderSequence;
+    if(!id)throw Error('Escolha uma imagem da loja.');
+    const item=await api('media.get',{id,accountId});
+    if(generation!==viewRenderSequence||host!==$('#product-preview-out')||state.accountId!==accountId)return;
+    const image=document.createElement('img');image.alt=item.alt_text||item.filename;image.style.maxWidth='100%';image.style.maxHeight='280px';
+    const note=document.createElement('p');note.className='muted small';note.textContent='Decodificando imagem…';
+    host.replaceChildren(image,note);
+    image.onload=()=>{const w=image.naturalWidth,h=image.naturalHeight;note.textContent=w+' × '+h+' px. '+(Math.min(w,h)<800?'Considere resolução maior para manter detalhes. ':'')+(Math.abs(w/h-1)>0.15?'Considere um enquadramento mais próximo de quadrado, se permitido. ':'')+(!item.alt_text?'Adicione texto alternativo descritivo quando suportado. ':'')+'Confira fundo, legibilidade e fidelidade do produto. Critérios de qualidade são sugestões, não regras oficiais.';};
+    image.onerror=()=>{note.textContent='Não foi possível decodificar a imagem; revise o arquivo.';};
+    image.src='data:'+item.mime_type+';base64,'+item.content_base64;
+  },
+  'product-prepare': async()=>{
+    await run(()=>api('listing.change.prepare',{accountId:state.accountId,listingId:$('#product-listing').value.trim(),kind:$('#product-kind').value,mediaId:$('#product-media').value||undefined,reason:$('#product-reason').value.trim()}),'Rascunho local salvo.');await renderView();
+  },
+  'product-review': async d=>{
+    const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;
+    const p=d.kind==='VARIATION'?{accountId:state.accountId,id:d.id,decision:d.decision,reason}:{accountId:state.accountId,id:d.id,decision:d.decision,reason};
+    await run(()=>api(d.kind==='VARIATION'?'offer.variation.review':'listing.change.review',p),'Revisão registrada.');await renderView();
+  },
+  'variation-save': async()=>{
+    const id=$('#variation-id').value.trim(),options=JSON.parse($('#variation-options').value);
+    const optionalInt=id=>{const v=$('#'+id).value.trim();if(!v)return undefined;const n=Number(v);if(!Number.isSafeInteger(n)||n<0)throw Error('Valor inteiro não negativo obrigatório.');return n;};
+    const payload={accountId:state.accountId,variationName:$('#variation-name').value.trim(),options,proposedPriceCents:optionalInt('variation-price'),proposedStock:optionalInt('variation-stock')};
+    await run(()=>api(id?'offer.variation.update':'offer.variation.prepare',id?{...payload,id}:{...payload,listingId:$('#variation-listing').value.trim()}),'Rascunho salvo.');await renderView();
+  },
+  'variation-api-create': async()=>{
+    const accountId=state.accountId,selector=$('#variation-api-proposal'),proposalId=selector.value,field=$('#variation-api-token');
+    const removeId=selector.selectedOptions[0]?.dataset?.remove,editId=selector.selectedOptions[0]?.dataset?.edit,upId=selector.selectedOptions[0]?.dataset?.up;
+    const accessToken=field.value.trim();
+    if(!proposalId||!accessToken)throw Error('Selecione a proposta e informe o token da loja.');
+    if(!confirm(removeId?'Confirma remover definitivamente a variação '+removeId+' do anúncio?':editId?'Confirma editar o estoque da variação '+editId+'?':upId?'Confirma criar nova condição de venda do User Product '+upId+'?':'Confirma criar a variação aprovada no anúncio do Mercado Livre?'))return;
+    field.value='';
+    const result=await api(removeId?'variation.api.remove':editId?'variation.api.editStock':upId?'variation.api.createUpOffer':'variation.api.create',{accountId,proposalId,accessToken,confirmed:true});
+    toast(result.remoteVerified?(removeId?'Remoção confirmada pela API.':editId?'Estoque editado e conferido.':upId?'Oferta User Product criada e conferida.':'Variação criada e conferida.'):'Envio registrado. Confira o resultado antes de nova ação.');
+    await renderView();
+  },
+  'variation-api-verify': async d=>{
+    const accountId=state.accountId,field=$('#variation-api-token'),accessToken=field.value.trim();
+    if(!accessToken)throw Error('Informe o token OAuth da mesma loja.');
+    field.value='';
+    const result=await api('variation.api.verify',{accountId,proposalId:d.id,accessToken});
+    toast(result.remoteVerified?'Operação conferida pela API.':'Conferência ainda pendente.');
+    await renderView();
+  },
+  'variation-delete': async d=>{if(!confirm('Excluir este rascunho local?'))return;await run(()=>api('offer.variation.delete',{accountId:state.accountId,id:d.id}),'Rascunho excluído.');await renderView();},
+  'operation-receipt': async d=>{
+    const accountId=state.accountId;
+    const performedAt=prompt('Data e hora reais da execução, com fuso horário (ex.: 2026-11-27T15:00:00-03:00):');
+    if(!performedAt)return;const date=new Date(performedAt);if(!Number.isFinite(date.getTime()))throw Error('Data inválida.');
+    const evidenceReference=prompt('Referência da confirmação ou relatório real, sem credenciais:');if(!evidenceReference)return;
+    if(!confirm('Confirma que você executou manualmente a proposta aprovada na loja? O sistema não verificou o marketplace.'))return;
+    await run(()=>api('operation.receipt.record',{accountId,proposalKind:d.kind,proposalId:d.id,performedAt:date.toISOString(),evidenceReference,confirmedManualExecution:true}),'Relato humano registrado.');await renderView();
+  },
+  'operation-receipt-verify': async d=>{
+    const accountId=state.accountId;
+    const observedExternalId=prompt('ID externo que aparece na captura feita após a operação');
+    if(!observedExternalId?.trim())return;
+    await run(()=>api('operation.receipt.verify',{accountId,proposalKind:d.kind,proposalId:d.id,observedExternalId:observedExternalId.trim()}),'Conferência registrada.');
+    await renderView();
+  },
+  'operation-measure': async d=>{
+    const generation=viewRenderSequence,host=$('#operation-measure-out');
+    const result=await api('operation.measure',{accountId:state.accountId,proposalKind:d.kind,proposalId:d.id});
+    if(generation!==viewRenderSequence||host!==$('#operation-measure-out')||!host)return;
+    const apiMetrics=()=>'<h4>'+esc(result.measurementScope==='DUPLICATE_ORIGINAL_VS_COPY'?'Desempenho observado: original versus cópia':result.measurementScope==='USER_PRODUCT_ORIGINAL_VS_OFFER'?'Desempenho observado: anúncio original versus nova oferta UP':'Desempenho observado do anúncio inteiro')+'</h4><p>'+esc(result.measurementStatus||'')+'</p>'+
+      (result.before&&result.after?'<p>'+esc(result.before.window.from)+' a '+esc(result.before.window.to)+' × '+esc(result.after.window.from)+' a '+esc(result.after.window.to)+'</p>':'')+
+      table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">A comparação não atribui causalidade à operação.</p>';
+    if(result.duplicateObservation){
+      const copy=result.duplicateObservation;
+      host.innerHTML='<h4>Duplicação vinculada por confirmação da interface</h4><p>'+esc(copy.originalExternalId)+' → '+esc(copy.copyExternalId)+' · '+dt(copy.capturedAt)+'</p>'+apiMetrics();
+      initializeTables(host);host.scrollIntoView({block:'nearest'});return;
+    }
+    if(result.editedVariation){
+      const edited=result.editedVariation;
+      host.innerHTML='<p>Estoque confirmado pela API: '+esc(edited.externalId)+' · '+esc(edited.beforeStock)+' → '+esc(edited.stock)+' · preço mantido '+brl(edited.priceCents)+'</p>'+apiMetrics();
+      initializeTables(host);host.scrollIntoView({block:'nearest'});
+      return;
+    }
+    if(result.removedVariation){
+      const removed=result.removedVariation;
+      host.innerHTML='<h4>Remoção da variação '+esc(removed.externalId)+' confirmada pela API</h4><p>'+dt(removed.confirmedAt)+'</p>'+apiMetrics();
+      initializeTables(host);
+      host.scrollIntoView({block:'nearest'});
+      return;
+    }
+    if(result.createdOffer){
+      const offer=result.createdOffer;
+      host.innerHTML='<h4>Nova oferta User Product '+esc(offer.externalId)+' confirmada pela API</h4><p>'+dt(offer.confirmedAt)+' · Preço '+brl(offer.priceCents)+' · Estoque compartilhado '+num(offer.stock)+'</p>'+apiMetrics();
+      initializeTables(host);host.scrollIntoView({block:'nearest'});return;
+    }
+    const created=result.createdVariation;
+    if(created){
+      host.innerHTML='<h4>Variação '+esc(created.externalId)+' confirmada pela API</h4><p>'+dt(created.confirmedAt)+
+        ' · Preço '+brl(created.priceCents)+' · Estoque '+num(created.stock)+'</p>'+apiMetrics();
+      initializeTables(host);
+      host.scrollIntoView({block:'nearest'});
+      return;
+    }
+    const v=result.variationObservation;
+    const variation=v?'<h4>Variação '+esc(v.externalId)+'</h4><p>'+dt(v.before.capturedAt)+' → '+dt(v.after.capturedAt)+'</p>'+
+      table(['Estado observado','Antes','Depois'],[
+        '<tr><td>Preço</td><td>'+brl(v.before.priceCents)+'</td><td>'+brl(v.after.priceCents)+'</td></tr>',
+        '<tr><td>Estoque disponível</td><td>'+num(v.before.stock)+'</td><td>'+num(v.after.stock)+'</td></tr>',
+      ],'Sem capturas comparáveis.'):'';
+    const c=result.candidateObservation;
+    if(c){
+      host.innerHTML='<h4>Candidato observado '+esc(c.externalId)+'</h4><p>'+dt(c.capturedAt)+
+        ' · Preço '+brl(c.priceCents)+' · Estoque '+num(c.stock)+'</p><p class="muted small">Captura compatível. O vínculo com a operação ainda precisa ser comprovado.</p>';
+      host.scrollIntoView({block:'nearest'});
+      return;
+    }
+    host.innerHTML='<p>'+esc(result.status)+'</p>'+variation+(result.before&&result.after?'<p>'+esc(result.measurementScope==='CAMPAIGN'?'Campanha':'Anúncio inteiro')+' · '+esc(result.before.window.from)+' a '+esc(result.before.window.to)+' × '+esc(result.after.window.from)+' a '+esc(result.after.window.to)+'</p>':'')+table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">Mudança observada; execução e causalidade não verificadas.</p>';
+    initializeTables(host);
+    host.scrollIntoView({block:'nearest'});
+  },
+  'ads-reconcile': async()=>{
+    const accountId=state.accountId,snapshotId=$('#ads-reconcile-snapshot').value,sourceReference=$('#ads-source').value.trim();
+    const cents=id=>{const v=$('#'+id).value.trim();if(!/^\d+(?:[.,]\d{1,2})?$/.test(v))throw Error('Todos os valores devem ser explícitos, inclusive zero.');const n=Math.round(Number(v.replace(',','.'))*100);if(!Number.isSafeInteger(n)||n<0)throw Error('Valor inválido.');return n;};
+    if(!snapshotId||!sourceReference)throw Error('Selecione o snapshot e informe a referência.');
+    const netAttributedRevenueCents=cents('ads-net'),costs=Object.fromEntries(REALIZED_FIELDS.filter(([key])=>!['netRevenueCents','adSpendCents'].includes(key)).map(([key])=>[key,cents('ads-cost-'+key)]));
+    if(!confirm('Confirma que os valores conciliados pertencem à campanha e à janela do snapshot, sem custos duplicados?'))return;
+    const out=await api('ads.reconcile',{accountId,snapshotId,netAttributedRevenueCents,costs,sourceReference,confirmedSameScope:true});toast('Lucro atribuído informado: '+brl(out.profitCents));await renderView();
+  },
+  'ads-filter': async()=>{opFilters.ads={...operationInterval('ads'),kind:$('#ads-kind').value,externalId:$('#ads-external').value.trim()};await renderView();},
+  'profit-filter': async()=>{opFilters.profit=operationInterval('profit');await renderView();},
+  'inventory-filter': async()=>{opFilters.inventory.days=Number($('#inventory-days').value);await renderView();},
+  'campaign-prepare': async()=>{
+    if(!state.accountId)throw Error('Selecione uma loja.');
+    const obj=id=>{const v=JSON.parse($('#'+id).value);if(!v||Array.isArray(v)||typeof v!=='object')throw Error('Informe um objeto JSON.');return v;};
+    await run(()=>api('campaign.change.prepare',{accountId:state.accountId,marketplace:$('#campaign-market').value,campaignRef:$('#campaign-ref').value.trim(),baseline:obj('campaign-baseline'),changes:obj('campaign-changes'),reason:$('#campaign-reason').value.trim()}),'Proposta local salva. Nenhuma alteração remota.');await renderView();
+  },
+  'campaign-review': async d=>{const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;await run(()=>api('campaign.change.review',{accountId:state.accountId,proposalId:d.id,decision:d.decision,reason}),'Revisão registrada; execução remota bloqueada.');await renderView();},
   'finance-realized-save': async()=>{
     const accountId=state.accountId,generation=viewRenderSequence,host=$('#rp-out');
     const payload=realizedPayload(id=>$('#'+id).value,accountId);
@@ -1670,6 +2011,73 @@ const ACTIONS = {
     initializeTables($('#bundle-out'));
   },
 
+  'seo-config-save':async()=>{const password=$('#seo-config-password'),login=$('#seo-config-login').value.trim(),enableSchedules=$('#seo-config-schedules').checked;if(!login||!password.value)throw Error('Informe login e senha da API.');if(enableSchedules&&!confirm('Permitir agendamentos tarifados previamente autorizados?'))return;const value=password.value;password.value='';await run(()=>api('seo.config.save',{login,password:value,enableSchedules}),'Conexão salva com proteção local.');await renderView();},
+  'seo-config-clear':async()=>{if(!confirm('Desconectar e desativar todos os monitoramentos SEO?'))return;await run(()=>api('seo.config.clear',{}),'Conexão removida.');await renderView();},
+  'seo-external-research':async()=>{
+    const accountId=state.accountId,host=$('#seo-external-out'),generation=viewRenderSequence,button=document.querySelector('[data-act="seo-external-research"]');
+    const query=$('#seo-external-query').value.trim(),mode=$('#seo-external-mode').value,limit=Number($('#seo-external-limit').value),device=$('#seo-external-device').value;
+    if(!query||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Informe termo/domínio e limite de 1 a 100.');
+    if(!confirm('Autoriza uma consulta externa DataForSEO possivelmente tarifada? Não há retentativa automática.'))return;
+    if(button)button.disabled=true;
+    host.textContent='Consultando DataForSEO…';
+    try{
+      const locationName=$('#seo-external-location').value.trim()||undefined;
+      const result=mode==='googleVolume'?await api('seo.external.volume',{accountId,terms:query.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),confirmed:true}):await api('seo.external.research',{accountId,query,mode,limit,device,locationName,confirmed:true});
+      if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#seo-external-out'))return;
+      const keys=[...new Set((result.rows||[]).flatMap(row=>Object.keys(row)))];
+      const labels={keyword:'Palavra-chave',searchVolume:'Volume Google estimado',cpc:'CPC (USD)',paidCompetition:'Concorrência paga',competitionIndex:'Índice Google Ads (0–100)',monthlyHistory:'Histórico mensal',keywordDifficulty:'Dificuldade SEO Google (0–100)',intent:'Intenção Google',latestMonth:'Último mês informado',latestMonthVolume:'Volume no mês',monthlyChangePct:'Variação mensal (%)',position:'Posição absoluta',estimatedTraffic:'Tráfego estimado',organicKeywords:'Palavras-chave orgânicas',domain:'Domínio',url:'URL',title:'Título',type:'Tipo',backlinks:'Backlinks',referringDomains:'Domínios de referência',rank:'Rank DataForSEO (0–100)',brokenBacklinks:'Backlinks quebrados',averagePosition:'Posição média',medianPosition:'Posição mediana',visibility:'Visibilidade DataForSEO',keywordsCount:'Termos',targetUrl:'URL de destino',anchor:'Âncora',spamScore:'Spam score',dofollow:'Dofollow',referringPages:'Páginas de referência',metric:'Indicador',value:'Valor',unit:'Unidade',question:'Pergunta',answer:'Resposta observada',aiSearchVolume:'Volume IA estimado',citedSources:'Fontes citadas',firstSeen:'Primeira observação',lastSeen:'Última observação'};
+      host.innerHTML='<p>'+esc(result.status)+' · '+esc(result.scope)+' · '+dt(result.capturedAt)+' · Custo informado pelo provedor (USD): '+esc(result.costUsd??'desconhecido')+'</p>'+
+        (result.providerCode!=null?'<p class="muted small">Código do provedor: '+esc(result.providerCode)+'</p>':'')+
+        table(keys.map(k=>labels[k]||k),(result.rows||[]).map(row=>'<tr>'+keys.map(k=>'<td>'+esc(row[k]??'—')+'</td>').join('')+'</tr>'),'Nenhum dado externo disponível.')+
+        '<p class="muted small">Dados externos não são importados automaticamente como métricas do marketplace. Custo desconhecido não significa gratuito.</p>';
+      initializeTables(host);
+    }catch(error){if(generation===viewRenderSequence&&host===$('#seo-external-out'))host.textContent=String(error?.message||error);throw error;}
+    finally{if(button)button.disabled=false;}
+  },
+  'seo-run-show':async d=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence;
+    const r=await api('seo.external.get',{accountId,id:d.id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    const keys=[...new Set(r.rows.flatMap(row=>Object.keys(row)))];
+    host.innerHTML='<p>'+esc(r.query)+' · '+esc(r.scope)+' · '+esc(r.status)+'</p>'+table(keys,r.rows.map(row=>'<tr>'+keys.map(k=>'<td>'+esc(row[k]??'—')+'</td>').join('')+'</tr>'),'Sem resultados.');
+    initializeTables(host);
+  },
+  'seo-run-groups':async d=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence;
+    const r=await api('seo.external.groups',{accountId,id:d.id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    host.innerHTML='<p>'+esc(r.note)+'</p>'+table(['Grupo','Termo','Volume Google','Dificuldade','Aderência lexical (%)','Sinal exploratório'],r.groups.flatMap(g=>g.members.map(row=>'<tr><td>'+esc(g.label)+'</td><td>'+esc(row.keyword)+'</td><td>'+num(row.searchVolume)+'</td><td>'+num(row.keywordDifficulty)+'</td><td>'+num(row.catalogFit)+'</td><td>'+num(row.opportunitySignal)+'</td></tr>')),'Sem grupos.');
+    initializeTables(host);
+  },
+  'seo-gap':async()=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence;
+    const r=await api('seo.external.gap',{accountId,ownId:$('#seo-gap-own').value,otherId:$('#seo-gap-other').value});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    host.innerHTML='<p>'+esc(r.ownDomain)+' ('+num(r.ownSample)+') × '+esc(r.otherDomain)+' ('+num(r.otherSample)+') · '+esc(r.note)+'</p>'+table(['Termo não observado na amostra própria','Volume Google','KD','Posição concorrente'],r.rows.map(row=>'<tr><td>'+esc(row.keyword)+'</td><td>'+num(row.searchVolume)+'</td><td>'+num(row.keywordDifficulty)+'</td><td>'+num(row.position)+'</td></tr>'),'Nenhuma lacuna observada nas amostras.');
+    initializeTables(host);
+  },
+  'seo-opportunities':async()=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence,id=$('#seo-opportunities-run').value,from=$('#seo-opportunities-from').value,to=$('#seo-opportunities-to').value;
+    if(!id||!from||!to||from>to)throw Error('Selecione uma pesquisa e período financeiro.');
+    const r=await api('seo.external.opportunities',{accountId,id,periodStart:from+'T00:00:00.000Z',periodEnd:to+'T23:59:59.999Z'});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    host.innerHTML='<p>'+esc(r.note)+'</p>'+table(['Termo','Volume Google','KD','Anúncio relacionado','Aderência (%)','Margem (%)','Lucro (R$)','Estoque','Unidades observadas','Ads (R$)','Captura','Sinal'],r.rows.flatMap(row=>row.matches.length?row.matches.map(match=>'<tr><td>'+esc(row.keyword)+'</td><td>'+num(row.searchVolume)+'</td><td>'+num(row.keywordDifficulty)+'</td><td>'+esc(match.title||match.externalId)+'</td><td>'+num(match.lexicalFitPct)+'</td><td>'+num(match.marginPct,2)+'</td><td>'+brl(match.profitCents)+'</td><td>'+num(match.stock)+'</td><td>'+num(match.units)+'</td><td>'+num(match.adSpend,2)+'</td><td>'+dt(match.capturedAt)+'</td><td>'+esc(match.status)+'</td></tr>'):['<tr><td>'+esc(row.keyword)+'</td><td>'+num(row.searchVolume)+'</td><td>'+num(row.keywordDifficulty)+'</td><td colspan="9">Sem correspondência lexical suficiente</td></tr>']),'Sem resultados.');
+    initializeTables(host);
+  },
+  'seo-watch-create':async()=>{
+    const accountId=state.accountId,keyword=$('#seo-watch-keyword').value.trim(),domain=$('#seo-watch-domain').value.trim(),device=$('#seo-watch-device').value,locationName=$('#seo-watch-location').value.trim()||undefined;
+    const intervalDays=Number($('#seo-watch-interval').value),maxRuns=Number($('#seo-watch-max').value);
+    if(!Number.isInteger(maxRuns)||maxRuns<1||maxRuns>30||!Number.isInteger(intervalDays)||intervalDays<1||intervalDays>30)throw Error('Limite e intervalo entre 1 e 30.');
+    if(!confirm('Autoriza até '+maxRuns+' consultas tarifadas, uma a cada '+intervalDays+' dias, quando o agente estiver habilitado?'))return;
+    await run(()=>api('seo.watch.create',{accountId,keyword,domain,device,locationName,intervalDays,maxRuns,confirmedPaidSchedule:true}),'Monitoramento registrado.');await renderView();
+  },
+  'seo-watch-disable':async d=>{await run(()=>api('seo.watch.disable',{accountId:state.accountId,id:d.id}),'Monitoramento desativado.');await renderView();},
+  'seo-watch-history':async d=>{
+    const accountId=state.accountId,host=$('#seo-watch-out'),generation=viewRenderSequence;
+    const r=await api('seo.watch.history',{accountId,id:d.id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-watch-out'))return;
+    host.innerHTML=table(['Data','Posição Google','URL','Evidência','Consulta','Custo USD'],r.map(row=>'<tr><td>'+dt(row.at)+'</td><td>'+num(row.position)+'</td><td>'+esc(row.url??'—')+'</td><td>'+esc(row.status)+'</td><td>'+esc(row.requestStatus)+'</td><td>'+esc(row.costUsd??'—')+'</td></tr>'),'Nenhuma execução registrada.');initializeTables(host);
+  },
   'kw-add': async () => {
     await run(() => api('keyword.upsert', {
       term: $('#kw-term').value.trim(),
@@ -1690,8 +2098,10 @@ const ACTIONS = {
   },
   'kw-visibility': async () => {
     if (!state.accountId) throw new Error('selecione uma conta ativa');
-    const result = await run(() => api('keyword.visibility', { accountId: state.accountId, days: 30 }));
-    $('#kw-intelligence-out').innerHTML = table(['Termo','Amostras','Top 3','Top 10','Top 20','Share observado'], result.terms.map((r) => `<tr><td>${esc(r.term)}</td><td>${num(r.sampleSize)}</td><td>${pct(r.top3PresencePct)}</td><td>${pct(r.top10PresencePct)}</td><td>${pct(r.top20PresencePct)}</td><td>${pct(r.ownVisibilitySharePct)}</td></tr>`), 'Nenhuma SERP capturada no período.') + `<p class="muted small">${esc(result.note)}</p>`;
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#kw-intelligence-out');
+    const result = await run(() => api('keyword.visibility', { accountId, days: 30 }));
+    if(!result||generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#kw-intelligence-out'))return;
+    host.innerHTML = table(['Termo','Amostras','Top 3','Top 10','Top 20','Share observado'], result.terms.map((r) => `<tr><td>${esc(r.term)}</td><td>${num(r.sampleSize)}</td><td>${pct(r.top3PresencePct)}</td><td>${pct(r.top10PresencePct)}</td><td>${pct(r.top20PresencePct)}</td><td>${pct(r.ownVisibilitySharePct)}</td></tr>`), 'Nenhuma SERP com resultados utilizáveis no período.') + `<p class="muted small">${esc(result.note)}</p>` + (result.excludedSnapshots?`<p class="muted small">${num(result.excludedSnapshots)} captura(s) sem posições válidas ou com posições repetidas no Top 20.</p>`:'');
     initializeTables($('#kw-intelligence-out'));
   },
   'kw-cannibal': async () => {
@@ -1793,32 +2203,27 @@ const ACTIONS = {
     alert(JSON.stringify(r, null, 2));
   },
 
-  'agent-run': async () => {
-    // O serviço espera { agents, context }: o contexto é o dado que o agente
-    // analisa. Sem ele o pedido é recusado por validação.
-    const r = await run(() => api('agent.run', {
-      agents: [$('#ag-key').value],
-      context: agentContext(),
-    }), 'Agente executado.');
-    $('#agent-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+  'agent-run':async()=>{
+    const context=agentContext(),host=$('#agent-out'),generation=viewRenderSequence;
+    const r=await run(()=>api('analysis.run',{...context,mode:'PADRAO',agents:[$('#ag-key').value]}),'Análise local executada.');
+    if(generation!==viewRenderSequence||context.accountId!==state.accountId||host!==$('#agent-out'))return;
+    host.innerHTML='<pre class="json">'+esc(JSON.stringify(r,null,2))+'</pre>';
   },
-  'agent-all': async () => {
-    const r = await run(() => api('agent.run', {
-      agents: ['seo_demand', 'ads', 'competition', 'conversion_cro', 'finance', 'inventory', 'content_postpurchase',
-        'pricing_offer', 'performance_experiments', 'market_category', 'keyword_rank', 'voice_of_customer',
-        'forecast_planning', 'growth_strategy'],
-      context: agentContext(),
-      listingId: $('#ag-listing').value.trim() || null,
-      window: { days: Number($('#ag-days').value) || 30 },
-    }), '14 agentes executados com síntese do Director.');
-    $('#agent-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+  'agent-all':async()=>{
+    const context=agentContext(),host=$('#agent-out'),generation=viewRenderSequence;
+    const r=await run(()=>api('analysis.run',{...context,mode:'360'}),'14 agentes executados sobre evidências locais.');
+    if(generation!==viewRenderSequence||context.accountId!==state.accountId||host!==$('#agent-out'))return;
+    host.innerHTML='<pre class="json">'+esc(JSON.stringify(r,null,2))+'</pre>';
   },
   debate: async () => {
     const q = $('#debate-q').value.trim();
     if (!q) { toast('Escreva a pergunta.', 'bad'); return; }
-    // O serviço recebe o contexto como TEXTO: é o que vai no prompt.
-    const r = await run(() => api('agent.debate', { topic: q, context: 'sem dados coletados ainda' }));
-    $('#debate-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#debate-out');
+    if(!accountId)throw Error('Selecione uma loja.');
+    if(!confirm('Autoriza enviar a pergunta e evidências agregadas desta loja ao Gemini, sujeito ao custo da API?'))return;
+    const r=await run(()=>api('agent.workspace.ask',{accountId,topic:q,confirmedExternal:true}));
+    if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#debate-out'))return;
+    host.innerHTML=`<pre class="json">${esc(JSON.stringify(r,null,2))}</pre>`;
   },
 
   'task-refresh': async () => { if (await renderView()) toast('Progresso atualizado.'); },
@@ -2032,19 +2437,23 @@ const ACTIONS = {
     state.token = ''; sessionStorage.removeItem('mi.token');
   },
   'au-propose': async () => {
-    await run(() => api('autoupgrade.propose', {
-      module: $('#au-mod').value.trim() || 'adapters/desconhecido',
-      symptoms: $('#au-sym').value.trim(),
-      currentCode: '',
-    }), 'Proposta gerada (requer aprovação do super_admin).');
-    renderView();
+    const module=$('#au-mod').value.trim(),symptoms=$('#au-sym').value.trim(),currentCode=$('#au-code').value;
+    if(!module||symptoms.length<5||!currentCode.trim())throw Error('Informe módulo, sintoma e código.');
+    if(!confirm('Enviar o código e o sintoma ao Gemini? Confirme que não há credenciais ou dados pessoais.'))return;
+    const result=await api('autoupgrade.propose',{module,symptoms,currentCode,confirmedExternal:true});
+    if(!result?.ok)throw Error(result?.message||'Proposta não gerada.');
+    toast(result.message);renderView();
   },
-  'au-apply': async (d) => {
-    if (!confirm('Aplicar o upgrade? Um backup é criado antes e o rollback fica disponível.')) return;
-    await run(() => api('autoupgrade.apply', { proposalId: d.id, approved: true, approverRole: 'super_admin', superAdminApproved: true }), 'Upgrade aplicado.');
-    renderView();
+  'au-inspect': async d=>{
+    const generation=viewRenderSequence,host=$('#au-out');
+    const result=await api('autoupgrade.inspect',{proposalId:d.id});
+    if(generation!==viewRenderSequence||host!==$('#au-out'))return;
+    host.replaceChildren();
+    const info=document.createElement('p');info.textContent=result.note+' · '+result.checksum+' · '+result.risk+' · sintaxe: '+(result.syntaxValid?'válida':'inválida');
+    const patch=document.createElement('textarea');patch.readOnly=true;patch.rows=12;patch.value=result.diff;
+    const download=document.createElement('button');download.className='btn';download.textContent='Exportar diff para revisão';download.addEventListener('click',()=>{const url=URL.createObjectURL(new Blob([result.diff],{type:'text/plain'}));const a=document.createElement('a');a.href=url;a.download='upgrade-'+result.id+'.diff';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+    host.append(info,patch,download);
   },
-  'au-rollback': async (d) => { await run(() => api('autoupgrade.rollback', { proposalId: d.id, files: [] }), 'Revertido.'); renderView(); },
   'forecast-run': async () => {
     if (!state.accountId) throw new Error('selecione uma conta antes de gerar a previsão');
     const r = await api('forecast.run', { accountId: state.accountId, metric: $('#fcst-metric').value, horizonDays: Number($('#fcst-horizon').value) });
@@ -2215,7 +2624,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);

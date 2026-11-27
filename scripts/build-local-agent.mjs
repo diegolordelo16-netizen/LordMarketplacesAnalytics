@@ -45,6 +45,10 @@ console.log(`painel: ${panelFiles.length} arquivos (${panelFiles.join(', ')})`);
 
 // Migrações precisam existir ao lado do bundle: o serviço as aplica na inicialização.
 cpSync(join(root, 'packages/local-agent/migrations'), join(outdir, 'migrations'), { recursive: true });
+// Distribuição da licença MIT do código incorporado e ponte MCP opcional.
+mkdirSync(join(outdir,'third-party','open-seo'),{recursive:true});
+cpSync(join(root,'third-party','open-seo','LICENSE'),join(outdir,'third-party','open-seo','LICENSE'));
+cpSync(join(root,'scripts','openseo-mcp.mjs'),join(outdir,'openseo-mcp.mjs'));
 // O pacote raiz é ESM: o bundle CJS precisa de package.json próprio para ser lido como CommonJS.
 writeFileSync(join(outdir, 'package.json'), JSON.stringify({ type: 'commonjs' }, null, 2));
 

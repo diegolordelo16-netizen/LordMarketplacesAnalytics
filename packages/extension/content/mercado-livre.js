@@ -488,6 +488,253 @@
    * Publicação assistida: aprovação administrativa prévia + aba ativa + confirmação
    * nativa por anúncio. Sem formulário inequívoco ou mensagem positiva, não declara sucesso.
    */
+  let budgetDocumentNonce=null;
+  const consumedBudgetGrants=new Set();
+  function campaignBudgetContext(campaignRef){
+    if(location.origin!=='https://vendedores.mercadolivre.com.br'||currentPageKind()!=='seller_ads'||window.MI_DOM.hasChallenge(document)||document.querySelector('input[type="password"],form[action*="login"],form[action*="signin"]'))throw Error('abra a publicidade autenticada sem desafio');
+    const identity=visibleAccountIdentity();
+    if(!identity.accountId||!campaignRef||!/^[A-Za-z0-9_.:-]{1,200}$/.test(campaignRef))throw Error('identidade ou campanha não comprovada');
+    const norm=s=>String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+    const rows=Array.from(document.querySelectorAll('[data-campaign-id]')).filter(el=>window.MI_DOM.isVisible(el)&&el.getAttribute('data-campaign-id')===campaignRef);
+    if(rows.length!==1)throw Error('campanha visível ambígua ou ausente');
+    const row=rows[0];
+    const fields=Array.from(row.querySelectorAll('input[type="number"]')).filter(el=>{
+      const label=norm(el.getAttribute('aria-label')||Array.from(el.labels||[]).map(l=>l.textContent).join(' '));
+      return window.MI_DOM.isVisible(el)&&isEditableVisible(el)&&/^(orcamento diario|daily budget)( \(r\$\)| r\$)?$/.test(label)&&!el.getAttribute('form');
+    });
+    if(fields.length!==1)throw Error('orçamento diário numérico explícito não encontrado');
+    const field=fields[0],form=field.closest('form');
+    if(!form||!row.contains(form)||field.form!==form||new URL(form.action||location.href,location.href).origin!==location.origin||!['_self',''].includes(form.target)||form.querySelector('[contenteditable]:not([contenteditable="false"])'))throw Error('formulário dedicado de orçamento não comprovado');
+    const fieldsInForm=Array.from(form.elements).filter(el=>!['hidden','button','submit','reset'].includes(el.type));
+    if(fieldsInForm.length!==1||fieldsInForm[0]!==field)throw Error('formulário dedicado de orçamento não comprovado');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&el.form===form&&!['formaction','form','formtarget','formmethod'].some(attr=>el.hasAttribute(attr))&&/^(salvar|salvar alteracoes|atualizar orcamento|save|save changes|update budget)$/.test(norm(el.getAttribute('aria-label')||el.textContent)));
+    if(buttons.length!==1)throw Error('botão exclusivo de salvar orçamento não localizado');
+    const raw=String(field.value);
+    if(!/^\d+(?:\.\d{1,2})?$/.test(raw)||!Number.isSafeInteger(Math.round(Number(raw)*100)))throw Error('orçamento monetário inválido');
+    budgetDocumentNonce??=crypto.randomUUID();
+    return {field,button:buttons[0],accountId:identity.accountId,campaignRef,sourcePath:location.origin+location.pathname,documentNonce:budgetDocumentNonce,budgetCents:Math.round(Number(raw)*100)};
+  }
+  function campaignStatusContext(campaignRef){
+    const budget=campaignBudgetContext(campaignRef);
+    const row=budget.field.closest('[data-campaign-id]');
+    if(!row||row.getAttribute('data-campaign-id')!==campaignRef)throw Error('campanha não comprovada');
+    const fields=Array.from(row.querySelectorAll('select')).filter(el=>el.closest('[data-campaign-id]')===row&&
+      window.MI_DOM.isVisible(el)&&isEditableVisible(el)&&!el.multiple&&!el.hasAttribute('form')&&
+      /^(status da campanha|estado da campanha|campaign status)$/.test(operationLabel(el)));
+    if(fields.length!==1)throw Error('seletor dedicado ao estado da campanha não encontrado');
+    const field=fields[0],form=field.form;
+    if(!form||field.closest('form')!==form||!row.contains(form)||form===budget.field.form||
+        new URL(form.action||location.href,location.href).origin!==location.origin||!['_self',''].includes(form.target)||
+        form.querySelector('[contenteditable]:not([contenteditable="false"])'))throw Error('formulário dedicado de status não comprovado');
+    const fieldsInForm=Array.from(form.elements).filter(el=>!['hidden','button','submit','reset'].includes(el.type));
+    if(fieldsInForm.length!==1||fieldsInForm[0]!==field)throw Error('formulário de status contém outros campos');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&
+      el.form===form&&!['formaction','form','formtarget','formmethod'].some(attr=>el.hasAttribute(attr))&&
+      /^(salvar|salvar alteracoes|atualizar status|save|save changes|update status)$/.test(operationLabel(el)));
+    const options=Array.from(field.options);
+    const active=options.filter(el=>!el.disabled&&/^(ativo|ativa|active)$/.test(operationLabel(el)));
+    const paused=options.filter(el=>!el.disabled&&/^(pausado|pausada|paused)$/.test(operationLabel(el)));
+    if(buttons.length!==1||active.length!==1||paused.length!==1||active[0].value===paused[0].value)throw Error('controles de status ambíguos');
+    const statusValues={ACTIVE:active[0].value,PAUSED:paused[0].value};
+    const campaignStatus=Object.keys(statusValues).find(status=>statusValues[status]===field.value);
+    if(!campaignStatus)throw Error('estado da campanha não reconhecido');
+    return {...budget,field,button:buttons[0],campaignStatus,statusValues};
+  }
+  function campaignRoasContext(campaignRef){
+    const budget=campaignBudgetContext(campaignRef),row=budget.field.closest('[data-campaign-id]');
+    if(!row||row.getAttribute('data-campaign-id')!==campaignRef)throw Error('campanha não comprovada');
+    const fields=Array.from(row.querySelectorAll('input[type="number"]')).filter(el=>el.closest('[data-campaign-id]')===row&&
+      window.MI_DOM.isVisible(el)&&isEditableVisible(el)&&!el.getAttribute('form')&&
+      /^(roas objetivo|roas alvo|roas target|target roas)( \(x\))?$/.test(operationLabel(el)));
+    if(fields.length!==1)throw Error('campo dedicado de ROAS objetivo não encontrado');
+    const field=fields[0],form=field.form;
+    if(!form||field.closest('form')!==form||!row.contains(form)||form===budget.field.form||
+      new URL(form.action||location.href,location.href).origin!==location.origin||!['_self',''].includes(form.target)||
+      form.querySelector('[contenteditable]:not([contenteditable="false"])'))throw Error('formulário dedicado de ROAS não comprovado');
+    const editable=Array.from(form.elements).filter(el=>!['hidden','button','submit','reset'].includes(el.type));
+    if(editable.length!==1||editable[0]!==field)throw Error('formulário de ROAS contém outros campos');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&
+      el.form===form&&!['formaction','form','formtarget','formmethod'].some(attr=>el.hasAttribute(attr))&&
+      /^(salvar|salvar alteracoes|atualizar roas|save|save changes|update roas)$/.test(operationLabel(el)));
+    const raw=String(field.value),roasTargetHundredths=Math.round(Number(raw)*100);
+    if(buttons.length!==1||!/^\d+(?:\.\d{1,2})?$/.test(raw)||!Number.isSafeInteger(roasTargetHundredths)||roasTargetHundredths<100||roasTargetHundredths>3500)throw Error('ROAS objetivo ou controle inválido');
+    return {...budget,field,button:buttons[0],roasTargetHundredths};
+  }
+  function budgetPublicContext(campaignRef,changeKind){
+    const {field,button,statusValues,...ctx}=changeKind==='STATUS'?campaignStatusContext(campaignRef):changeKind==='ROAS'?campaignRoasContext(campaignRef):campaignBudgetContext(campaignRef);
+    return ctx;
+  }
+  async function applyCampaignBudget(grant){
+    let touched=false;
+    try{
+      if(!grant||typeof grant.id!=='string'||consumedBudgetGrants.has(grant.id)||consumedBudgetGrants.size>=100)throw Error('autorização já utilizada ou limite atingido');
+      consumedBudgetGrants.add(grant.id);
+      const changingStatus=grant.targetStatus!==undefined,changingRoas=grant.targetRoas!==undefined;
+      if(changingStatus&&changingRoas)throw Error('alteração combinada não autorizada');
+      const read=()=>changingStatus?campaignStatusContext(grant.campaignRef):changingRoas?campaignRoasContext(grant.campaignRef):campaignBudgetContext(grant.campaignRef);
+      const ctx=read();
+      const same=c=>c.accountId===grant.accountId&&c.sourcePath===grant.sourcePath&&c.documentNonce===grant.documentNonce&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
+      const validBudget=Number.isSafeInteger(grant.targetCents)&&grant.targetCents>0&&grant.targetCents<=100000000;
+      const validChange=changingStatus?['ACTIVE','PAUSED'].includes(grant.targetStatus)&&['ACTIVE','PAUSED'].includes(grant.beforeStatus)&&
+        grant.beforeStatus!==grant.targetStatus&&grant.beforeCents===grant.targetCents:changingRoas?Number.isSafeInteger(grant.beforeRoas)&&Number.isSafeInteger(grant.targetRoas)&&grant.beforeRoas>=100&&grant.beforeRoas<=3500&&grant.targetRoas>=100&&grant.targetRoas<=3500&&grant.beforeRoas!==grant.targetRoas&&grant.beforeCents===grant.targetCents:grant.beforeCents!==grant.targetCents;
+      if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||ctx.campaignStatus!==grant.beforeStatus||ctx.roasTargetHundredths!==grant.beforeRoas||!validBudget||!validChange)throw Error('contexto ou alteração aprovada diverge');
+      const description=changingStatus
+        ? (grant.targetStatus==='PAUSED'?'Pausar':'Reativar')+' a campanha. Orçamento diário: R$ '+(grant.targetCents/100).toFixed(2)
+        : changingRoas?'ROAS objetivo atual: '+(grant.beforeRoas/100).toFixed(2)+'x → '+(grant.targetRoas/100).toFixed(2)+'x; orçamento diário mantido: R$ '+(grant.targetCents/100).toFixed(2)
+        : 'Orçamento diário atual: R$ '+(grant.beforeCents/100).toFixed(2)+'\nNovo orçamento diário: R$ '+(grant.targetCents/100).toFixed(2);
+      if(!window.confirm('Campanha '+grant.campaignRef+'\n'+description+'\nConfirma alterar e salvar agora?'))return {outcome:'CANCELLED',message:'cancelado antes de editar'};
+      const again=read();
+      if(!same(again)||again.field!==ctx.field||again.button!==ctx.button||again.budgetCents!==grant.beforeCents||again.campaignStatus!==grant.beforeStatus||again.roasTargetHundredths!==grant.beforeRoas||
+          (changingStatus&&again.statusValues[grant.targetStatus]!==ctx.statusValues[grant.targetStatus]))throw Error('contexto mudou antes da edição');
+      const prototype=changingStatus?HTMLSelectElement.prototype:HTMLInputElement.prototype;
+      const setter=Object.getOwnPropertyDescriptor(prototype,'value')?.set;
+      if(!setter)throw Error('campo não oferece setter nativo');
+      touched=true;
+      setter.call(again.field,changingStatus?again.statusValues[grant.targetStatus]:changingRoas?(grant.targetRoas/100).toFixed(2):(grant.targetCents/100).toFixed(2));
+      again.field.dispatchEvent(new Event('input',{bubbles:true}));again.field.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const ready=read();
+      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||ready.campaignStatus!==grant.targetStatus||ready.roasTargetHundredths!==grant.targetRoas||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
+      ready.button.click();
+      return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de salvar acionado. Confira a campanha antes de qualquer nova tentativa.'};
+    }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
+  }
+
+  const consumedListingGrants=new Set();
+  function operationLabel(el){
+    return String(el.getAttribute('aria-label')||Array.from(el.labels||[]).map(l=>l.textContent).join(' ')||el.textContent||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+  }
+  function listingOperationContext(action,externalListingId,variationId,allowFilled=false){
+    if(location.origin!=='https://vendedores.mercadolivre.com.br'||window.MI_DOM.hasChallenge(document)||document.querySelector('input[type="password"],form[action*="login"],form[action*="signin"]')||!/^(MLB-?\d{5,})$/i.test(externalListingId))throw Error('sessão ou anúncio não reconhecido');
+    const accountId=visibleAccountIdentity().accountId;
+    if(!accountId)throw Error('conta não comprovada');
+    budgetDocumentNonce??=crypto.randomUUID();
+    const base={accountId,externalListingId,action,sourcePath:location.origin+location.pathname,documentNonce:budgetDocumentNonce};
+    const unique=(items,message)=>{if(items.length!==1)throw Error(message);return items[0];};
+    const visible=el=>window.MI_DOM.isVisible(el);
+    const safeButton=el=>visible(el)&&!el.getAttribute('formaction')&&!el.getAttribute('form')&&!el.getAttribute('href')&&!el.getAttribute('formmethod')&&!el.getAttribute('formtarget');
+    const listingIds=el=>['data-item-id','data-listing-id'].map(k=>el.getAttribute(k)).filter(Boolean);
+    if(action==='DUPLICATE'){
+      if(currentPageKind()!=='seller_listings'||variationId)throw Error('abra a lista de anúncios');
+      const row=unique(Array.from(document.querySelectorAll('[data-item-id],[data-listing-id]')).filter(el=>visible(el)&&listingIds(el).length>0&&listingIds(el).every(id=>id===externalListingId)),'linha explícita e única do anúncio necessária');
+      const button=unique(Array.from(row.querySelectorAll('button[type="button"]')).filter(el=>safeButton(el)&&el.closest('[data-item-id],[data-listing-id]')===row&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.form&&!el.closest('form')&&/^(duplicar anuncio|duplicar publicacao|duplicate listing)$/.test(operationLabel(el))),'controle explícito de duplicação não encontrado');
+      return {base,fields:{},button,values:{}};
+    }
+    if(!['CREATE_VARIATION','EDIT_VARIATION'].includes(action)||currentPageKind()!=='seller_listing_edit'||currentExternalListingId()!==externalListingId)throw Error('abra o editor do anúncio aprovado');
+    let region=document;
+    if(action==='EDIT_VARIATION'){
+      if(!/^[A-Za-z0-9_.:-]{1,200}$/.test(variationId||''))throw Error('ID explícito da variação necessário');
+      region=unique(Array.from(document.querySelectorAll('[data-variation-id]')).filter(el=>visible(el)&&el.getAttribute('data-variation-id')===variationId),'variação ambígua ou ausente');
+      const parent=region.closest('[data-item-id],[data-listing-id]');
+      if(parent&&listingIds(parent).some(id=>id!==externalListingId))throw Error('variação pertence a outro anúncio');
+      const label=unique(Array.from(region.querySelectorAll('[data-testid="variation-name"]')).filter(visible),'nome explícito da variação necessário');
+      const name=String(label.textContent||'').trim();
+      if(!name||name.length>120)throw Error('nome da variação não verificável');
+      base.variationId=variationId;base.variationLabel=name;
+    }else if(variationId)throw Error('formulário de nova variação necessário');
+    const savePattern=action==='CREATE_VARIATION'?/^(criar variacao|adicionar variacao|salvar nova variacao|create variation|add variation)$/:/^(salvar variacao|atualizar variacao|save variation|update variation)$/;
+    const candidates=Array.from(region.querySelectorAll('form')).filter(form=>visible(form)&&(action!=='EDIT_VARIATION'||form.closest('[data-variation-id]')===region)&&Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).some(el=>el.form===form&&safeButton(el)&&savePattern.test(operationLabel(el))));
+    const form=unique(candidates,'formulário dedicado de variação ausente ou ambíguo');
+    if(new URL(form.action||location.href,location.href).origin!==location.origin||form.getAttribute('target')&&!['_self',''].includes(form.getAttribute('target')))throw Error('destino do formulário não autorizado');
+    const button=unique(Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>el.form===form&&safeButton(el)&&savePattern.test(operationLabel(el))),'controle de salvar ambíguo');
+    const definitions=action==='CREATE_VARIATION'?{
+      name:['text',/^(nome da variacao|variation name)$/],option:['text',/^(opcao da variacao|valor da variacao|variation option|variation value)$/],
+      priceCents:['number',/^(preco|price)( \(r\$\)| r\$)?$/],stock:['number',/^(estoque|stock|quantidade disponivel|available quantity)$/]
+    }:{priceCents:['number',/^(preco|price)( \(r\$\)| r\$)?$/],stock:['number',/^(estoque|stock|quantidade disponivel|available quantity)$/]};
+    const controls=Array.from(form.elements||[]).filter(el=>!['hidden','button','submit','reset'].includes(String(el.type||'').toLowerCase()));
+    if(controls.length!==Object.keys(definitions).length||form.querySelector('[contenteditable="true"]'))throw Error('formulário contém outros campos; revise manualmente');
+    const fields={},values={};
+    for(const [key,[type,pattern]] of Object.entries(definitions)){
+      const field=unique(controls.filter(el=>el.tagName==='INPUT'&&el.type===type&&el.form===form&&visible(el)&&isEditableVisible(el)&&!el.getAttribute('form')&&pattern.test(operationLabel(el))),'campo '+key+' não comprovado');
+      fields[key]=field;const raw=String(field.value??'');
+      if(key==='priceCents'){
+        if(raw===''&&action==='CREATE_VARIATION')values[key]=null;
+        else if(/^\d+(?:\.\d{1,2})?$/.test(raw)&&Number.isSafeInteger(Math.round(Number(raw)*100)))values[key]=Math.round(Number(raw)*100);
+        else throw Error('preço inválido');
+      }else if(key==='stock'){
+        if(raw===''&&action==='CREATE_VARIATION')values[key]=null;
+        else if(/^\d+$/.test(raw)&&Number.isSafeInteger(Number(raw)))values[key]=Number(raw);
+        else throw Error('estoque inválido');
+      }else values[key]=raw.trim();
+    }
+    if(action==='CREATE_VARIATION'&&!allowFilled&&(values.name!==''||values.option!==''||values.priceCents!==null||!(values.stock===null||values.stock===0)))throw Error('formulário de criação deve estar vazio antes da autorização');
+    if(action==='EDIT_VARIATION'){base.beforePriceCents=values.priceCents;base.beforeStock=values.stock;}
+    return {base,fields,button,values};
+  }
+  function listingOperationPublicContext(message){
+    return listingOperationContext(message.action,message.externalListingId,message.variationId).base;
+  }
+  function duplicateMessages(){
+    return Array.from(document.querySelectorAll('[role="alert"], [aria-live="polite"], [class*="snackbar"], [class*="toast"]'))
+      .filter(el=>window.MI_DOM.isVisible(el)).map(el=>String(el.textContent||'').replace(/\s+/g,' ').trim()).filter(text=>text&&text.length<=500);
+  }
+  async function readDuplicateReceipt(sourceId,existing){
+    for(let attempt=0;attempt<8;attempt++){
+      if(window.MI_DOM.hasChallenge(document)||visibleAccountIdentity().accountId==null)return null;
+      const candidates=duplicateMessages().filter(text=>!existing.has(text)).flatMap(message=>{
+        const normalized=message.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+        const match=/^ANUNCIO (MLB-?\d{5,17}) (?:FOI )?DUPLICADO COM SUCESSO[.!]? NOVO ANUNCIO: ?(MLB-?\d{5,17})[.!]?$/.exec(normalized);
+        if(!match)return [];
+        const source=match[1].replace('-',''),newId=match[2].replace('-','');
+        return source===sourceId.replace('-','').toUpperCase()&&source!==newId?[{message,newId}]:[];
+      });
+      const unique=new Map(candidates.map(row=>[row.newId,row]));
+      if(unique.size===1)return [...unique.values()][0];
+      if(unique.size>1)return null;
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    return null;
+  }
+  async function applyListingOperation(grant){
+    let touched=false;
+    try{
+      if(!grant||typeof grant.id!=='string'||consumedListingGrants.has(grant.id)||consumedListingGrants.size>=100)throw Error('autorização já utilizada ou limite atingido');
+      consumedListingGrants.add(grant.id);
+      const g=grant.context,p=grant.plan;
+      const initial=listingOperationContext(g.action,g.externalListingId,g.variationId);
+      const contextMatches=c=>['accountId','externalListingId','action','sourcePath','documentNonce','variationId','variationLabel'].every(k=>c.base[k]===g[k])&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
+      const baselineMatches=c=>contextMatches(c)&&c.base.beforePriceCents===g.beforePriceCents&&c.base.beforeStock===g.beforeStock;
+      if(!baselineMatches(initial))throw Error('contexto mudou');
+      if(g.action!=='DUPLICATE'&&(!Number.isSafeInteger(p.priceCents)||p.priceCents<=0||p.priceCents>100000000||!Number.isSafeInteger(p.stock)||p.stock<0||p.stock>1000000))throw Error('valores da proposta inválidos');
+      const summary=g.action==='DUPLICATE'?'Duplicar anúncio '+g.externalListingId+' — '+p.originalTitle:'Variação de '+g.externalListingId+' — '+p.name+(p.option?' / '+p.option:'')+'\nPreço: R$ '+(p.priceCents/100).toFixed(2)+'\nEstoque: '+p.stock;
+      if(!window.confirm('Loja: '+g.accountId+'\n'+summary+'\nConfirma acionar o controle desta proposta agora? A operação pode alterar ou criar uma oferta.'))return {outcome:'CANCELLED',message:'cancelado antes da edição'};
+      const again=listingOperationContext(g.action,g.externalListingId,g.variationId);
+      if(!baselineMatches(again)||again.button!==initial.button||Object.keys(initial.fields).some(k=>again.fields[k]!==initial.fields[k]))throw Error('formulário mudou antes da ação');
+      if(g.action==='DUPLICATE'){
+        const before=captureListingList();
+        const filters=window.MI_DOM.collectionFilterState?.(document);
+        const warnings=window.MI_DOM.collectionCoverage?.(document)??[];
+        const sourceVisible=before.listings.some(row=>row.listingId===g.externalListingId&&row.title===p.originalTitle);
+        const baseline=sourceVisible&&before.accountId===g.accountId&&before.listings.length<MAX_LISTINGS&&
+          filters&&typeof filters.signature==='string'&&!filters.warnings.length&&!warnings.length
+          ? {listingIds:before.listings.map(row=>row.listingId),filterSignature:filters.signature,
+            spaPage:window.MI_DOM.spaPaginationState?.(document)?.page}
+          : null;
+        const existing=new Set(duplicateMessages());
+        touched=true;again.button.click();
+        const receipt=await readDuplicateReceipt(g.externalListingId,existing);
+        const duplicateReceipt=receipt&&visibleAccountIdentity().accountId===g.accountId?receipt:null;
+        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,...(duplicateReceipt?{duplicateReceipt}:{}),message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
+      }
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+      if(!setter)throw Error('setter nativo ausente');
+      const wanted=g.action==='CREATE_VARIATION'?{name:p.name,option:p.option,priceCents:p.priceCents,stock:p.stock}:{priceCents:p.priceCents,stock:p.stock};
+      const expected={...again.values};
+      for(const [key,value] of Object.entries(wanted)){
+        const now=listingOperationContext(g.action,g.externalListingId,g.variationId,touched);
+        if(!contextMatches(now)||now.button!==again.button||Object.keys(again.fields).some(k=>now.fields[k]!==again.fields[k]||now.values[k]!==expected[k]))throw Error('contexto mudou durante o preenchimento');
+        touched=true;setter.call(now.fields[key],key==='priceCents'?(Number(value)/100).toFixed(2):String(value));
+        expected[key]=value;
+        now.fields[key].dispatchEvent(new Event('input',{bubbles:true}));now.fields[key].dispatchEvent(new Event('change',{bubbles:true}));
+      }
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const ready=listingOperationContext(g.action,g.externalListingId,g.variationId,true);
+      if(!contextMatches(ready)||ready.button!==again.button||Object.entries(wanted).some(([k,v])=>ready.fields[k]!==again.fields[k]||ready.values[k]!==v||!ready.fields[k].checkValidity())||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('dados finais ou controle de salvar divergiram; revise manualmente');
+      ready.button.click();
+      return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de variação acionado. Confira o resultado antes de qualquer nova tentativa.'};
+    }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
+  }
+
   async function publishApprovedChange(message) {
     const { task, item, externalListingId } = message ?? {};
     if (task?.mode !== 'PUBLISH') throw new Error('tarefa não possui autorização de publicação');
@@ -591,6 +838,20 @@
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;
+    }
+    if(message?.type==='MI_LISTING_OPERATION_CONTEXT'){
+      try{sendResponse({ok:true,...listingOperationPublicContext(message)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
+      return false;
+    }
+    if(message?.type==='MI_LISTING_OPERATION_APPLY'){
+      applyListingOperation(message.grant).then(sendResponse).catch(error=>sendResponse({outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)}));return true;
+    }
+    if(message?.type==='MI_CAMPAIGN_BUDGET_CONTEXT'){
+      try{sendResponse({ok:true,...budgetPublicContext(message.campaignRef,message.changeKind)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
+      return false;
+    }
+    if(message?.type==='MI_CAMPAIGN_BUDGET_APPLY'){
+      applyCampaignBudget(message.grant).then(sendResponse).catch(error=>sendResponse({outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)}));return true;
     }
     if (message?.type === 'MI_TASK_CONTEXT') {
       const current = currentPageKind();

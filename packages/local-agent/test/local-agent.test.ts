@@ -7,7 +7,9 @@ import { TaskScheduler } from '../src/scheduler/task-scheduler';
 import { SecretStore, hashPassword, loadMachineSecret } from '../src/security/secrets';
 import { GeminiClient } from '../src/ai/gemini-client';
 import { KnowledgeBase } from '../src/ai/knowledge-base';
-import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths } from '../src/ai/auto-upgrade';
+import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths, validatePatchSyntax } from '../src/ai/auto-upgrade';
+import { matchedSeoEvidence } from '../src/ai/agent-evidence';
+import { runAgents, synthesize, type AgentContext } from '../src/ai/agents';
 import { CaptureService } from '../src/capture/capture-service';
 import { LocalService, redactPII } from '../src/service';
 import { evaluateGuard, GUARD_CHECKS } from '../src/guard/automation-guard';
@@ -68,6 +70,92 @@ function seedImportAccount(id: string): void {
 }
 
 
+describe('Plano de busca competitiva',()=>{
+  it('prepara links públicos sem inventar candidatos e isola a conta',async()=>{
+    const accountId='search-plan-a',other='search-plan-b';seedImportAccount(accountId);seedImportAccount(other);
+    const own=await call('competitor.ownProduct.upsert',{accountId,marketplace:'mercado_livre',title:'Capacete teste',brand:'Marca',model:'Modelo',attributes:{material:'ABS'}});
+    const id=(own.result as {id:string}).id;
+    const r=await call('competitor.searchPlan',{accountId,ownProductId:id,marketplaces:['mercado_livre','shopee','amazon']});
+    expect(r.result).toMatchObject({links:expect.arrayContaining([{marketplace:'amazon',kind:'TITLE',term:'Capacete teste',url:'https://www.amazon.com.br/s?k=Capacete%20teste',targetResults:20}])});
+    expect((await call('competitor.searchPlan',{accountId:other,ownProductId:id,marketplaces:['amazon']})).ok).toBe(false);
+    const capture={accountId,ownProductId:id,marketplace:'amazon',sourceUrl:'https://www.amazon.com.br/s?k=capacete',observedAt:new Date().toISOString(),candidates:[{externalId:'B012345678',title:'Capacete teste',url:'https://www.amazon.com.br/dp/B012345678',priceCents:29900,sponsored:null,observedOrder:1}]};
+    expect((await call('competitor.capturePublicSearch',{...capture,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.capturePublicSearch',{...capture,candidates:[{...capture.candidates[0],url:'https://wrong.com/dp/B012345678'}]})).ok).toBe(false);
+    expect((await call('competitor.capturePublicSearch',capture)).result).toMatchObject({observedCards:1,coverageVerified:false});
+    expect(db.row('SELECT observed_order,price_cents,sponsored FROM competitor_public_search_observations WHERE account_id=?',accountId)).toMatchObject({observed_order:1,price_cents:29900,sponsored:null});
+    const relation=db.row<{id:string}>('SELECT id FROM competitor_relations WHERE own_product_id=?',id)!;
+    expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId})).result).toMatchObject({publicObservations:[{observed_order:1,price_cents:29900}]});
+    expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.approve',{relationId:relation.id})).ok).toBe(true);
+    const latest={...capture,observedAt:new Date(Date.now()+1000).toISOString(),candidates:[{...capture.candidates[0],priceCents:28900}]};
+    // Public observations are only eligible after their timestamp, so use historical timestamps.
+    latest.observedAt=new Date(Date.now()-1000).toISOString();
+    expect((await call('competitor.capturePublicSearch',latest)).ok).toBe(true);
+    expect((await call('competitor.capturePublicSearch',latest)).ok).toBe(true);
+    expect(db.row('SELECT COUNT(*) n FROM competitor_monitoring_points WHERE relation_id=?',relation.id)).toMatchObject({n:1});
+    expect((await call('competitor.monitoring.record',{relationId:relation.id,capturedAt:'2025-01-01T00:00:00.000Z',priceCents:1})).ok).toBe(true);
+    expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId,limit:1})).result).toMatchObject({points:[{price_cents:28900}]});
+    expect((await call('competitor.monitoring.set',{relationId:relation.id,state:'PAUSADO'})).ok).toBe(true);
+    expect((await call('competitor.monitoring.record',{relationId:relation.id,priceCents:2})).ok).toBe(false);
+    expect((await call('competitor.capturePublicSearch',{...latest,observedAt:new Date().toISOString()})).ok).toBe(true);
+    expect(db.row('SELECT COUNT(*) n FROM competitor_monitoring_points WHERE relation_id=?',relation.id)).toMatchObject({n:2});
+    expect((await call('competitor.approve',{relationId:relation.id})).ok).toBe(true);
+    expect((await call('competitor.monitoring.record',{relationId:relation.id,priceCents:3,promotions:['Cupom observado']})).ok).toBe(true);
+    expect((await call('competitor.evidence.compare',{relationId:relation.id,accountId})).result).toMatchObject({promotions:['Cupom observado']});
+
+  });
+});
+describe('Pós-venda lexical por conta',()=>{
+  it('preserva fonte, distingue menções de problemas comprovados e evita cruzamento de loja',async()=>{
+    const accountId='voc-insights-a',other='voc-insights-b';seedImportAccount(accountId);seedImportAccount(other);
+    await call('voc.ingest',{accountId,kind:'QUESTION',text:'Qual o tamanho e medida?'});
+    await call('voc.ingest',{accountId,kind:'QUESTION',text:'Qual o tamanho?'});
+    await call('voc.ingest',{accountId:other,kind:'COMPLAINT',text:'Produto com defeito'});
+    const result=await call('voc.insights',{accountId,days:30});
+    expect(result.result).toMatchObject({analyzed:2,groups:[{category:'SIZE_FIT',source:'F_USER_INPUT',count:2,recurring:true,classification:'LEXICAL_MENTION_NOT_CONFIRMED_PROBLEM'}]});
+    expect(JSON.stringify(result)).not.toContain('QUALITY');
+  });
+});
+describe('SEO externo integrado',()=>{
+  it('isola histórico por loja, compara amostras e executa monitoramento opt-in sem repetir',async()=>{
+    const accountId='seo-local-a',other='seo-local-b';seedImportAccount(accountId);seedImportAccount(other);
+    vi.stubEnv('MI_DATAFORSEO_LOGIN','fixture-user');vi.stubEnv('MI_DATAFORSEO_PASSWORD','fixture-secret');vi.stubEnv('MI_DATAFORSEO_ENABLE_SCHEDULES','false');
+    let count=0;
+    vi.stubGlobal('fetch',vi.fn(async(_url:string,init:RequestInit)=>{
+      count++;
+      const request=JSON.parse(String(init.body))[0];
+      const items=request.target?[{keyword_data:{keyword:request.target==='own.com'?'capacete':'luva moto',keyword_info:{search_volume:100},keyword_properties:{keyword_difficulty:20}},ranked_serp_element:{serp_item:{rank_absolute:3}}}]:
+        [{type:'organic',domain:'own.com',rank_absolute:4,url:'https://own.com/'}];
+      return Response.json({status_code:20000,cost:0.01,tasks:[{status_code:20000,result:[{items,total_count:1}]}]});
+    }));
+    try{
+      const query=(target:string)=>call('seo.external.research',{accountId,mode:'ranked',query:target,confirmed:true});
+      const first=(await query('own.com')).result as {id:string},second=(await query('rival.com')).result as {id:string};
+      expect(first.id).toBeTruthy();expect(second.id).toBeTruthy();
+      expect((await call('seo.external.get',{accountId:other,id:first.id})).ok).toBe(false);
+      expect((await call('seo.external.history',{accountId:other})).result).toEqual([]);
+      expect((await call('seo.external.gap',{accountId,ownId:first.id,otherId:second.id})).result).toMatchObject({rows:[{keyword:'luva moto',comparison:'NOT_OBSERVED_IN_OWN_SAMPLE'}]});
+      expect((await call('seo.external.groups',{accountId,id:first.id})).result).toMatchObject({groups:[{members:[{keyword:'capacete',opportunitySignal:null}]}]});
+      expect(JSON.stringify((await call('seo.external.history',{accountId})).result)).not.toContain('fixture-secret');
+      const periodStart='2025-01-01T00:00:00.000Z',periodEnd='2025-01-31T23:59:59.999Z';
+      const stamp='2025-01-01T00:00:00.000Z';
+      db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run('seo-catalog-match',accountId,'mercado_livre','MLB987654321','Capacete','ACTIVE',stamp,stamp);
+      const joined=await call('seo.external.opportunities',{accountId,id:first.id,periodStart,periodEnd});
+      expect(joined.result).toMatchObject({rows:[{keyword:'capacete',matches:[{listingId:'seo-catalog-match',profitCents:null,stock:null,status:'INSUFFICIENT_DATA'}]}]});
+      expect((await call('seo.external.opportunities',{accountId:other,id:first.id,periodStart,periodEnd})).ok).toBe(false);
+      const watch=(await call('seo.watch.create',{accountId,keyword:'capacete',domain:'own.com',intervalDays:1,maxRuns:1,confirmedPaidSchedule:true})).result as {id:string};
+      expect(watch.id).toBeTruthy();db.db.prepare("UPDATE seo_rank_watches SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(watch.id);
+      await service.processScheduledWork();expect(count).toBe(2);
+      vi.stubEnv('MI_DATAFORSEO_ENABLE_SCHEDULES','true');await service.processScheduledWork();await service.processScheduledWork();expect(count).toBe(3);
+      expect((await call('seo.watch.history',{accountId,id:watch.id})).result).toMatchObject([{position:4,status:'OBSERVED',costUsd:0.01}]);
+      expect((await call('seo.watch.history',{accountId:other,id:watch.id})).ok).toBe(false);
+      expect((await call('seo.watch.list',{accountId})).result).toMatchObject([{id:watch.id,remaining:0,enabled:0}]);
+      const config=await call('seo.config.save',{login:'encrypted-login',password:'encrypted-password',enableSchedules:false});expect(config.result).toMatchObject({configured:true,source:'LOCAL_ENCRYPTED',schedulesEnabled:false});expect(JSON.stringify(config)).not.toContain('encrypted-password');
+      expect((await call('seo.config.clear',{})).result).toMatchObject({configured:false,schedulesEnabled:false});
+    }finally{vi.unstubAllGlobals();vi.unstubAllEnvs();}
+  });
+});
+
 describe('capacidades adicionais 3.10.3', () => {
   it('persiste mais de 200 páginas, mantém filtros e retoma somente pendências no mesmo lote lógico', async () => {
     seedImportAccount('acct-sync-large');
@@ -113,6 +201,103 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('sync.completeAccount',{...req,leaseToken:claim.leaseToken,status:'FAILED'})).ok).toBe(false);
     expect((await call('sync.completeAccount',{...req,leaseToken:renewed.leaseToken,status:'FAILED'})).ok).toBe(true);
     expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:true});
+  });
+
+  it('resume pós-venda por loja, janela e fonte e preserva notas ausentes',async()=>{
+    const accountId='voc-overview',other='voc-overview-other';
+    seedImportAccount(accountId);seedImportAccount(other);
+    const recent=new Date(Date.now()-86400000).toISOString();
+    const old=new Date(Date.now()-40*86400000).toISOString();
+    const capture=await call('voc.ingestBatch',{accountId,items:[
+      {kind:'REVIEW',text:'Ótimo produto',rating:4,observedAt:recent},
+      {kind:'REVIEW',text:'Produto recebido',observedAt:recent},
+      {kind:'REVIEW',text:'Avaliação antiga',rating:1,observedAt:old},
+      {kind:'RETURN_REASON',text:'Tamanho divergente',externalRef:'return-1',observedAt:recent},
+      {kind:'RETURN_REASON',text:'Tamanho divergente',externalRef:'return-2',observedAt:recent},
+    ]});
+    expect(capture.ok).toBe(true);
+    expect((await call('voc.ingest',{accountId,kind:'REVIEW',text:'Registro manual',rating:2})).ok).toBe(true);
+    expect((await call('voc.ingest',{accountId:other,kind:'QUESTION',text:'Prazo?'})).ok).toBe(true);
+    expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_reputation',url:'https://vendedores.mercadolivre.com.br/reputacao',sourceClass:'A_PRIMARY_UI',referenceAt:recent,collectedAt:recent,method:'content_script_dom',listings:[],accountMetrics:{reviewRating:4.5}})).ok).toBe(true);
+    expect((await call('voc.overview',{accountId})).result).toMatchObject({
+      summary:[
+        {kind:'RETURN_REASON',source_class:'A_PRIMARY_UI',count:2,rated:0,average_rating:null},
+        {kind:'REVIEW',source_class:'A_PRIMARY_UI',count:2,rated:1,average_rating:4},
+        {kind:'REVIEW',source_class:'F_USER_INPUT',count:1,rated:1,average_rating:2},
+      ],
+      reputation:[{rating:4.5,reviewCount:null,partial:false}],
+      returnReasons:[{reason:'Tamanho divergente',source_class:'A_PRIMARY_UI',count:2}],
+    });
+    expect((await call('voc.overview',{accountId:other})).result).toMatchObject({summary:[{kind:'QUESTION',rated:0,average_rating:null}],reputation:[]});
+    expect((await call('voc.overview',{accountId:'unknown'})).ok).toBe(false);
+  });
+
+  it('compara a captura mais recente de concorrência sem misturar dados antigos ou lojas',async()=>{
+    const accountId='comp-evidence-account',other='comp-evidence-other',relationId='comp-evidence-relation';
+    seedImportAccount(accountId);seedImportAccount(other);
+    const old='2025-01-01T12:00:00.000Z',recent='2025-01-02T12:00:00.000Z';
+    db.db.prepare(`INSERT INTO own_products(id,account_id,marketplace,title,price_cents,shipping_cents,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run('comp-own',accountId,'mercado_livre','Produto próprio',1000,500,old,old);
+    db.db.prepare(`INSERT INTO competitor_candidates(id,own_product_id,marketplace,title,source_class,discovery_method,first_seen_at,last_seen_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run('comp-candidate','comp-own','mercado_livre','Concorrente','A_PRIMARY_UI','TEST',old,old);
+    db.db.prepare(`INSERT INTO competitor_relations(id,own_product_id,candidate_id,relation_kind,status,similarity_pct,rationale_json,suggested_by,suggested_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(relationId,'comp-own','comp-candidate','DIRETO','APROVADO',100,'{}','RULES',old);
+    const source={relationId,sourceClass:'A_PRIMARY_UI'};
+    expect((await call('competitor.evidence.record',{...source,capturedAt:recent,priceCents:1100,sponsored:false})).ok).toBe(true);
+    expect((await call('competitor.evidence.record',{...source,capturedAt:old,priceCents:900,shippingCents:999,sponsored:true})).ok).toBe(true);
+    expect((await call('competitor.evidence.record',{...source,capturedAt:'2099-01-01T00:00:00.000Z',priceCents:0})).ok).toBe(false);
+    expect((await call('competitor.evidence.compare',{relationId,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.evidence.compare',{relationId,accountId})).result).toMatchObject({
+      observedAt:recent,priceDifferenceCents:100,shippingDifferenceCents:null,sponsored:false,
+    });
+    expect(db.row('SELECT last_seen_at FROM competitor_candidates WHERE id=?','comp-candidate')).toMatchObject({last_seen_at:recent});
+    const base={accountId,ownProductId:'comp-own',sourceClass:'F_USER_INPUT'};
+    expect((await call('competitor.content.record',{...base,side:'OWN',description:'Capacete seguro leve',promotions:['Cupom 10%'],images:[{dhash64:'0000000000000000',sha256:'a'.repeat(64)}]})).ok).toBe(true);
+    expect((await call('competitor.content.record',{...base,side:'RIVAL',relationId,description:'Capacete seguro esportivo',promotions:['Cupom 10%','Frete promocional'],images:[{dhash64:'000000000000000f',sha256:'b'.repeat(64)}]})).ok).toBe(true);
+    expect((await call('competitor.content.record',{...base,accountId:other,side:'OWN',description:'intruso'})).ok).toBe(false);
+    expect((await call('competitor.content.record',{...base,side:'RIVAL',relationId,sourceClass:'A_PRIMARY_UI',sourceUrl:'https://www.amazon.com.br/dp/B012345678',description:'origem incorreta'})).ok).toBe(false);
+    const evidence=await call('competitor.evidence.compare',{relationId,accountId});
+    expect(evidence.result).toMatchObject({content:{
+      description:{comparison:{lexicalSimilarityPct:50,rivalOnlyTerms:['esportivo']},own:{sourceClass:'F_USER_INPUT'}},
+      promotions:{comparison:{common:['Cupom 10%'],rivalOnly:['Frete promocional']}},
+      images:{comparison:{identicalPairs:0,comparableVisualPairs:1,bestMatches:[{visualSimilarityPct:93.8}]}},
+    }});
+
+  });
+
+  it('consulta volume Google Ads no recorte BR e conserva zero e ausência de dados',async()=>{
+    const accountId='google-volume-br';
+    seedImportAccount(accountId);
+    const input={accountId,terms:['Capacete','capacete','Sem medida','Outro'],login:'fixture@example.test',password:'fixture-password',confirmedPaidRequest:true};
+    let taskStatus=20000;
+    const fetchMock=vi.fn(async (url:string,init:RequestInit)=>{
+      expect(url).toBe('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live');
+      expect(init.redirect).toBe('error');
+      expect(JSON.parse(String(init.body))).toEqual([{keywords:['Capacete','Sem medida','Outro'],location_code:2076,language_code:'pt',search_partners:false}]);
+      return Response.json({status_code:20000,cost:0.02,tasks:[{status_code:taskStatus,result:[
+        {keyword:'capacete',search_volume:0,competition:'LOW',competition_index:0,
+          monthly_searches:[{year:2025,month:2,search_volume:null},{year:2025,month:3,search_volume:0}]},
+        {keyword:'sem medida',search_volume:null},
+        {keyword:'fora da consulta',search_volume:400},
+      ]}]});
+    });
+    vi.stubGlobal('fetch',fetchMock);
+    try{
+      expect((await call('keyword.googleVolume',{...input,confirmedPaidRequest:false})).ok).toBe(false);
+      expect((await call('keyword.googleVolume',{...input,terms:['emoji 😀']})).ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      const result=await call('keyword.googleVolume',input);
+      expect(result.result).toMatchObject({source:'GOOGLE_ADS_VIA_DATAFORSEO',country:'BR',providerCostUsd:0.02,items:[
+        {term:'Capacete',volume:0,competitionIndex:0,monthly:[{year:2025,month:3,volume:0},{year:2025,month:2,volume:null}]},
+        {term:'Sem medida',volume:null},
+        {term:'Outro',volume:null},
+      ]});
+      expect(JSON.stringify(result)).not.toContain(input.password);
+      taskStatus=40501;
+      expect((await call('keyword.googleVolume',input)).ok).toBe(false);
+    }finally{
+      vi.unstubAllGlobals();
+    }
   });
 
   it('persiste detalhes de campanha e variação por conta sem somar aos totais e rejeita escopo inválido',async()=>{
@@ -345,6 +530,499 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('finance.realized.summary',{accountId:'acct-realized',periodStart:'2025-01-01T00:00:00.000Z',periodEnd:'2025-01-02T00:00:00.000Z'})).result).toMatchObject({realizedProfitCents:null,netRevenueCents:null,confidence:'NO_DATA'});
     expect((await call('finance.realized.upsert',{...payload,periodStart:'2026-11-15T00:00:00.000Z'})).ok).toBe(true);
     expect((await call('finance.realized.summary',{accountId:'acct-realized'})).result).toMatchObject({realizedProfitCents:null,confidence:'CONFLICTING_RECORDS',overlappingPeriods:true});
+  });
+
+
+  it('rentabilidade exige registros do mesmo período e não confunde falta de dados com margem negativa',async()=>{
+    const accountId='acct-profitability';seedImportAccount(accountId);
+    const at='2025-01-31T23:59:59.999Z',periodStart='2025-01-01T00:00:00.000Z';
+    for(const id of ['profit-negative','profit-missing'])db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,accountId,'mercado_livre',id,id,'ACTIVE',at,at);
+    const payload={accountId,listingId:'profit-negative',periodStart,periodEnd:at,netRevenueCents:10000,productCostCents:9000,packagingCents:100,shippingCents:1000,marketplaceFeesCents:1000,taxesCents:100,adSpendCents:500,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0,sourceClass:'F_USER_INPUT',evidence:{source:'relatório de teste'}};
+    expect((await call('finance.realized.upsert',{...payload,adSpendCents:undefined})).ok).toBe(false);
+    expect((await call('finance.realized.upsert',payload)).ok).toBe(true);
+    const data=(await call('finance.profitability',{accountId,periodStart,periodEnd:at})).result as any;
+    expect(data.listings.find((l:any)=>l.id==='profit-negative')).toMatchObject({profitCents:-1700,marginPct:-17,negative:true,status:'RECORDED'});
+    expect(data.listings.find((l:any)=>l.id==='profit-missing')).toMatchObject({profitCents:null,negative:false,status:'NO_DATA'});
+    expect((await call('finance.realized.upsert',{...payload,sourceClass:'B_PLATFORM_EXPORT'})).ok).toBe(true);
+    const conflicted=(await call('finance.profitability',{accountId,periodStart,periodEnd:at})).result as any;
+    expect(conflicted.listings.find((l:any)=>l.id==='profit-negative')).toMatchObject({profitCents:null,status:'CONFLICT'});
+  });
+
+  it('estoque distingue zero de ausência, calcula cobertura apenas com janela explícita e preserva conta',async()=>{
+    const accountId='acct-inventory-5';seedImportAccount(accountId);seedImportAccount('acct-inventory-other-5');
+    const at=new Date().toISOString();
+    for(const id of ['inventory-zero','inventory-known','inventory-unknown'])db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,accountId,'mercado_livre',id,id,'ACTIVE',at,at);
+    const insert=db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)');
+    const evidence=JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07'});
+    insert.run('inv-s1','inventory-zero',accountId,at,at,JSON.stringify({stockAvailable:0,units:7,adSpend:20,questionsPending:2}),'A_PRIMARY_UI',evidence);
+    insert.run('inv-s2','inventory-known',accountId,at,at,JSON.stringify({stockAvailable:14,units:7}),'A_PRIMARY_UI',evidence);
+    const result=(await call('inventory.dashboard',{accountId,days:30})).result as any;
+    expect(result.items.find((l:any)=>l.id==='inventory-zero')).toMatchObject({stock:0,coverageDays:0,signals:expect.arrayContaining(['OUT_OF_STOCK','LOW_COVERAGE','ADS_SPEND_WITH_ZERO_STOCK_OBSERVED','PENDING_QUESTIONS'])});
+    expect(result.items.find((l:any)=>l.id==='inventory-known')).toMatchObject({coverageDays:14,signals:[]});
+    expect(result.items.find((l:any)=>l.id==='inventory-unknown')).toMatchObject({stock:null,coverageDays:null,signals:[]});
+    expect((await call('inventory.dashboard',{accountId:'acct-inventory-other-5'})).result).toMatchObject({items:[]});
+  });
+
+  it('Ads limita escopo, não duplica campanha e calcula TACoS somente com janelas compatíveis',async()=>{
+    const accountId='acct-ads-5';seedImportAccount(accountId);
+    const at='2025-01-08T12:00:00.000Z',from='2025-01-08T00:00:00.000Z',to='2025-01-08T23:59:59.999Z';
+    const evidence={filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'};
+    const base={marketplace:'mercado_livre',accountId,sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],evidence};
+    const detail={kind:'AD_CAMPAIGN',externalId:'C5',metrics:{adSpend:100,adAttributedRevenue:0},evidence:{adSpend:'Investimento',adAttributedRevenue:'Receita atribuída'}};
+    expect((await call('capture.ingest',{...base,pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',accountMetrics:{adSpend:100},details:[detail]})).ok).toBe(true);
+    expect((await call('capture.ingest',{...base,pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/vendas',accountMetrics:{gmv:1000}})).ok).toBe(true);
+    const result=(await call('ads.dashboard',{accountId,from,to})).result as any;
+    expect(result).toMatchObject({tacosPct:10,items:[{external_id:'C5',signal:'REVIEW_SPEND',verified:true}]});
+    const costs={productCostCents:15000,packagingCents:0,shippingCents:0,marketplaceFeesCents:0,taxesCents:0,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0};
+    const rec={accountId,snapshotId:result.items[0].id,netAttributedRevenueCents:20000,costs,sourceReference:'Relatório conciliado de campanha',confirmedSameScope:true};
+    expect((await call('ads.reconcile',{...rec,costs:{productCostCents:15000}})).ok).toBe(false);
+    expect((await call('ads.reconcile',rec)).result).toMatchObject({profitCents:-5000,classification:'REPORTED_ATTRIBUTED_PROFIT'});
+    expect((await call('ads.dashboard',{accountId,from,to})).result).toMatchObject({items:[{profitCents:-5000,signal:'REPORTED_NEGATIVE_ATTRIBUTED_PROFIT'}]});
+
+    expect((await call('ads.dashboard',{accountId,from,to,externalId:'C5'})).result).toMatchObject({tacosPct:null});
+    db.db.prepare("UPDATE account_snapshots SET evidence_json=? WHERE account_id=? AND page_kind='seller_dashboard'").run(JSON.stringify({filtersAndPeriod:'start_date=2025-01-02|end_date=2025-01-07|status=all'}),accountId);
+    expect((await call('ads.dashboard',{accountId,from,to})).result).toMatchObject({tacosPct:null});
+  });
+
+
+  it('orçamento diário autorizado exige baseline, conta e documento novos, sem repetição',async()=>{
+    const accountId='acct-budget-5',other='acct-budget-other-5';seedImportAccount(accountId);seedImportAccount(other);
+    const campaignRef='C-BUDGET',proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,baseline:{dailyBudgetCents:1000},changes:{dailyBudgetCents:1200},reason:'Teste orçamento'})).result as any;
+    const ctx={accountId,campaignRef,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,proposalId:proposal.id};
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    for(const bad of [{accountId:other},{budgetCents:999},{sourcePath:'https://www.mercadolivre.com.br/publicidade'},{sourcePath:'https://vendedores.mercadolivre.com.br/publicidade?token=abc'},{campaignRef:'OTHER'},{confirmed:false}]){
+      expect((await call('campaign.budget.claim',{...ctx,confirmed:true,...bad})).ok).toBe(false);
+    }
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    const limits={maxCampaignDailyBudgetCents:1100,minVariationPriceCents:100,maxVariationPriceCents:100000,maxVariationStock:100,maxVariationPriceChangePct:20};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    expect((await call('operation.limits.set',{accountId,limits:{...limits,maxCampaignDailyBudgetCents:1500},confirmed:true})).ok).toBe(true);
+    const claim=await call('campaign.budget.claim',{...ctx,confirmed:true});
+    expect(claim.ok).toBe(true);
+    const grant=claim.result as any;
+    expect(grant).toMatchObject({beforeCents:1000,targetCents:1200,accountId,campaignRef});
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    expect((await call('campaign.budget.result',{id:grant.id,token:'22222222-2222-4222-8222-222222222222',outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(false);
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(true);
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(false);
+    expect((await call('campaign.budget.verify',{...ctx,budgetCents:1200})).ok).toBe(false);
+    const reload={...ctx,documentNonce:'33333333-3333-4333-8333-333333333333'};
+    expect((await call('campaign.budget.verify',{...reload,budgetCents:999})).result).toMatchObject({status:'NEEDS_VERIFICATION',remoteVerified:false});
+    expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false,uiReadbackMatched:true});
+    expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).ok).toBe(false);
+    const measure={accountId,proposalKind:'CAMPAIGN',proposalId:proposal.id};
+    expect((await call('operation.measure',{...measure,accountId:other})).result).toMatchObject({status:'EXECUTION_EVIDENCE_REQUIRED'});
+    db.db.prepare('UPDATE campaign_budget_executions SET created_at=?,updated_at=? WHERE id=?')
+      .run('2025-01-08T12:00:00.000Z','2025-01-09T12:00:00.000Z',grant.id);
+    const capture=async (from:string,to:string,at:string,adClicks:number,coverageWarnings?:string)=>{
+      const response=await call('capture.ingest',{accountId,marketplace:'mercado_livre',url:ctx.sourcePath,
+        pageKind:'seller_ads',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+        evidence:{filtersAndPeriod:`start_date=${from}|end_date=${to}|status=all`,...(coverageWarnings?{coverageWarnings}:{})},
+        details:[{kind:'AD_CAMPAIGN',externalId:campaignRef,metrics:{adClicks},evidence:{adClicks:`Cliques: ${adClicks}`}}],
+      });
+      expect(response.ok).toBe(true);
+    };
+    await capture('2025-01-01','2025-01-07','2025-01-08T10:00:00.000Z',10);
+    await capture('2025-01-09','2025-01-15','2025-01-16T10:00:00.000Z',99);
+    expect((await call('operation.measure',measure)).result).toMatchObject({status:'INSUFFICIENT_COMPATIBLE_WINDOWS'});
+    await capture('2025-01-10','2025-01-16','2025-01-17T10:00:00.000Z',12);
+    await capture('2025-01-11','2025-01-17','2025-01-18T10:00:00.000Z',99,'COBERTURA_PARCIAL');
+    expect((await call('operation.measure',measure)).result).toMatchObject({
+      status:'OBSERVED_CHANGE',executionEvidence:'UI_READBACK_MATCHED',measurementScope:'CAMPAIGN',
+      metrics:{adClicks:{before:10,after:12,delta:2}},remoteVerified:false,causalityVerified:false,
+    });
+    const items=(await call('campaign.budget.list',{accountId})).result as any[];
+    expect(items).toHaveLength(1);expect(items[0].status).toBe('UI_READBACK_MATCHED');expect(items[0].token_hash).toBeUndefined();
+    expect((await call('campaign.budget.list',{accountId:other})).result).toEqual([]);
+  });
+
+  it('autoriza pausa de campanha com orçamento constante e exige estado posterior em outro documento',async()=>{
+    const accountId='campaign-status-account',campaignRef='P-1';
+    seedImportAccount(accountId);
+    const budget={dailyBudgetCents:1000};
+    const proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,
+      baseline:{...budget,status:'ACTIVE'},changes:{...budget,status:'PAUSED'},reason:'Pausar campanha aprovada'})).result as {id:string};
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    const limit={minVariationPriceCents:100,maxVariationPriceCents:10000,maxVariationStock:50,maxVariationPriceChangePct:20};
+    const ctx={accountId,campaignRef,proposalId:proposal.id,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',
+      documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,campaignStatus:'ACTIVE',confirmed:true};
+    expect((await call('operation.limits.set',{accountId,limits:{...limit,maxCampaignDailyBudgetCents:900},confirmed:true})).ok).toBe(true);
+    expect((await call('campaign.budget.claim',ctx)).ok).toBe(false);
+    expect((await call('operation.limits.set',{accountId,limits:{...limit,maxCampaignDailyBudgetCents:1200},confirmed:true})).ok).toBe(true);
+    expect((await call('campaign.budget.claim',{...ctx,campaignStatus:undefined})).ok).toBe(false);
+    const claimed=await call('campaign.budget.claim',ctx);
+    expect(claimed.ok).toBe(true);
+    const grant=claimed.result as {id:string;token:string};
+    expect(grant).toMatchObject({beforeStatus:'ACTIVE',targetStatus:'PAUSED',beforeCents:1000,targetCents:1000});
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Clique autorizado'})).ok).toBe(true);
+    const {confirmed,...verified}=ctx;
+    expect((await call('campaign.budget.verify',{...verified,campaignStatus:'PAUSED'})).ok).toBe(false);
+    const fresh={...verified,documentNonce:'22222222-2222-4222-8222-222222222222'};
+    expect((await call('campaign.budget.verify',fresh)).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED',budgetCents:1001})).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED'})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false});
+  });
+
+  it('autoriza meta ROAS com orçamento constante e exige releitura correspondente',async()=>{
+    const accountId='campaign-roas-shop',campaignRef='C-ROAS';seedImportAccount(accountId);
+    const base={dailyBudgetCents:1000,roasTargetHundredths:500};
+    const proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,baseline:base,changes:{...base,roasTargetHundredths:650},reason:'Alteração de ROAS aprovada'})).result as {id:string};
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{maxCampaignDailyBudgetCents:1200,minVariationPriceCents:100,maxVariationPriceCents:10000,maxVariationStock:50,maxVariationPriceChangePct:20}})).ok).toBe(true);
+    const ctx={accountId,campaignRef,proposalId:proposal.id,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',
+      documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,roasTargetHundredths:500,confirmed:true};
+    expect((await call('campaign.budget.claim',{...ctx,roasTargetHundredths:501})).ok).toBe(false);
+    const grant=(await call('campaign.budget.claim',ctx)).result as {id:string;token:string};
+    expect(grant).toMatchObject({beforeRoas:500,targetRoas:650,beforeCents:1000,targetCents:1000});
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Clique autorizado'})).ok).toBe(true);
+    const {confirmed,...verified}=ctx;
+    expect((await call('campaign.budget.verify',{...verified,roasTargetHundredths:650})).ok).toBe(false);
+    const fresh={...verified,documentNonce:'22222222-2222-4222-8222-222222222222',roasTargetHundredths:650};
+    expect((await call('campaign.budget.verify',{...fresh,budgetCents:1001})).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',fresh)).result).toMatchObject({status:'UI_READBACK_MATCHED'});
+  });
+
+  it('cria variação legada pela API com loja validada, ID retornado e conferência independente',async()=>{
+    const accountId='api-variant-shop',itemId='MLB1234567',listingId='api-item',at='2025-01-01T00:00:00.000Z';
+    seedImportAccount(accountId);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(listingId,accountId,'mercado_livre',itemId,'Anúncio','ACTIVE',at,at);
+    const option={attributeCombinations:[{id:'COLOR',value_id:'2'}],pictureIds:['PIC1']};
+    const draft=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Azul',options:[option],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:draft.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{
+      maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20,
+    }})).ok).toBe(true);
+    const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
+    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0,hideCreated=false,sellerId=23,remoteStock=0,putCount=0;
+    const mock=vi.fn(async (url:URL,init:RequestInit)=>{
+      expect(url.origin).toBe('https://api.mercadolibre.com');
+      expect(init.redirect).toBe('error');
+      if(url.pathname==='/users/me')return Response.json({id:23,nickname,site_id:'MLB',tags:[]});
+      if(url.pathname==='/items/'+itemId&&init.method==='PUT'){
+        putCount++;
+        const body=JSON.parse(String(init.body));
+        expect(body.variations).toEqual([{id:'41'},{id:'42',available_quantity:3}]);
+        remoteStock=3;return Response.json({id:itemId});
+      }
+      if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:sellerId,site_id:'MLB',currency_id:'BRL',status:'active',
+        user_product_id:null,pictures:[{id:'PIC1'}],variations:[{id:41,attribute_combinations:[{id:'COLOR',value_id:'1'}]},
+          ...(created&&!deleted&&!hideCreated?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:remoteStock,sold_quantity:sold}]:[])]});
+      if(url.pathname==='/items/'+itemId+'/variations'&&init.method==='POST'){
+        postCount++;
+        expect(JSON.parse(String(init.body))).toEqual({attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:0,picture_ids:['PIC1']});
+        created=true;return Response.json({id:42},{status:201});
+      }
+      if(url.pathname==='/items/'+itemId+'/variations/42'){
+        if(init.method==='DELETE'){deleteCount++;deleted=true;return new Response(null,{status:204});}
+        if(failReadback)throw Error('timeout simulado');
+        return Response.json({id:42,price:12,available_quantity:remoteStock,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
+      }
+      throw Error('rota inesperada');
+    });
+    vi.stubGlobal('fetch',mock);
+    try{
+      expect((await call('variation.api.create',request)).ok).toBe(false);
+      expect(postCount).toBe(0);
+      nickname=accountId;
+      const results=await Promise.all([call('variation.api.create',request),call('variation.api.create',request)]);
+      expect(results.filter(r=>r.ok)).toHaveLength(1);
+      expect(results.find(r=>r.ok)?.result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:'42',remoteVerified:false});
+      expect(postCount).toBe(1);
+      failReadback=false;
+      const {confirmed,...verify}=request;
+      hideCreated=true;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:'42',remoteVerified:false});
+      hideCreated=false;
+      sellerId=24;
+      expect((await call('variation.api.verify',verify)).ok).toBe(false);
+      sellerId=23;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:'42',remoteVerified:true});
+      expect(postCount).toBe(1);
+      const list=await call('variation.api.list',{accountId});
+      expect(list.result).toMatchObject([{proposal_id:draft.id,variation_id:'42',status:'REMOTE_VERIFIED'}]);
+      expect((await call('operation.measure',{accountId,proposalId:draft.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_CONFIRMED',remoteVerified:true,causalityVerified:false,
+        createdVariation:{externalId:'42',priceCents:1200,stock:0},
+      });
+      expect(JSON.stringify(list.result)).not.toContain(request.accessToken);
+      const edit=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Editar estoque Azul',
+        options:[{editVariationId:'42',beforePriceCents:1200,beforeStock:0}],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:edit.id,decision:'APPROVED',reason:'Edição autorizada'})).ok).toBe(true);
+      const editRequest={...request,proposalId:edit.id};
+      remoteStock=1;
+      expect((await call('variation.api.editStock',editRequest)).ok).toBe(false);
+      expect(putCount).toBe(0);
+      remoteStock=0;
+      expect((await call('variation.api.editStock',editRequest)).result).toMatchObject({status:'REMOTE_VERIFIED',action:'EDIT_VARIATION',variationId:'42'});
+      expect((await call('variation.api.editStock',editRequest)).ok).toBe(false);
+      expect(putCount).toBe(1);
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_STOCK_CONFIRMED',editedVariation:{externalId:'42',beforeStock:0,stock:3,priceCents:1200},
+      });
+      db.db.prepare("UPDATE listing_api_executions SET started_at=?,updated_at=? WHERE proposal_id=?").run('2025-01-08T12:00:00.000Z','2025-01-08T13:00:00.000Z',edit.id);
+      const insertMetric=db.db.prepare('INSERT INTO listing_snapshots(id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES(?,?,?,?,?,?,?,?)');
+      insertMetric.run('api-before',listingId,accountId,'2025-01-07T23:59:59.999Z','2025-01-07T23:59:59.999Z',JSON.stringify({orders:10}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}));
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({measurementStatus:'INSUFFICIENT_COMPATIBLE_WINDOWS',remoteVerified:true,metrics:null});
+      insertMetric.run('api-after',listingId,accountId,'2025-01-16T12:00:00.000Z','2025-01-16T12:00:00.000Z',JSON.stringify({orders:12}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_VARIATION_STOCK_CONFIRMED',measurementStatus:'OBSERVED_CHANGE',measurementScope:'LISTING',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:true,causalityVerified:false});
+      remoteStock=0;
+      const removal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Remover Azul',
+        options:[{removeVariationId:'42'}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:removal.id,decision:'APPROVED',reason:'Remoção autorizada'})).ok).toBe(true);
+      const remove={...request,proposalId:removal.id};
+      sold=1;
+      expect((await call('variation.api.remove',remove)).ok).toBe(false);
+      expect(deleteCount).toBe(0);
+      sold=0;
+      expect((await call('variation.api.remove',remove)).result).toMatchObject({status:'REMOTE_VERIFIED',action:'REMOVE_VARIATION',variationId:'42'});
+      expect((await call('variation.api.remove',remove)).ok).toBe(false);
+      expect(deleteCount).toBe(1);
+      expect((await call('operation.measure',{accountId,proposalId:removal.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_REMOVAL_CONFIRMED',removedVariation:{externalId:'42'},
+      });
+
+    }finally{
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('cria condição de venda User Products sem duplicar estoque ou aceitar oferta de outra loja',async()=>{
+    const accountId='api-up-shop',itemId='MLB1234567',newId='MLB1234568',listingId='api-up-item',upId='MLBU1234567',at='2025-01-01T00:00:00.000Z';
+    seedImportAccount(accountId);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre',itemId,'Anúncio UP','ACTIVE',at,at);
+    const option={userProductId:upId,categoryId:'MLB1234',listingTypeId:'gold_pro',beforePriceCents:1000,beforeStock:3};
+    const draft=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Oferta premium',options:[option],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:draft.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20}})).ok).toBe(true);
+    let owner=24,created=false,posts=0,readback=false,total=1;
+    const source={id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',user_product_id:upId,category_id:'MLB1234',listing_type_id:'gold_special',buying_mode:'buy_it_now',condition:'new',catalog_listing:false,price:10,available_quantity:3,status:'active',variations:[],channels:['marketplace']};
+    vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit)=>{
+      if(url.pathname==='/users/me')return Response.json({id:23,nickname:accountId,site_id:'MLB',tags:['user_product_seller']});
+      if(url.pathname==='/items/'+itemId)return Response.json(source);
+      if(url.pathname==='/user-products/'+upId)return Response.json({id:upId,user_id:owner,site_id:'MLB'});
+      if(url.pathname==='/users/23/items/search')return Response.json({seller_id:23,results:[itemId],paging:{offset:0,total}});
+      if(url.pathname==='/user-products/'+upId+'/items'&&init.method==='POST'){
+        posts++;expect(JSON.parse(String(init.body))).toEqual({price:12,category_id:'MLB1234',currency_id:'BRL',buying_mode:'buy_it_now',listing_type_id:'gold_pro',channels:['marketplace'],catalog_listing:false});
+        created=true;return Response.json({id:newId},{status:201});
+      }
+      if(url.pathname==='/items/'+newId&&created)return Response.json({...source,id:newId,price:12,listing_type_id:'gold_pro',seller_id:readback?23:24});
+      throw Error('rota inesperada');
+    }));
+    try{
+      const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
+      expect((await call('variation.api.createUpOffer',request)).ok).toBe(false);expect(posts).toBe(0);
+      owner=23;total=51;
+      expect((await call('variation.api.createUpOffer',request)).ok).toBe(false);expect(posts).toBe(0);
+      total=1;
+      const results=await Promise.all([call('variation.api.createUpOffer',request),call('variation.api.createUpOffer',request)]);
+      expect(results.filter(r=>r.ok)).toHaveLength(1);expect(posts).toBe(1);
+      expect(results.find(r=>r.ok)?.result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:newId,action:'CREATE_UP_OFFER'});
+      const {confirmed,...verify}=request;readback=true;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:newId});
+      expect((await call('operation.measure',{accountId,proposalId:draft.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_UP_OFFER_CONFIRMED',measurementScope:'USER_PRODUCT_ORIGINAL_VS_OFFER',createdOffer:{externalId:newId,stock:3},metrics:null,causalityVerified:false});
+      const again=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Outra proposta da mesma oferta',options:[option],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:again.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+      expect((await call('variation.api.createUpOffer',{...request,proposalId:again.id})).ok).toBe(false);
+      expect(posts).toBe(1);
+    }finally{vi.unstubAllGlobals();}
+  });
+
+  it('autoriza variação simples e duplicação apenas com proposta, contexto e limites correspondentes',async()=>{
+    const accountId='acct-browser-listing',other='acct-browser-other';seedImportAccount(accountId);seedImportAccount(other);
+    const listingId='browser-listing',externalListingId='MLB1234567',at='2025-01-07T23:59:59.999Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre',externalListingId,'Teste','ACTIVE',at,at);
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)').run('browser-baseline',listingId,accountId,at,at,'{}','A_PRIMARY_UI','{}');
+    const proposal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Cor',options:[{name:'Azul'}],proposedPriceCents:1200,proposedStock:5})).result as any;
+    expect((await call('offer.variation.review',{accountId,id:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    const ctx={accountId,externalListingId,action:'CREATE_VARIATION',sourcePath:'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1234567',documentNonce:'11111111-1111-4111-8111-111111111111',proposalId:proposal.id,confirmed:true};
+    expect((await call('listing.browser.claim',ctx)).ok).toBe(false);
+    const limits={maxCampaignDailyBudgetCents:1500,minVariationPriceCents:100,maxVariationPriceCents:100000,maxVariationStock:100,maxVariationPriceChangePct:20};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    for(const bad of [{accountId:other},{externalListingId:'MLB7654321'},{action:'EDIT_VARIATION'},{confirmed:false},{sourcePath:'https://www.mercadolivre.com.br/vendas/anuncios/editar/MLB1234567'}]){
+      expect((await call('listing.browser.claim',{...ctx,...bad})).ok).toBe(false);
+    }
+    const claim=await call('listing.browser.claim',ctx);expect(claim.ok).toBe(true);
+    const grant=claim.result as any;expect(grant.plan).toEqual({name:'Cor',option:'Azul',priceCents:1200,stock:5});
+    expect((await call('listing.browser.claim',ctx)).ok).toBe(false);
+    expect((await call('listing.browser.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(true);
+    expect((await call('listing.browser.verify',{accountId,proposalId:proposal.id,observedExternalId:'V1'})).ok).toBe(false);
+    expect((await call('listing.browser.list',{accountId:other})).result).toEqual([]);
+    const duplicate=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Teste duplicação'})).result as any;
+    expect((await call('listing.change.review',{accountId,id:duplicate.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    const duplicateCtx={...ctx,proposalId:duplicate.id,action:'DUPLICATE',sourcePath:'https://vendedores.mercadolivre.com.br/vendas/anuncios'};
+    expect((await call('listing.browser.claim',duplicateCtx)).ok).toBe(false);
+    db.db.prepare("UPDATE listing_browser_executions SET status='CANDIDATE_OBSERVED' WHERE id=?").run(grant.id);
+    const duplication=await call('listing.browser.claim',duplicateCtx);expect(duplication.ok).toBe(true);
+    expect((duplication.result as any).plan).toEqual({originalTitle:'Teste'});
+    const d=(duplication.result as any);
+    expect((await call('listing.browser.result',{id:d.id,token:d.token,outcome:'NEEDS_VERIFICATION',message:'Teste',duplicateReceipt:'Anúncio MLB1234567 duplicado com sucesso. Novo anúncio: MLB9876543'})).ok).toBe(true);
+    expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:externalListingId})).ok).toBe(false);
+    db.db.prepare("UPDATE listing_browser_executions SET created_at=?,updated_at=? WHERE id=?").run('2025-01-08T12:00:00.000Z','2025-01-08T13:00:00.000Z',d.id);
+    const insertCopy=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    const insertSnap=db.db.prepare('INSERT INTO listing_snapshots(id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES(?,?,?,?,?,?,?,?)');
+    const captured='2025-01-16T12:00:00.000Z';
+    insertCopy.run('wrong-copy',accountId,'mercado_livre','MLB8888888','Teste','ACTIVE',captured,captured);
+    insertSnap.run('wrong-copy-snap','wrong-copy',accountId,captured,captured,'{}','A_PRIMARY_UI','{}');
+    expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:'MLB8888888'})).ok).toBe(false);
+    insertCopy.run('right-copy',accountId,'mercado_livre','MLB9876543','Teste','ACTIVE',captured,captured);
+    insertSnap.run('right-copy-snap','right-copy',accountId,captured,captured,JSON.stringify({orders:12}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+    expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:'MLB9876543'})).result).toMatchObject({status:'UI_READBACK_MATCHED',duplicateOriginObserved:true,remoteVerified:false});
+    db.db.prepare("UPDATE listing_browser_executions SET updated_at=? WHERE id=?").run('2025-01-08T13:00:00.000Z',d.id);
+    db.db.prepare("UPDATE listing_snapshots SET metrics_json=?,evidence_json=? WHERE id=?").run(JSON.stringify({orders:10}),JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}),'browser-baseline');
+    expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id})).result).toMatchObject({status:'DUPLICATE_STATE_CONFIRMED',measurementStatus:'OBSERVED_CHANGE',measurementScope:'DUPLICATE_ORIGINAL_VS_COPY',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:false,causalityVerified:false});
+    const rows=(await call('listing.browser.list',{accountId})).result as any[];
+    expect(rows).toHaveLength(2);expect(rows.every(row=>row.token_hash===undefined)).toBe(true);
+  });
+
+  it('confere relatos de variação e duplicação com capturas posteriores da mesma loja',async()=>{
+    const accountId='receipt-shop',other='receipt-other';
+    seedImportAccount(accountId);seedImportAccount(other);
+    const before='2025-01-07T12:00:00.000Z',performedAt='2025-01-08T12:00:00.000Z',after='2025-01-09T12:00:00.000Z';
+    const parent='MLB1234567',listingId='receipt-original';
+    const insertListing=db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)');
+    insertListing.run(listingId,accountId,'mercado_livre',parent,'Produto','ACTIVE',before,before);
+    const prepared=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Azul',options:[{externalId:'V1',beforePriceCents:1000,beforeStock:2}],proposedPriceCents:1200,proposedStock:5})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:prepared.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    db.db.prepare('UPDATE offer_variation_proposals SET updated_at=? WHERE id=?').run(before,prepared.id);
+    const receipt={accountId,proposalKind:'VARIATION',proposalId:prepared.id,performedAt,evidenceReference:'Relatório do vendedor',confirmedManualExecution:true};
+    expect((await call('operation.receipt.record',receipt)).ok).toBe(true);
+    const verify={accountId,proposalKind:'VARIATION',proposalId:prepared.id,observedExternalId:'V1'};
+    const capture=(shop:string,externalId:string,parentExternalId:string,at:string,price:number,stockAvailable:number)=>call('capture.ingest',{
+      marketplace:'mercado_livre',accountId:shop,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',
+      sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+      details:[{kind:'LISTING_VARIANT',externalId,parentExternalId,label:'Azul',metrics:{price,stockAvailable},evidence:{price:'Preço: R$ '+price,stockAvailable:'Estoque: '+stockAvailable}}],
+    });
+    expect((await capture(accountId,'V1',parent,before,10,2)).ok).toBe(true);
+    expect((await capture(other,'V1',parent,after,12,5)).ok).toBe(true);
+    expect((await capture(accountId,'V1','MLB7654321',after,12,5)).ok).toBe(true);
+    expect((await call('operation.receipt.verify',verify)).ok).toBe(false);
+    expect((await capture(accountId,'V1',parent,after,12,5)).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{...verify,accountId:other})).ok).toBe(false);
+    expect((await call('operation.receipt.verify',verify)).result).toMatchObject({status:'UI_READBACK_MATCHED',observedExternalId:'V1',remoteVerified:false});
+    expect((await call('operation.receipt.verify',verify)).ok).toBe(false);
+    expect((await call('operation.receipt.list',{accountId})).result).toMatchObject([{status:'HUMAN_REPORTED',observation:{status:'UI_READBACK_MATCHED'}}]);
+
+    const measurement={accountId,proposalKind:'VARIATION',proposalId:prepared.id};
+    expect((await call('operation.measure',measurement)).result).toMatchObject({
+      status:'VARIATION_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,
+      variationObservation:{externalId:'V1',before:{priceCents:1000,stock:2},after:{priceCents:1200,stock:5}},
+    });
+    expect((await capture(accountId,'V1',parent,'2025-01-10T12:00:00.000Z',13,9)).ok).toBe(true);
+    expect((await call('operation.measure',measurement)).result).toMatchObject({variationObservation:{after:{priceCents:1200,stock:5}}});
+
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)').run('receipt-original-snapshot',listingId,accountId,before,before,'{}','A_PRIMARY_UI','{}');
+    const duplicate=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Teste de duplicação'})).result as {id:string};
+    expect((await call('listing.change.review',{accountId,id:duplicate.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    db.db.prepare('UPDATE listing_change_proposals SET updated_at=? WHERE id=?').run(before,duplicate.id);
+    const duplication={...receipt,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id};
+    expect((await call('operation.receipt.record',duplication)).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:parent})).ok).toBe(false);
+    const copy='MLB3456789';
+    expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:after,collectedAt:after,method:'content_script_dom',listings:[{listingId:copy,title:'Produto',price:12}]})).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:copy})).result).toMatchObject({status:'CANDIDATE_OBSERVED',observedExternalId:copy,remoteVerified:false});
+    const second=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Segunda proposta de duplicação'})).result as {id:string};
+    expect((await call('listing.change.review',{accountId,id:second.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    db.db.prepare('UPDATE listing_change_proposals SET updated_at=? WHERE id=?').run(before,second.id);
+    expect((await call('operation.receipt.record',{...duplication,proposalId:second.id})).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:second.id,observedExternalId:copy})).ok).toBe(false);
+    const candidateMeasure={accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id};
+    expect((await call('operation.measure',candidateMeasure)).result).toMatchObject({
+      status:'CANDIDATE_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,
+      candidateObservation:{externalId:copy,priceCents:1200,stock:null},
+    });
+    expect((await call('operation.measure',{...candidateMeasure,accountId:other})).result)
+      .toMatchObject({status:'EXECUTION_EVIDENCE_REQUIRED'});
+
+  });
+
+  it('persiste a captura exata antes e depois de uma edição assistida de variação',async()=>{
+    const accountId='assisted-variation-edit';
+    seedImportAccount(accountId);
+    const listingId='assisted-variation-parent',externalListingId='MLB1234567',variationId='V1';
+    const sourcePath='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+externalListingId;
+    const capture=(at:string,price:number,stock:number,coverageWarnings?:string)=>call('capture.ingest',{
+      accountId,marketplace:'mercado_livre',url:sourcePath,pageKind:'seller_listing_edit',sourceClass:'A_PRIMARY_UI',
+      referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+      evidence:coverageWarnings?{coverageWarnings}:{},
+      details:[{kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:'Azul',
+        metrics:{price,stockAvailable:stock},evidence:{price:'Preço: '+price,stockAvailable:'Estoque: '+stock}}],
+    });
+    const at='2025-01-01T12:00:00.000Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(listingId,accountId,'mercado_livre',externalListingId,'Anúncio','ACTIVE',at,at);
+    const prepared=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Azul',
+      options:[{externalId:variationId,beforePriceCents:1000,beforeStock:3}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:prepared.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    const limits={maxCampaignDailyBudgetCents:1500,minVariationPriceCents:100,maxVariationPriceCents:100000,maxVariationStock:100,maxVariationPriceChangePct:25};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    const context={accountId,externalListingId,action:'EDIT_VARIATION',variationId,variationLabel:'Azul',beforePriceCents:1000,beforeStock:3,
+      sourcePath,documentNonce:'11111111-1111-4111-8111-111111111111',proposalId:prepared.id,confirmed:true};
+    expect((await capture(at,10,3,'COBERTURA_PARCIAL')).ok).toBe(true);
+    expect((await call('listing.browser.claim',context)).ok).toBe(false);
+    const baselineAt='2025-01-02T12:00:00.000Z';
+    expect((await capture(baselineAt,10,3)).result).toMatchObject({detailRowsIngested:1});
+    const claim=await call('listing.browser.claim',context);
+    expect(claim.ok).toBe(true);
+    const grant=claim.result as {id:string;token:string;plan:{baselineSnapshotId:string}};
+    expect(grant.plan.baselineSnapshotId).toBeTruthy();
+    expect((await call('listing.browser.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Salvamento acionado'})).ok).toBe(true);
+    db.db.prepare('UPDATE listing_browser_executions SET created_at=?,updated_at=? WHERE id=?')
+      .run('2025-01-04T12:00:00.000Z','2025-01-05T12:00:00.000Z',grant.id);
+    expect((await capture('2025-01-03T12:00:00.000Z',9,8)).ok).toBe(true);
+    const observedAt='2025-01-06T12:00:00.000Z';
+    expect((await capture(observedAt,12,0)).result).toMatchObject({detailRowsIngested:1});
+    expect((await call('listing.browser.verify',{accountId,proposalId:prepared.id,observedExternalId:variationId})).result)
+      .toMatchObject({status:'UI_READBACK_MATCHED',baselineSnapshotId:grant.plan.baselineSnapshotId,remoteVerified:false});
+    expect((await call('operation.measure',{accountId,proposalId:prepared.id,proposalKind:'VARIATION'})).result)
+      .toMatchObject({status:'VARIATION_STATE_OBSERVED',variationObservation:{
+        externalId:variationId,before:{capturedAt:baselineAt,priceCents:1000,stock:3},after:{capturedAt:observedAt,priceCents:1200,stock:0},
+      }});
+  });
+
+  it('protege propostas de capa e variação por conta, aprovação e relato humano sem simular execução',async()=>{
+    const accountId='acct-ops-5',other='acct-ops-other-5';seedImportAccount(accountId);seedImportAccount(other);
+    const listingId='listing-ops-5',at='2025-01-07T23:59:59.999Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre','MLB-OPS5','Teste','ACTIVE',at,at);
+    const insert=db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)');
+    insert.run('ops-before',listingId,accountId,at,at,JSON.stringify({orders:10,gmv:100}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}));
+    const media=(await call('media.add',{accountId,filename:'pixel.png',mimeType:'image/png',base64:'iVBORw0KGgo='})).result as any;
+    const mediaId=media.id;
+    const payload={accountId,listingId,kind:'COVER',mediaId,reason:'Teste de capa'};
+    expect((await call('listing.change.prepare',{...payload,accountId:other})).ok).toBe(false);
+    const prepared=await call('listing.change.prepare',payload);
+    expect(prepared.ok).toBe(true);
+    const id=(prepared.result as any).id;
+    const receipt={accountId,proposalKind:'LISTING_CHANGE',proposalId:id,performedAt:'2025-01-08T12:00:00.000Z',evidenceReference:'Relatório de alteração',confirmedManualExecution:true};
+    expect((await call('operation.receipt.record',receipt)).ok).toBe(false);
+    expect((await call('listing.change.review',{accountId:other,id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    expect((await call('listing.change.review',{accountId,id,decision:'APPROVED',reason:'Teste'})).result).toMatchObject({status:'APPROVED',published:false});
+    expect((await call('listing.change.review',{accountId,id,decision:'REJECTED',reason:'Teste'})).ok).toBe(false);
+    db.db.prepare('UPDATE listing_change_proposals SET updated_at=? WHERE id=?').run('2025-01-08T10:00:00.000Z',id);
+    expect((await call('operation.receipt.record',{...receipt,accountId:other})).ok).toBe(false);
+    expect((await call('operation.receipt.record',receipt)).result).toMatchObject({status:'HUMAN_REPORTED',remoteVerified:false});
+    expect((await call('operation.receipt.record',receipt)).ok).toBe(false);
+    expect((await call('operation.receipt.list',{accountId:other})).result).toEqual([]);
+    expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:id})).result).toMatchObject({status:'INSUFFICIENT_COMPATIBLE_WINDOWS',remoteVerified:false});
+    const after='2025-01-16T12:00:00.000Z';
+    insert.run('ops-after',listingId,accountId,after,after,JSON.stringify({orders:12,gmv:120}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+    expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:id})).result).toMatchObject({status:'OBSERVED_CHANGE',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:false,causalityVerified:false});
+    const campaign=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef:'C-OPS',baseline:{budget:10},changes:{budget:15},reason:'Revisão de teste'})).result as any;
+    expect((await call('campaign.change.review',{accountId:other,proposalId:campaign.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    expect((await call('campaign.change.review',{accountId,proposalId:campaign.id,decision:'APPROVED',reason:'Teste'})).result).toMatchObject({status:'APPROVED',changedRemotely:false});
+    expect((await call('campaign.change.review',{accountId,proposalId:campaign.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    const variant=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Cor',options:[{name:'Azul'}]})).result as any;
+    expect((await call('offer.variation.update',{accountId:other,id:variant.id,variationName:'Cor',options:[{name:'Preto'}]})).ok).toBe(false);
+    expect((await call('offer.variation.update',{accountId,id:variant.id,variationName:'Cor',options:[{name:'Preto'}]})).result).toMatchObject({status:'DRAFT',published:false});
+    expect((await call('offer.variation.delete',{accountId,id:variant.id})).ok).toBe(true);
+    expect((await call('offer.variation.list',{accountId})).result).toEqual([]);
+    const next=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Tamanho',options:[{name:'M'}]})).result as any;
+    expect((await call('offer.variation.review',{accountId:other,id:next.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    expect((await call('offer.variation.review',{accountId,id:next.id,decision:'APPROVED',reason:'Teste'})).result).toMatchObject({status:'APPROVED',published:false});
+    expect((await call('offer.variation.delete',{accountId,id:next.id})).ok).toBe(false);
+
   });
 
   it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
@@ -955,6 +1633,8 @@ describe('análise por produto de catálogo', () => {
     expect((result.result as {listingCount:number;totalMatched:number;truncated:boolean}).listingCount).toBe(1);
     expect((result.result as {totalMatched:number}).totalMatched).toBe(1);
     expect((result.result as {truncated:boolean}).truncated).toBe(false);
+    const single=await call('analysis.run',{mode:'360',accountId:'acct-product-analysis',listingId:'ML-PROD-1',agents:['finance'],days:30});
+    expect(single.result).toMatchObject({listingCount:1,agents:['finance'],analyses:[{contextEvidence:{windowVerified:false,marginPct:null},director:{finalAction:null}}]});
   });
 });
 
@@ -1178,6 +1858,10 @@ describe('tarefas e guard', () => {
     expect(approved.ok).toBe(true);
     const approval = approved.result as { approvalIds: string[]; requiresPerListingBrowserConfirmation: boolean };
     expect(approval.requiresPerListingBrowserConfirmation).toBe(true);
+    db.db.prepare("INSERT INTO listing_browser_executions(id,proposal_kind,proposal_id,account_id,listing_id,external_listing_id,action,plan_json,context_json,token_hash,status,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run('busy-browser','VARIATION','busy-proposal','ml:publish','listing-publish','MLBPUBLISH1','CREATE_VARIATION','{}','{}','hash','NEEDS_VERIFICATION',now,now,now);
+    expect((await call('task.claimNextPublish',{marketplace:'mercado_livre',accountId:'ml:publish',externalListingId:'MLBPUBLISH1'})).result).toBeNull();
+    db.db.prepare("UPDATE listing_browser_executions SET status='CANCELLED' WHERE id=?").run('busy-browser');
     const claim = await call('task.claimNextPublish', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
     const publish = claim.result as { approvalId: string; task: { mode: string }; item: { id: string; baselineTitle: string; baselineDescription: string } };
     expect(publish.task.mode).toBe('PUBLISH');
@@ -1708,9 +2392,15 @@ describe('analytics, keyword intelligence and bundle simulation', () => {
     result.run('serp1',1,'ML-OWN','Meu anúncio',0,1);
     result.run('serp1',2,'ML-C1','Concorrente 1',0,0);
     result.run('serp1',3,'ML-C2','Concorrente 2',0,0);
+    const snapshot=db.db.prepare('INSERT INTO search_snapshots (id,marketplace,account_id,term,captured_at,results_count) VALUES (?,?,?,?,?,?)');
+    snapshot.run('serp-empty','mercado_livre','acct-vis','capacete norisk',now,0);
+    snapshot.run('serp-ambiguous','mercado_livre','acct-vis','capacete norisk',now,2);
+    result.run('serp-ambiguous',1,'ML-C3','Concorrente 3',0,0);
+    result.run('serp-ambiguous',1,'ML-C4','Concorrente 4',0,0);
     const response=await call('keyword.visibility',{accountId:'acct-vis',days:30});
     expect(response.ok).toBe(true);
     const terms=(response.result as {terms:Array<{term:string;top3PresencePct:number;ownVisibilitySharePct:number}>}).terms;
+    expect(response.result).toMatchObject({snapshots:3,excludedSnapshots:2,terms:[{sampleSize:1}]});
     expect(terms[0]?.top3PresencePct).toBe(100);
     expect(terms[0]?.ownVisibilitySharePct).toBeGreaterThan(0);
     expect((response.result as {note:string}).note).toContain('não é market share');
@@ -1759,6 +2449,11 @@ describe('feedback de agentes com evidência de resultado', () => {
       else expect((response.result as {playbook:{successes:number}}).playbook.successes).toBe(3);
     }
     expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM validated_playbooks')?.count).toBe(1);
+    const replay=await call('agent.feedback',{recommendationId:'rec-feedback-3',decision:'IMPLEMENTADO',outcome:{success:true,measuredAt:now,baseline:{orders:10},after:{orders:12},sampleSize:100,source:'A_PRIMARY_UI'}});
+    expect(replay.result).toMatchObject({playbook:{successes:3,attempts:3}});
+    expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM human_feedback')?.count).toBe(3);
+    await call('agent.feedback',{recommendationId:'rec-feedback-3',decision:'FALHOU',outcome:{success:false,measuredAt:now,baseline:{orders:10},after:{orders:8},sampleSize:100,source:'A_PRIMARY_UI'}});
+    expect(db.row('SELECT observation_status,uses FROM validated_playbooks')).toMatchObject({observation_status:'INSUFFICIENT_OBSERVATIONS',uses:3});
   });
 });
 
@@ -1887,5 +2582,97 @@ describe('relatórios e conectores com estado honesto', () => {
     expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM connector_credentials_metadata WHERE connector_id=?','connector-disconnect-test')?.count).toBe(0);
     const audit = db.row<{reason:string}>('SELECT reason FROM audit_log WHERE entity=? AND entity_id=? ORDER BY id DESC LIMIT 1','connector','connector-disconnect-test');
     expect(audit?.reason).not.toContain('token-que-nao-pode-vazar');
+  });
+});
+
+
+describe('workspace com evidências',()=>{
+  it('exige confirmação, registra indisponibilidade e isola histórico e memória',async()=>{
+    seedImportAccount('workspace-a');seedImportAccount('workspace-b');
+    const denied=await call('agent.workspace.ask',{accountId:'workspace-a',topic:'Avaliar loja',confirmedExternal:false});expect(denied.ok).toBe(false);
+    const missing=await call('agent.workspace.ask',{accountId:'workspace-a',topic:'Avaliar loja',confirmedExternal:true});
+    expect(missing.result).toMatchObject({ok:false,error:'NO_KEY',context:{snapshots:[],seo:[]}});
+    const history=await call('agent.workspace.history',{accountId:'workspace-a'});expect(history.result).toHaveLength(1);
+    expect((await call('agent.workspace.history',{accountId:'workspace-b'})).result).toEqual([]);
+    const knowledge=new KnowledgeBase(db);knowledge.add({scope:'operacao',title:'Teste',content:'Privado',source:'HUMAN',confidence:1,accountId:'workspace-a'});
+    expect((await call('agent.memory',{accountId:'workspace-a'})).result).toHaveLength(1);
+    expect((await call('agent.memory',{accountId:'workspace-b'})).result).toEqual([]);
+    expect((await call('agent.budget',{accountId:'workspace-a'})).result).toMatchObject({callsToday:0,tokensIn:0,tokensOut:0,costUsd:0,windowHours:24});
+  });
+});
+
+describe('Etapa 07 — evidência externa, confiança e automação',()=>{
+  const context=():AgentContext=>({accountId:'agent-a',listingId:'agent-listing',marketplace:'mercado_livre',window:{start:'2026-11-01T00:00:00.000Z',end:'2026-11-26T23:59:59.999Z',days:26},metrics:{adSpendCents:1000},missingData:[],dataConfidence:0.9});
+  it('não classifica Ads deficitários com receita desconhecida e não inventa impacto',()=>{
+    const ctx=context();
+    expect(runAgents(['ads'],ctx)).toEqual([]);
+    ctx.metrics.adRevenueCents=0;ctx.metrics.contributionMarginPct=-5;
+    const recs=runAgents(['ads','ads'],ctx);
+    expect(recs).toHaveLength(1);
+    expect(recs[0]?.impactRange).toBeNull();
+    expect(synthesize(recs,ctx).finalAction?.agentKey).toBe('ads');
+    ctx.dataConfidence=0.3;
+    expect(synthesize(recs,ctx).finalAction).toBeNull();
+  });
+  it('usa sinais externos com origem, data, escopo, zero legítimo e termos relacionados',()=>{
+    const now=new Date().toISOString();
+    const rows=[{id:'seo1',mode:'suggestions',scope:'GOOGLE_BR_PT',captured_at:now,result_json:JSON.stringify([{keyword:'capacete fechado',searchVolume:0,keywordDifficulty:10},{keyword:'vestido longo',searchVolume:200},{keyword:'capacete fechado',searchVolume:300}])}];
+    const evidence=matchedSeoEvidence(rows,'Capacete fechado preto');
+    expect(evidence).toEqual([{id:'seo1',mode:'suggestions',scope:'GOOGLE_BR_PT',keyword:'capacete fechado',volume:0,difficulty:10,capturedAt:now}]);
+    const ctx={...context(),externalSeo:evidence};
+    const recs=runAgents(['seo_demand','keyword_rank'],ctx);
+    expect(recs).toHaveLength(2);
+    expect(recs[0]?.evidence[0]).toMatchObject({sourceClass:'D_PUBLIC_OBSERVATION',referenceAt:now});
+    expect(recs[0]?.evidence[0]?.value).toContain('seo1');
+    expect(synthesize(recs,ctx).finalAction).toBeNull();
+  });
+  it('reconhece evidência SEO somente na loja vinculada e sem nova consulta externa',async()=>{
+    const accountId='agent-seo-a',other='agent-seo-b',at=new Date().toISOString();
+    seedImportAccount(accountId);seedImportAccount(other);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run('agent-seo-listing',accountId,'mercado_livre','MLB123456789','Capacete fechado preto','ACTIVE',at,at);
+    const insert=db.db.prepare("INSERT INTO seo_external_runs(id,account_id,mode,query,device,scope,requested_at,captured_at,status,result_json) VALUES(?,?,'suggestions','capacete','desktop','GOOGLE_BR_PT',?,?,'OK',?)");
+    insert.run('agent-seo-own',accountId,at,at,JSON.stringify([{keyword:'capacete fechado',searchVolume:0}]));
+    insert.run('agent-seo-other',other,at,at,JSON.stringify([{keyword:'capacete fechado',searchVolume:9000}]));
+    const result=await call('analysis.run',{accountId,listingId:'agent-seo-listing',mode:'360',agents:['seo_demand']});
+    expect(result.ok).toBe(true);
+    expect(result.result).toMatchObject({analyses:[{contextEvidence:{externalSeo:[{id:'agent-seo-own',volume:0}]},recommendations:[{agentKey:'seo_demand',impactRange:null}]}]});
+    expect(JSON.stringify(result.result)).not.toContain('agent-seo-other');
+  });
+  it('não permite aplicar patch pelo IPC ou declarar rollback sem restaurar arquivos',async()=>{
+    const proposalId='11111111-1111-4111-8111-111111111111';
+    expect((await call('autoupgrade.apply',{proposalId,approved:true})).result).toMatchObject({applied:false});
+    expect((await call('autoupgrade.rollback',{proposalId})).result).toMatchObject({ok:false});
+  });
+  it('corrige o deslocamento de hunks e rejeita instruções proibidas em linhas posteriores',()=>{
+    const diff='diff --git a/safe.ts b/safe.ts\n--- a/safe.ts\n+++ b/safe.ts\n@@ -1 +1,2 @@\n-a\n+x\n+y\n@@ -3 +4 @@\n-c\n+z\n';
+    let written='';
+    expect(applyUnifiedDiff(diff,()=> 'a\nb\nc',(_,content)=>{written=content})).toEqual({appliedFiles:['safe.ts'],errors:[]});
+    expect(written).toBe('x\ny\nb\nz');
+    expect(validatePatchSyntax(diff.replace('+z','+skipAuth()'))).toBe(false);
+  });
+  it('serializa chamadas Gemini e evita nova chamada depois de rate limit',async()=>{
+    let release!:()=>void,calls=0;
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const c=new GeminiClient(db,new SecretStore(db,join(dir,'sec-rate')),async()=>{calls++;await gate;return {ok:false,status:429,json:{}};});
+    c.setKey('AIzaSyTesteChaveComTamanhoSuficiente123');
+    const input={agentKey:'test',model:'gemini-2.5-flash' as const,systemPrompt:'s',userContent:'u'};
+    const first=c.call(input);
+    expect(await c.call(input)).toMatchObject({ok:false,errorCode:'RATE_LIMIT'});
+    release();expect(await first).toMatchObject({ok:false,errorCode:'RATE_LIMIT',pauseExternal:true});
+    expect(await c.call(input)).toMatchObject({ok:false,errorCode:'RATE_LIMIT',pauseExternal:true});
+    expect(calls).toBe(1);
+  });
+  it('percorre páginas de uma análise agendada sem repetir execução',async()=>{
+    const accountId='agent-schedule-pages',at=new Date().toISOString();seedImportAccount(accountId);
+    const insert=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    for(let i=0;i<26;i++)insert.run('page-listing-'+i,accountId,'mercado_livre','PAGE'+i,'Produto '+i,'ACTIVE',at,at);
+    const res=await call('analysis.schedule.create',{accountId,mode:'RAPIDA',days:7,cadence:'daily'});
+    expect(res.ok).toBe(true);const id=(res.result as {id:string}).id;
+    db.db.prepare("UPDATE analysis_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(id);
+    expect((await service.processScheduledWork()).analyses).toBe(1);
+    const row=db.row<{result_json:string}>('SELECT result_json FROM analysis_schedule_runs WHERE schedule_id=?',id)!;
+    expect(JSON.parse(row.result_json)).toMatchObject({listingCount:26,totalMatched:26,pages:2});
+    expect(db.row('SELECT COUNT(*) n FROM agent_runs WHERE account_id=?',accountId)).toMatchObject({n:104});
+    expect((await service.processScheduledWork()).analyses).toBe(0);
   });
 });

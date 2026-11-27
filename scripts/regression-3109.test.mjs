@@ -329,3 +329,233 @@ test('cadastro financeiro exige evidência e todos os valores explícitos, inclu
   inputs['rp-from']='2026-02-30';
   assert.throws(payload,/período válido/);
 });
+
+test('publicidade distingue receita ausente de zero e protege divisões',()=>{
+  const ctx=vm.createContext({Number});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function observedAdsMetrics('),dashboard.indexOf('async function viewAds()')),ctx);
+  const m=vm.runInContext('observedAdsMetrics({adSpend:100,adAttributedRevenue:0,adClicks:10,paidImpressions:200})',ctx);
+  assert.equal(m.roas,0);assert.equal(m.acos,null);assert.equal(m.ctr,5);assert.equal(m.cpc,10);
+  assert.equal(m.signal,'INVESTIMENTO_SEM_RECEITA_ATRIBUIDA');
+  const unknown=vm.runInContext('observedAdsMetrics({adSpend:100})',ctx);
+  assert.equal(unknown.revenue,null);assert.equal(unknown.roas,null);assert.equal(unknown.signal,null);
+});
+
+test('executor orçamento exige formulário exclusivo, confirmação e autorização sem replay',async()=>{
+  const src=readFileSync(new URL('../packages/extension/content/mercado-livre.js',import.meta.url),'utf8');
+  const snippet=src.slice(src.indexOf('let budgetDocumentNonce='),src.indexOf('async function publishApprovedChange'));
+  let clicks=0,consent=true,ambiguous=false,challenge=false,accountId='store-a',extraField=false,target='',buttonOverride=false;
+  class Input {
+    constructor(){this.raw='10.00';}
+    get value(){return this.raw;}
+    set value(v){this.raw=v;}
+    getAttribute(n){return n==='aria-label'?'Orçamento diário (R$)':null;}
+    closest(selector){return selector==='[data-campaign-id]'?row:form;}
+    get form(){return form;}
+    get type(){return 'number';}
+    dispatchEvent(){}
+    checkValidity(){return true;}
+  }
+  const field=new Input(),button={textContent:'Salvar',disabled:false,getAttribute:()=>null,hasAttribute:name=>buttonOverride&&name==='formtarget',get form(){return form;},click:()=>clicks++};
+  const form={action:'https://vendedores.mercadolivre.com.br/publicidade',get target(){return target;},get elements(){return extraField?[field,{type:'email'}]:[field];},querySelector:()=>null,querySelectorAll:()=>[button]};
+  class StatusSelect {
+    get value(){return this.current??'active';}
+    set value(v){this.current=v;}
+    getAttribute(key){return key==='aria-label'?'Status da campanha':null;}
+    hasAttribute(){return false;}
+    closest(selector){return selector==='form'?statusForm:row;}
+    get form(){return statusForm;}
+    get type(){return 'select-one';}
+    get options(){return [{textContent:'Ativa',value:'active',getAttribute:()=>null},{textContent:'Pausada',value:'paused',getAttribute:()=>null}];}
+    dispatchEvent(){}
+    checkValidity(){return true;}
+  }
+  const statusField=new StatusSelect();
+  const statusButton={...button,get form(){return statusForm;}};
+  const statusForm={...form,elements:[statusField],querySelectorAll:()=>[statusButton]};
+  class RoasInput extends Input {
+    constructor(){super();this.raw='5.00';}
+    getAttribute(n){return n==='aria-label'?'ROAS objetivo (x)':null;}
+    closest(selector){return selector==='[data-campaign-id]'?row:roasForm;}
+    get form(){return roasForm;}
+  }
+  const roasField=new RoasInput();
+  const roasButton={...button,get form(){return roasForm;}};
+  const roasForm={...form,elements:[roasField],querySelectorAll:()=>[roasButton]};
+  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:selector=>selector==='select'?[statusField]:[field,roasField],contains:el=>el===form||el===statusForm||el===roasForm};
+  const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:()=>ambiguous?[row,row]:[row]};
+  const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(form.action),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=> 'seller_ads',visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,HTMLSelectElement:StatusSelect,Event:class{},setTimeout:fn=>fn()});
+  vm.runInContext(snippet,ctx);
+  const grant=(id)=>({id,accountId:'store-a',campaignRef:'C1',sourcePath:form.action,documentNonce:'doc-1',beforeCents:1000,targetCents:1200,expiresAt:new Date(Date.now()+60000).toISOString()});
+  const apply=async id=>{ctx.grant=grant(id);return vm.runInContext('applyCampaignBudget(grant)',ctx);};
+  ambiguous=true;assert.equal((await apply('ambiguous')).outcome,'FAILED');ambiguous=false;
+  challenge=true;assert.equal((await apply('challenge')).outcome,'FAILED');challenge=false;
+  extraField=true;assert.equal((await apply('multiple')).outcome,'FAILED');extraField=false;
+  target='_blank';assert.equal((await apply('target')).outcome,'FAILED');target='';
+  buttonOverride=true;assert.equal((await apply('override')).outcome,'FAILED');buttonOverride=false;
+  accountId='other';assert.equal((await apply('wrong')).outcome,'FAILED');accountId='store-a';
+  consent=false;assert.equal((await apply('cancel')).outcome,'CANCELLED');consent=true;
+  assert.equal(clicks,0);assert.equal(field.value,'10.00');
+  assert.equal((await apply('valid')).outcome,'NEEDS_VERIFICATION');assert.equal(field.value,'12.00');assert.equal(clicks,1);
+  assert.equal((await apply('valid')).outcome,'FAILED');assert.equal(clicks,1);
+  ctx.grant={...grant('pause'),beforeCents:1200,targetCents:1200,beforeStatus:'ACTIVE',targetStatus:'PAUSED'};
+  assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
+  assert.equal(statusField.value,'paused');assert.equal(field.value,'12.00');assert.equal(clicks,2);
+  ctx.grant={...grant('roas'),beforeCents:1200,targetCents:1200,beforeRoas:500,targetRoas:650};
+  assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
+  assert.equal(roasField.value,'6.50');assert.equal(field.value,'12.00');assert.equal(clicks,3);
+});
+
+test('variação simples e duplicação assistidas recusam ambiguidade e repetição',async()=>{
+  const src=readFileSync(new URL('../packages/extension/content/mercado-livre.js',import.meta.url),'utf8');
+  const snippet=src.slice(src.indexOf('let budgetDocumentNonce='),src.indexOf('async function publishApprovedChange'));
+  const listing='MLB1234567',editUrl='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+listing,listUrl='https://vendedores.mercadolivre.com.br/vendas/anuncios';
+  let clicks=0,consent=true,ambiguous=false,kind='seller_listing_edit',accountId='store-a',challenge=false,nestedOther=false,duplicateAlert='';
+  class Input{
+    constructor(label,type,value=''){this.label=label;this.type=type;this.raw=value;this.tagName='INPUT';}
+    get value(){return this.raw;}set value(v){this.raw=v;}
+    getAttribute(k){return k==='aria-label'?this.label:null;}
+    dispatchEvent(){}checkValidity(){return true;}
+  }
+  const fields=[new Input('Nome da variação','text'),new Input('Opção da variação','text'),new Input('Preço (R$)','number'),new Input('Estoque','number','0')];
+  const save={textContent:'Criar variação',disabled:false,getAttribute:()=>null,click:()=>clicks++};
+  const form={action:editUrl,elements:fields,getAttribute:()=>null,querySelectorAll:()=>[save],querySelector:()=>null};
+  fields.forEach(f=>f.form=form);
+  save.form=form;
+  const dup={textContent:'Duplicar anúncio',disabled:false,getAttribute:()=>null,closest:selector=>selector==='form'?null:nestedOther?{}:row,click:()=>{clicks++;duplicateAlert='Anúncio MLB1234567 duplicado com sucesso. Novo anúncio: MLB9876543';}};
+  const row={getAttribute:k=>k==='data-item-id'?listing:null,querySelectorAll:()=>[dup]};
+  const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:s=>s==='form'?(ambiguous?[form,form]:[form]):s==='[data-item-id],[data-listing-id]'?(ambiguous?[row,row]:[row]):s.startsWith('[role="alert"]')&&duplicateAlert?[{textContent:duplicateAlert}]:[]};
+  const ctx=vm.createContext({URL,Date,MAX_LISTINGS:100,captureListingList:()=>({accountId,listings:[{listingId:listing,title:'Teste'}]}),crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(editUrl),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge,collectionFilterState:()=>({signature:'',warnings:[]})},confirm:()=>consent},currentPageKind:()=>kind,currentExternalListingId:()=>listing,visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
+  vm.runInContext(snippet,ctx);
+  const apply=(id,action,url,plan)=>{ctx.grant={id,context:{accountId:'store-a',externalListingId:listing,sourcePath:url,documentNonce:'doc-1',action},plan,expiresAt:new Date(Date.now()+60000).toISOString()};return vm.runInContext('applyListingOperation(grant)',ctx);};
+  const plan={name:'Cor',option:'Azul',priceCents:1200,stock:5};
+  ambiguous=true;assert.equal((await apply('ambiguous','CREATE_VARIATION',editUrl,plan)).outcome,'FAILED');ambiguous=false;
+  consent=false;assert.equal((await apply('cancel','CREATE_VARIATION',editUrl,plan)).outcome,'CANCELLED');consent=true;
+  assert.equal(clicks,0);
+  assert.equal((await apply('create','CREATE_VARIATION',editUrl,plan)).outcome,'NEEDS_VERIFICATION');
+  assert.deepEqual(fields.map(f=>f.value),['Cor','Azul','12.00','5']);assert.equal(clicks,1);
+  assert.equal((await apply('create','CREATE_VARIATION',editUrl,plan)).outcome,'FAILED');assert.equal(clicks,1);
+  kind='seller_listings';ctx.location=new URL(listUrl);
+  accountId='other';assert.equal((await apply('wrong','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');accountId='store-a';
+  challenge=true;assert.equal((await apply('challenge','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');challenge=false;
+  nestedOther=true;assert.equal((await apply('nested','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');nestedOther=false;
+  const duplicate=await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'});
+  assert.equal(duplicate.outcome,'NEEDS_VERIFICATION');
+  assert.equal(duplicate.clicked,true);assert.equal(duplicate.baseline.listingIds[0],listing);assert.equal(duplicate.duplicateReceipt.newId,'MLB9876543');assert.equal(clicks,2);
+  assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');assert.equal(clicks,2);
+});
+
+test('conferência automática de orçamento lê documento distinto da mesma conta e fecha a aba temporária',async()=>{
+  const src=readFileSync(new URL('../packages/extension/service-worker.js',import.meta.url),'utf8');
+  const snippet=src.slice(src.indexOf('async function verifyCampaignInFreshTab'),src.indexOf('async function readCapturePageInfo'));
+  const sourcePath='https://vendedores.mercadolivre.com.br/publicidade';
+  const tab={id:10,url:sourcePath,windowId:1};
+  const grant={campaignRef:'C1',accountId:'store-a',sourcePath,documentNonce:'old',targetCents:1200};
+  let info={ok:true,campaignRef:'C1',accountId:'store-a',sourcePath,documentNonce:'new',budgetCents:1200};
+  const calls=[],removed=[];
+  const ctx=vm.createContext({
+    tab,grant,chrome:{tabs:{
+      create:async options=>{assert.equal(options.active,false);assert.equal(options.url,sourcePath);return {id:11};},
+      sendMessage:async(id,message)=>{assert.equal(id,11);assert.equal(message.type,'MI_CAMPAIGN_BUDGET_CONTEXT');return info;},
+      remove:async id=>removed.push(id),
+    }},
+    waitForTabComplete:async(id,url)=>{assert.equal(id,11);assert.equal(url,sourcePath);},
+    callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:{status:'UI_READBACK_MATCHED'}};},
+  });
+  vm.runInContext(snippet,ctx);
+  const verify=()=>vm.runInContext('verifyCampaignInFreshTab(tab,grant,"proposal")',ctx);
+  assert.equal((await verify()).result.status,'UI_READBACK_MATCHED');
+  assert.equal(calls[0].method,'campaign.budget.verify');
+  assert.equal(calls[0].payload.proposalId,'proposal');
+  for(const mismatch of [{accountId:'another-store'},{budgetCents:1000},{documentNonce:'old'}]){
+    const original=info;
+    info={...info,...mismatch};
+    assert.equal(await verify(),null);
+    info=original;
+  }
+  assert.equal(calls.length,1);
+  assert.deepEqual(removed,[11,11,11,11]);
+});
+
+test('edição de variação só registra a releitura em documento novo e da mesma loja',async()=>{
+  const start=worker.indexOf('async function verifyVariationInFreshTab');
+  const end=worker.indexOf('async function readCapturePageInfo',start);
+  assert.ok(start>=0&&end>start);
+  const url='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1234567';
+  const context={accountId:'store-a',externalListingId:'MLB1234567',variationId:'V1',sourcePath:url,documentNonce:'original'};
+  const grant={context,plan:{name:'Azul',priceCents:1200,stock:0}};
+  const matched={ok:true,action:'EDIT_VARIATION',...context,documentNonce:'fresh',variationLabel:'Azul',beforePriceCents:1200,beforeStock:0};
+  let observed=matched,ingested=1;
+  const calls=[],removed=[];
+  const ctx=vm.createContext({grant,tab:{url,windowId:3},waitForTabComplete:async()=>{},captureAccepted:r=>r.ok,
+    chrome:{tabs:{create:async opts=>{assert.equal(opts.active,false);return {id:26};},
+      remove:async id=>removed.push(id),sendMessage:async(id,message)=>{assert.equal(id,26);assert.equal(message.type,'MI_LISTING_OPERATION_CONTEXT');return observed;}}},
+    callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:method==='capture.ingest'?{detailRowsIngested:ingested}:{status:'UI_READBACK_MATCHED'}};}
+  });
+  vm.runInContext(worker.slice(start,end),ctx);
+  const verify=()=>vm.runInContext('verifyVariationInFreshTab(tab,grant,"proposal")',ctx);
+  assert.equal((await verify()).result.status,'UI_READBACK_MATCHED');
+  assert.equal(calls[0].payload.details[0].metrics.stockAvailable,0);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1].payload)),{accountId:'store-a',proposalId:'proposal',observedExternalId:'V1'});
+  for(const mismatch of [{accountId:'other'},{externalListingId:'MLB9999999'},{documentNonce:'original'},{beforeStock:1}]){
+    observed={...matched,...mismatch};
+    assert.equal(await verify(),null);
+  }
+  assert.equal(calls.length,2);
+  ingested=0;
+  observed=matched;
+  assert.equal(await verify(),null);
+  assert.equal(calls.length,3);
+  assert.deepEqual(removed,[26,26,26,26,26,26]);
+});
+
+test('criação assistida apenas registra um candidato único em nova leitura',async()=>{
+  const start=worker.indexOf('async function verifyVariationInFreshTab');
+  const end=worker.indexOf('async function readCapturePageInfo',start);
+  const externalListingId='MLB1234567';
+  const url='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+externalListingId;
+  const accountId='store-a',grant={context:{action:'CREATE_VARIATION',accountId,externalListingId,sourcePath:url},plan:{option:'Azul',priceCents:1200,stock:0}};
+  const row={kind:'LISTING_VARIANT',parentExternalId:externalListingId,externalId:'V1',label:'Azul',metrics:{price:12,stockAvailable:0},evidence:{price:'R$ 12',stockAvailable:'0'}};
+  const snapshot={accountId,marketplace:'mercado_livre',url,pageKind:'seller_listing_edit',details:[row]};
+  const calls=[];
+  const ctx=vm.createContext({grant,tab:{url},captureAccepted:r=>r.ok,waitForTabComplete:async()=>{},chrome:{tabs:{
+    create:async()=>({id:27}),remove:async()=>{},sendMessage:async(_,request)=>{assert.equal(request.type,'MI_CAPTURE_REQUEST');return {ok:true,snapshot};},
+  }},callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:method==='capture.ingest'?{detailRowsIngested:1}:{status:'CANDIDATE_OBSERVED',remoteVerified:false}};}});
+  vm.runInContext(worker.slice(start,end),ctx);
+  const verify=()=>vm.runInContext('verifyVariationInFreshTab(tab,grant,"proposal")',ctx);
+  snapshot.details=[row,{...row,externalId:'V2'}];
+  assert.equal(await verify(),null);
+  assert.equal(calls.length,0);
+  snapshot.details=[row];
+  assert.equal((await verify()).result.remoteVerified,false);
+  assert.equal(calls[1].payload.observedExternalId,'V1');
+});
+
+test('duplicação assistida procura apenas um novo candidato no mesmo recorte da loja',async()=>{
+  const start=worker.indexOf('async function observeDuplicateInFreshTab');
+  const end=worker.indexOf('async function readCapturePageInfo',start);
+  const url='https://vendedores.mercadolivre.com.br/anuncios',accountId='store-a',externalListingId='MLB1234567';
+  const source={listingId:externalListingId,title:'Produto'};
+  const existing={listingId:'MLB2345678',title:'Produto'};
+  const candidate={listingId:'MLB3456789',title:'Produto'};
+  const snapshot={accountId,marketplace:'mercado_livre',url,pageKind:'seller_listings',filterSignature:'status=all',listings:[source,existing,candidate]};
+  const grant={context:{accountId,sourcePath:url,externalListingId},plan:{originalTitle:source.title}};
+  const baseline={listingIds:[source.listingId,existing.listingId],filterSignature:'status=all'};
+  const calls=[],removed=[];
+  const ctx=vm.createContext({grant,baseline,tab:{url},captureAccepted:r=>r.ok,waitForTabComplete:async()=>{},chrome:{tabs:{
+    create:async()=>({id:29}),remove:async id=>removed.push(id),sendMessage:async()=>({ok:true,snapshot}),
+  }},callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:method==='capture.ingest'
+    ?{listingsIngested:1}:{status:'CANDIDATE_OBSERVED',remoteVerified:false}};}});
+  vm.runInContext(worker.slice(start,end),ctx);
+  const observe=()=>vm.runInContext('observeDuplicateInFreshTab(tab,grant,"proposal",baseline)',ctx);
+  snapshot.filterSignature='status=active';
+  assert.equal(await observe(),null);
+  snapshot.filterSignature=baseline.filterSignature;
+  snapshot.listings.push({listingId:'MLB4567890',title:'Produto'});
+  assert.equal(await observe(),null);
+  assert.equal(calls.length,0);
+  snapshot.listings.pop();
+  assert.equal((await observe()).result.remoteVerified,false);
+  assert.equal(calls[0].payload.listings[0].listingId,candidate.listingId);
+  assert.equal(calls[1].payload.observedExternalId,candidate.listingId);
+  assert.deepEqual(removed,[29,29,29]);
+});

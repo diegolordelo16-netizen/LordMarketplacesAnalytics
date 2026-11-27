@@ -12,7 +12,7 @@
         <span class="dot" id="status-dot" aria-hidden="true"></span>
         <strong>Marketplace Intelligence</strong>
       </div>
-      <span class="version" id="version">v3.13.0</span>
+      <span class="version" id="version">v3.16.0</span>
     </header>
 
     <section class="card">
@@ -32,6 +32,49 @@
       <p class="hint" id="hint">A captura lê apenas o que está visível na sua sessão. Nada de cookies, tokens ou endpoints privados.</p>
     </section>
 
+    <section class="card">
+      <h2>Concorrentes — busca pública</h2>
+      <p class="hint">Abra resultados públicos do Mercado Livre, Shopee ou Amazon. Selecione sua loja e produto, depois capture até 20 cartões reconhecidos. Não altera contas nem anúncios.</p>
+      <label class="field-label" for="comp-account">Loja</label><select id="comp-account"></select>
+      <label class="field-label" for="comp-product">Produto próprio</label><select id="comp-product"></select>
+      <button id="comp-refresh">Atualizar lojas e produtos</button>
+      <button id="comp-amazon-permission">Autorizar leitura pública Amazon</button>
+      <label class="field-label" for="comp-kind">Critério do plano</label><select id="comp-kind"><option value="TITLE">Título</option><option value="BRAND_MODEL">Marca/modelo</option><option value="SKU">SKU</option><option value="ATTRIBUTES">Atributos</option></select>
+      <label><input id="comp-ml" type="checkbox" checked> Mercado Livre</label><label><input id="comp-shopee" type="checkbox"> Shopee</label><label><input id="comp-amazon" type="checkbox"> Amazon</label>
+      <button id="comp-plan">Executar plano de busca (até 3 abas)</button>
+      <label class="field-label" for="comp-runs">Monitoramento diário (1 a 30 ciclos)</label><input id="comp-runs" type="number" min="1" max="30" step="1" value="7">
+      <button id="comp-schedule-start">Autorizar agendamento diário</button>
+      <button id="comp-schedule-stop">Desativar agendamento</button>
+      <button id="comp-schedule-status">Consultar agendamento</button>
+      <p class="hint" id="comp-schedule-out" role="status">Um plano por instalação; requer navegador e sessão local ativos. Interrompe em falha ou troca de sessão. Não repete ciclos perdidos.</p>
+      <button id="comp-capture">Capturar resultados visíveis</button>
+      <label class="field-label" for="comp-content-side">Página de produto</label><select id="comp-content-side"><option value="OWN">Meu produto</option><option value="RIVAL">Concorrente aprovado</option></select>
+      <label class="field-label" for="comp-content-relation">Concorrente (para página rival)</label><select id="comp-content-relation"></select>
+      <button id="comp-content-capture">Capturar descrição, promoções e imagens visíveis</button>
+      <p class="hint" id="comp-content-out" role="status">Abra a página pública do anúncio vinculado; identidade e origem são verificadas. CORS pode impedir cálculo visual.</p>
+      <p class="hint" id="comp-out" role="status">Nenhuma captura solicitada.</p>
+    </section>
+    <section class="card">
+      <h2>Anúncios e variações — Mercado Livre</h2>
+      <p class="hint">Somente propostas aprovadas. Abra a lista para duplicação ou o formulário dedicado da variação. O executor recusa controles ambíguos e não repete cliques. Depois capture o anúncio/variação resultante e confira pelo dashboard.</p>
+      <label class="field-label" for="listing-op-proposal">ID da proposta</label><input id="listing-op-proposal" maxlength="200" autocomplete="off">
+      <label class="field-label" for="listing-op-external">ID externo do anúncio</label><input id="listing-op-external" maxlength="200" autocomplete="off">
+      <label class="field-label" for="listing-op-action">Ação</label><select id="listing-op-action"><option value="DUPLICATE">Duplicar anúncio</option><option value="CREATE_VARIATION">Criar variação simples</option><option value="EDIT_VARIATION">Editar preço/estoque da variação</option></select>
+      <label class="field-label" for="listing-op-variation">ID externo da variação (edição)</label><input id="listing-op-variation" maxlength="200" autocomplete="off">
+      <button id="listing-op-apply">Executar proposta aprovada</button><p class="hint" id="listing-op-out" role="status">Nenhuma operação solicitada.</p>
+    </section>
+    <section class="card">
+      <h2>Configurações de campanha — Mercado Livre</h2>
+      <p class="hint">Proposta aprovada no dashboard: orçamento diário, status ou ROAS objetivo (uma alteração por proposta). Abra a campanha na aba ativa. A execução exige confirmação no navegador; a leitura após recarga não prova causalidade.</p>
+      <label class="field-label" for="budget-proposal">ID da proposta aprovada</label>
+      <input id="budget-proposal" maxlength="200" autocomplete="off">
+      <label class="field-label" for="budget-campaign">ID externo da campanha</label>
+      <input id="budget-campaign" maxlength="200" autocomplete="off">
+      <label class="field-label" for="campaign-setting">Tipo de alteração</label>
+      <select id="campaign-setting"><option value="BUDGET">Orçamento diário</option><option value="STATUS">Pausa ou reativação</option><option value="ROAS">ROAS objetivo</option></select>
+      <div class="actions"><button id="budget-apply">Executar proposta aprovada</button><button id="budget-verify">Conferir após recarregar</button></div>
+      <p class="hint" id="budget-out" role="status">Nenhuma operação solicitada.</p>
+    </section>
     <section class="card">
       <h2>Inteligência de navegação</h2>
       <p class="hint">Aprenda rotas de leitura enquanto você navega na mesma aba e loja. Não grava cliques, senhas, texto de clientes ou parâmetros de URL.</p>
@@ -102,7 +145,7 @@
         <button id="schedule-analysis">Agendar análise</button>
         <button id="schedule-report">Agendar relatório</button>
       </div>
-      <p class="hint" id="operation-out">Todos os modos mantêm publicação e alterações remotas desativadas. Ações sensíveis exigem aprovação humana.</p>
+      <p class="hint" id="operation-out">Modos não liberam escrita autônoma. Operações assistidas exigem proposta, confirmação individual, limites e controle reconhecido.</p>
     </section>
 
     <section class="card" id="user-admin" hidden>

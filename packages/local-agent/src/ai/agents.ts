@@ -107,6 +107,7 @@ export interface AgentContext {
     sponsoredPresence: boolean;
   };
   returnReasons?: string[];
+  externalSeo?: Array<{id:string;keyword:string;volume:number|null;difficulty:number|null;scope:string;capturedAt:string;mode:string}>;
   dataConfidence: number;
   missingData: string[];
 }
@@ -181,9 +182,9 @@ const seoDemand: AgentFn = (ctx) => {
 const ads: AgentFn = (ctx) => {
   const m = ctx.metrics;
   const recs: AgentRecommendation[] = [];
-  const spend = m.adSpendCents ?? 0;
-  const revenue = m.adRevenueCents ?? 0;
-  if (spend > 0 && revenue < spend) {
+  const spend = m.adSpendCents;
+  const revenue = m.adRevenueCents;
+  if (spend != null && revenue != null && spend > 0 && revenue < spend) {
     recs.push({
       agentKey: 'ads',
       diagnosis: 'Ads consumindo mais do que gera: campanha deficitária.',
@@ -205,7 +206,7 @@ const ads: AgentFn = (ctx) => {
       ...guard('a mudança de Ads', 'manage_financial_limits'),
     });
   }
-  if (spend > 0 && (m.stockCoverageDays ?? 99) < 7) {
+  if (spend != null && spend > 0 && m.stockCoverageDays != null && m.stockCoverageDays < 7) {
     recs.push({
       agentKey: 'ads',
       diagnosis: 'Ads ativos com estoque prestes a acabar.',
@@ -285,7 +286,7 @@ const finance: AgentFn = (ctx) => {
       agentKey: 'finance',
       diagnosis: `Margem de contribuição negativa (${m.contributionMarginPct.toFixed(1)}%).`,
       evidence: [
-        { label: 'Contribuição', value: ((m.contributionCents ?? 0) / 100).toFixed(2), sourceClass: 'CALCULATED' },
+        { label: 'Contribuição', value: m.contributionCents == null ? 'não confirmado' : (m.contributionCents / 100).toFixed(2), sourceClass: 'CALCULATED' },
         { label: 'Margem', value: `${m.contributionMarginPct.toFixed(1)}%`, sourceClass: 'CALCULATED' },
       ],
       window: `${ctx.window.start} → ${ctx.window.end}`,
@@ -570,7 +571,7 @@ const growthStrategy: AgentFn = (ctx) => {
       agentKey: 'growth_strategy',
       diagnosis: `North Star (contribuição líquida) depende hoje de: ${parts.join(', ') || 'dados insuficientes'}.`,
       evidence: [
-        { label: 'Contribuição', value: ((m.contributionCents ?? 0) / 100).toFixed(2), sourceClass: 'CALCULATED' },
+        { label: 'Contribuição', value: m.contributionCents == null ? 'não confirmado' : (m.contributionCents / 100).toFixed(2), sourceClass: 'CALCULATED' },
         { label: 'CVR', value: m.cvrPct === null || m.cvrPct === undefined ? 'não coletado' : `${m.cvrPct.toFixed(2)}%`, sourceClass: 'CALCULATED' },
       ],
       window: `${ctx.window.start} → ${ctx.window.end}`,
@@ -622,10 +623,14 @@ export interface DirectorSynthesis {
  */
 export function runAgents(agents: AgentKey[], ctx: AgentContext): AgentRecommendation[] {
   const out: AgentRecommendation[] = [];
-  for (const key of agents) {
+  for (const key of new Set(agents)) {
     const fn = AGENT_IMPLEMENTATIONS[key];
     if (!fn) continue;
-    for (const rec of fn(ctx)) out.push(rec);
+    for (const rec of fn(ctx)) out.push({...rec,impactRange:null});
+    if((key==='seo_demand'||key==='keyword_rank')&&ctx.externalSeo?.length){
+      const rows=ctx.externalSeo.slice(0,5);
+      out.push({agentKey:key,diagnosis:'Sinais externos Google lexicalmente relacionados ao anúncio; validar demanda interna antes de editar.',evidence:rows.map(row=>({label:'DataForSEO '+row.keyword,value:JSON.stringify({runId:row.id,scope:row.scope,mode:row.mode,googleSearchVolume:row.volume,keywordDifficulty:row.difficulty}),sourceClass:'D_PUBLIC_OBSERVATION',referenceAt:row.capturedAt})),window:ctx.window.start+' → '+ctx.window.end,sampleSize:rows.length,facts:['Amostras externas registradas localmente, não representam buscas ou ranking no marketplace.'],hypotheses:['Termos podem orientar uma pesquisa de relevância interna.'],confidence:Math.min(ctx.dataConfidence,0.65),missingData:['demanda interna e conversão por termo não confirmadas'],impactRange:null,risk:'confundir volume Google com demanda do marketplace',guardrailMetric:'margem e conversão por termo',actionProposed:'Revisar termos observados e comparar com evidência interna antes de qualquer alteração',alternative:'Coletar posição e conversão por termo no marketplace',requiresApproval:false,requiredPermission:'view_reports',verificationCriteria:'confirmar relevância, amostra e janela interna sem executar alteração automática'});
+    }
   }
   return out;
 }
@@ -638,8 +643,9 @@ export function synthesize(
   const conflicts: DirectorSynthesis['conflicts'] = [];
 
   const marginNegative = (ctx.metrics.contributionMarginPct ?? 0) < 0;
+  const marginUnknown=ctx.metrics.contributionMarginPct==null||!Number.isFinite(ctx.metrics.contributionMarginPct);
   const trafficIncreasing = recommendations.filter((r) =>
-    ['seo_demand', 'keyword_rank', 'ads', 'market_category'].includes(r.agentKey),
+    ['seo_demand', 'keyword_rank', 'market_category'].includes(r.agentKey),
   );
 
   let filtered = recommendations;
@@ -653,6 +659,7 @@ export function synthesize(
     notes.push('margem negativa detectada: recomendações de aumento de tráfego foram bloqueadas');
   }
 
+  if(marginUnknown&&trafficIncreasing.length){notes.push('margem não confirmada: recomendações de tráfego exigem validação financeira antes de priorizar investimento');}
   if (ctx.dataConfidence < 0.7) {
     notes.push(`confiança dos dados ${(ctx.dataConfidence * 100).toFixed(0)}% abaixo de 70%: diagnóstico não é conclusivo`);
   }
@@ -666,7 +673,7 @@ export function synthesize(
   return {
     recommendations: filtered,
     conflicts,
-    finalAction: ranked[0] ?? null,
+    finalAction: !Number.isFinite(ctx.dataConfidence)||ctx.dataConfidence<0.7?null:ranked.find(r=>r.confidence>=0.7&&(!marginUnknown||!trafficIncreasing.includes(r)))??null,
     notes,
   };
 }

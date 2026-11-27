@@ -26,7 +26,7 @@ describe('extensão: manifest', () => {
   it('mantém a versão visível do painel alinhada ao manifest', () => {
     const panel = readFileSync(join(ext, 'panel', 'panel.html'), 'utf8');
     expect(panel.match(/id="version">v([^<]+)</)?.[1]).toBe(manifest.version);
-    expect(manifest.version).toBe('3.13.0');
+    expect(manifest.version).toBe(JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version);
   });
 
   it('é MV3 e não pede permissões além do necessário', () => {
@@ -572,7 +572,7 @@ describe('extensão: o worker executa de verdade', () => {
     const builtins = new Set([
       'console', 'fetch', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
       'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
-      'structuredClone', 'queueMicrotask',
+      'structuredClone', 'queueMicrotask', 'getComputedStyle',
     ]);
     // palavras que o regex pega dentro de comentários/strings em português
     const noise = new Set([
@@ -1053,5 +1053,75 @@ describe('restauração de filtro listbox',()=>{
     b.disabled=false;
     expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(true);
     expect(window.MI_DOM.collectionFilterState(root).signature).toBe('período=últimos 30 dias');
+  });
+});
+
+describe('captura pública de concorrentes',()=>{
+  it('lê somente cartões reconhecidos e preserva preço zero/ausência sem inferir patrocínio',()=>{
+    const source=readFileSync(join(ext,'service-worker.js'),'utf8');
+    const start=source.indexOf('function collectPublicCompetitorCards(){');
+    const end=source.indexOf('/** Ponte para o painel lateral',start);
+    expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
+    const el=(text:string,href?:string)=>({innerText:text,textContent:text,href,getClientRects:()=>[{}]});
+    const title=el('Capacete'),price=el('R$ 299,90'),anchor=el('', 'https://www.amazon.com.br/dp/B012345678?ref=abc');
+    const card={...el('Capacete'),getAttribute:()=> 'B012345678',querySelector:(sel:string)=>sel==='h2'?title:price,querySelectorAll:(sel:string)=>sel==='a[href]'?[anchor]:[]};
+    const context=vm.createContext({URL,Date,Number,String,Set,location:{href:'https://www.amazon.com.br/s?k=capacete'},document:{querySelectorAll:()=>[card,card]},window:{getComputedStyle:()=>({visibility:'visible',display:'block'})}});
+    const result=vm.runInContext(source.slice(start,end)+';collectPublicCompetitorCards()',context);
+    expect(result).toMatchObject({marketplace:'amazon',candidates:[{externalId:'B012345678',title:'Capacete',url:'https://www.amazon.com.br/dp/B012345678',priceCents:29990,sponsored:null,observedOrder:1}]});
+    const rejected=vm.createContext({URL,location:{href:'https://sellercentral.amazon.com.br/'}});
+    expect(vm.runInContext(source.slice(start,end)+';collectPublicCompetitorCards()',rejected)).toHaveProperty('error');
+  });
+});
+
+describe('agendamento de busca competitiva',()=>{
+  it('reserva um ciclo, interrompe falhas e exige confirmação e sessão estável',async()=>{
+    const source=readFileSync(join(ext,'service-worker.js'),'utf8');
+    const start=source.indexOf("const COMP_PLAN_KEY='mi.competitor.public.schedule.v1'");
+    const end=source.indexOf('chrome.runtime.onMessage.addListener',start);
+    expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
+    const key='mi.competitor.public.schedule.v1',stored:Record<string,any>={};
+    let token='fixture-session',calls=0,removed=0,fail=false;
+    const url='https://www.amazon.com.br/s?k=capacete';
+    const chrome={storage:{local:{get:async(k:string)=>({[k]:structuredClone(stored[k])}),set:async(v:Record<string,any>)=>Object.assign(stored,structuredClone(v)),remove:async(k:string)=>{delete stored[k]}}},permissions:{contains:async()=>true},tabs:{create:async()=>{calls++;return {id:1}},get:async()=>({url}),remove:async()=>{removed++}},scripting:{executeScript:async()=>[{result:fail?{error:'blocked'}:{marketplace:'amazon',sourceUrl:url,candidates:[{}]}}]}};
+    const callService=async(method:string)=>method==='competitor.searchPlan'?{ok:true,result:{links:[{kind:'TITLE',marketplace:'amazon',url}]}}:{ok:true,result:{observedCards:1}};
+    const context=vm.createContext({chrome,Date,URL,TextEncoder,Uint8Array,crypto:{subtle:{digest:async()=>new Uint8Array([token==='fixture-session'?1:2]).buffer}},sessionToken:async()=>token,callService,waitForTabComplete:async()=>{},collectPublicCompetitorCards:()=>{}});
+    vm.runInContext(source.slice(start,end),context);
+    const input={confirmed:true,accountId:'a',ownProductId:'p',kind:'TITLE',marketplaces:['amazon'],runs:2};
+    context.input=input;
+    await expect(vm.runInContext("competitorSchedule('start',{...input,confirmed:false})",context)).rejects.toThrow();
+    await vm.runInContext("competitorSchedule('start',input)",context);
+    expect(stored[key]).toMatchObject({enabled:true,remaining:2});
+    stored[key].nextAt=0;
+    await vm.runInContext('runDueCompetitorSchedule()',context);
+    expect(stored[key]).toMatchObject({enabled:true,remaining:1,last:{status:'OBSERVED'}});
+    expect(calls).toBe(1);expect(removed).toBe(1);
+    await vm.runInContext('runDueCompetitorSchedule()',context);expect(calls).toBe(1);
+    stored[key].nextAt=0;fail=true;
+    await vm.runInContext('runDueCompetitorSchedule()',context);
+    expect(stored[key]).toMatchObject({enabled:false,remaining:0,last:{status:'NOT_VERIFIED'}});
+    await vm.runInContext("competitorSchedule('start',input)",context);
+    stored[key].nextAt=0;token='changed';
+    await vm.runInContext('runDueCompetitorSchedule()',context);
+    expect(stored[key]).toMatchObject({enabled:false,remaining:2,last:{status:'NOT_VERIFIED'}});
+    expect(calls).toBe(2);
+    await vm.runInContext("competitorSchedule('stop')",context);expect(stored[key]).toBeUndefined();
+  });
+});
+
+describe('captura pública do conteúdo de anúncios',()=>{
+  it('preserva descrição e promoção explícitas, não inventa hash e rejeita páginas não reconhecidas',()=>{
+    const source=readFileSync(join(ext,'service-worker.js'),'utf8');
+    const start=source.indexOf('function collectPublicProductContent(){'),end=source.indexOf('function collectPublicCompetitorCards(){',start);
+    expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
+    const visible={getClientRects:()=>[{}]};
+    const nodes:Record<string,any[]>={'#productTitle':[{...visible,innerText:'Capacete'}],'#productDescription':[{...visible,innerText:'Casco ABS'}],'#couponBadge, #couponText, #promoPriceBlockMessage_feature_div, #vpcButton':[{...visible,innerText:'Cupom 10%'}],'#landingImage, #altImages img':[{...visible,tagName:'IMG',currentSrc:'https://images.example.com/a.jpg?secret=1',complete:false}]};
+    const context=vm.createContext({URL,Date,location:{href:'https://www.amazon.com.br/dp/B012345678'},document:{querySelectorAll:(s:string)=>nodes[s]??[]},getComputedStyle:()=>({visibility:'visible',display:'block'})});
+    const fn=source.slice(start,end)+';collectPublicProductContent()';
+    expect(vm.runInContext(fn,context)).toMatchObject({description:'Casco ABS',promotions:['Cupom 10%'],images:[{url:'https://images.example.com/a.jpg'}]});
+    expect(vm.runInContext(fn,context).images[0]).not.toHaveProperty('dhash64');
+    delete nodes['#couponBadge, #couponText, #promoPriceBlockMessage_feature_div, #vpcButton'];
+    expect(vm.runInContext(fn,context)).not.toHaveProperty('promotions');
+    context.location.href='https://sellercentral.amazon.com.br/';
+    expect(vm.runInContext(fn,context)).toHaveProperty('error');
   });
 });

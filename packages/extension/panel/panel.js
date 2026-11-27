@@ -538,7 +538,122 @@ async function learningAction(action){
     $('learning-status').textContent=action==='clear'?'Memória apagada.':'Página demonstrada e salva.';
   }
 }
+let listingOperationBusy=false;
+async function listingOperationApply(){
+  if(listingOperationBusy)return;
+  const proposalId=$('listing-op-proposal').value.trim(),externalListingId=$('listing-op-external').value.trim(),action=$('listing-op-action').value,variationId=$('listing-op-variation').value.trim(),out=$('listing-op-out');
+  if(!proposalId||!externalListingId||(action==='EDIT_VARIATION'&&!variationId)||(action!=='EDIT_VARIATION'&&variationId)){out.textContent='Informe proposta, anúncio e ID de variação somente para edição.';return;}
+  if(!window.confirm('Solicitar uma execução única da proposta aprovada? Confira a loja, o anúncio e os dados do formulário.'+' A extensão tentará conferir o resultado em uma nova aba.'))return;
+  listingOperationBusy=true;$('listing-op-apply').disabled=true;
+  try{
+    const response=await call('listing.browser.apply',{proposalId,externalListingId,action,variationId:variationId||undefined,confirmed:true});
+    out.textContent=response?.ok?JSON.stringify(response.result):response?.error?.message||'Operação recusada. Confira antes de repetir.';
+  }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
+  finally{listingOperationBusy=false;$('listing-op-apply').disabled=false;}
+}
+let budgetBusy=false;
+async function budgetAction(action){
+  if(budgetBusy)return;
+  const proposalId=$('budget-proposal').value.trim(),campaignRef=$('budget-campaign').value.trim(),out=$('budget-out');
+  if(!proposalId||!campaignRef){out.textContent='Informe a proposta e a campanha.';return;}
+  if(!window.confirm(action==='apply'?'Solicitar uma execução única da proposta aprovada? A extensão tentará conferir o valor em uma nova aba da mesma página.':'A página foi recarregada e corresponde à mesma campanha?'))return;
+  budgetBusy=true;$('budget-apply').disabled=true;$('budget-verify').disabled=true;
+  try{
+    const response=await call('campaign.browser.'+action,{proposalId,campaignRef,changeKind:$('campaign-setting').value,confirmed:true});
+    out.textContent=response?.ok?JSON.stringify(response.result):response?.error?.message||'Operação recusada. Não repetir sem conferir.';
+  }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
+  finally{budgetBusy=false;$('budget-apply').disabled=false;$('budget-verify').disabled=false;}
+}
+let compLoad=0,compRelationsLoad=0;
+async function compRelations(){
+  const generation=++compRelationsLoad,accountId=$('comp-account').value,ownProductId=$('comp-product').value,select=$('comp-content-relation');
+  select.replaceChildren();
+  if(!accountId||!ownProductId)return;
+  const r=await call('competitor.relations',{accountId,ownProductId,status:'APROVADO'});
+  if(generation!==compRelationsLoad||accountId!==$('comp-account').value||ownProductId!==$('comp-product').value)return;
+  for(const row of r?.ok?r.result??[]:[]){const o=document.createElement('option');o.value=row.id;o.textContent=row.candidate_title;select.append(o);}
+}
+async function compContentCapture(){
+  const accountId=$('comp-account').value,ownProductId=$('comp-product').value,side=$('comp-content-side').value,relationId=$('comp-content-relation').value,out=$('comp-content-out'),button=$('comp-content-capture');
+  if(!accountId||!ownProductId||(side==='RIVAL'&&!relationId)){out.textContent='Selecione a loja, produto e concorrente quando aplicável.';return;}
+  if(!confirm('Registrar somente a descrição, promoções e imagens reconhecidas da página pública aberta?'))return;
+  button.disabled=true;
+  try{
+    const r=await call('competitor.captureCurrentPublicContent',{accountId,ownProductId,side,...(side==='RIVAL'?{relationId}:{}),confirmed:true});
+    out.textContent=r?.ok?'Evidência pública registrada. Confira o comparativo no histórico.':r?.error?.message||'Captura não concluída.';
+  }catch(e){out.textContent=String(e?.message||e);}
+  finally{button.disabled=false;}
+}
+async function compProducts(){
+  const generation=++compLoad,accountId=$('comp-account').value,select=$('comp-product');select.replaceChildren();
+  $('comp-content-relation').replaceChildren();++compRelationsLoad;
+  if(!accountId)return;
+  const r=await call('competitor.ownProduct.list',{accountId});if(generation!==compLoad||accountId!==$('comp-account').value)return;
+  for(const row of r?.ok?r.result??[]:[]){const o=document.createElement('option');o.value=row.id;o.textContent=row.title;select.append(o);}
+  await compRelations();
+}
+async function compAccounts(){
+  const r=await call('account.list',{}),select=$('comp-account');select.replaceChildren();
+  for(const row of r?.ok?r.result??[]:[]){if(!row.is_active)continue;const o=document.createElement('option');o.value=row.id;o.textContent=row.display_name;select.append(o);}
+  await compProducts();
+}
+async function compCapture(){
+  const accountId=$('comp-account').value,ownProductId=$('comp-product').value,out=$('comp-out'),button=$('comp-capture');
+  if(!accountId||!ownProductId){out.textContent='Selecione uma loja e produto próprio.';return;}
+  if(!confirm('Registrar até 20 cartões públicos como candidatos pendentes deste produto?'))return;
+  button.disabled=true;
+  try{
+    const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+    if(tab?.url&&new URL(tab.url).hostname==='www.amazon.com.br'){
+      const granted=await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']});
+      if(!granted){out.textContent='Permissão Amazon pública não concedida.';return;}
+    }
+    const r=await call('competitor.captureCurrentPublicSearch',{accountId,ownProductId,confirmed:true});
+    out.textContent=r?.ok?String(r.result.observedCards)+' cartões registrados; candidatos pendentes no dashboard.':r?.error?.message||'Captura não concluída.';
+  }catch(e){out.textContent=String(e?.message||e);}
+  finally{button.disabled=false;}
+}
 document.addEventListener('DOMContentLoaded', async () => {
+  $('comp-refresh').addEventListener('click',()=>void compAccounts());
+  $('comp-amazon-permission').addEventListener('click',()=>{void chrome.permissions.request({origins:['https://www.amazon.com.br/*']}).then(ok=>$('comp-out').textContent=ok?'Leitura pública Amazon autorizada.':'Permissão não concedida.').catch(e=>$('comp-out').textContent=String(e?.message||e));});
+  $('comp-plan').addEventListener('click',async()=>{
+    const accountId=$('comp-account').value,ownProductId=$('comp-product').value,kind=$('comp-kind').value,out=$('comp-out'),button=$('comp-plan');
+    const marketplaces=[['comp-ml','mercado_livre'],['comp-shopee','shopee'],['comp-amazon','amazon']].filter(([id])=>$(id).checked).map(([,value])=>value);
+    if(!accountId||!ownProductId||!marketplaces.length){out.textContent='Selecione loja, produto e marketplace.';return;}
+    if(!confirm('Abrir até três buscas públicas em abas temporárias e registrar somente cartões reconhecidos?'))return;
+    if(marketplaces.includes('amazon')&&!await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']})){out.textContent='Autorize leitura pública Amazon antes de executar.';return;}
+    button.disabled=true;out.textContent='Lendo buscas públicas autorizadas…';
+    try{const r=await call('competitor.executePublicPlan',{accountId,ownProductId,kind,marketplaces,confirmed:true});out.textContent=r?.ok?JSON.stringify(r.result.outcomes):r?.error?.message||'Busca não concluída.';}
+    finally{button.disabled=false;}
+  });
+  async function scheduleAction(action){
+    const out=$('comp-schedule-out'),buttons=['comp-schedule-start','comp-schedule-stop','comp-schedule-status'].map($);
+    const accountId=$('comp-account').value,ownProductId=$('comp-product').value,kind=$('comp-kind').value,runs=Number($('comp-runs').value);
+    const marketplaces=[['comp-ml','mercado_livre'],['comp-shopee','shopee'],['comp-amazon','amazon']].filter(([id])=>$(id).checked).map(([,value])=>value);
+    if(action==='start'){
+      if(!accountId||!ownProductId||!marketplaces.length||!Number.isInteger(runs)||runs<1||runs>30){out.textContent='Selecione o produto e de 1 a 30 ciclos.';return;}
+      if(!confirm('Substituir o plano diário anterior por '+runs+' ciclo(s) de leitura pública, até três abas por dia?'))return;
+    }
+    buttons.forEach(b=>b.disabled=true);
+    try{
+      const r=await call('competitor.schedule.'+action,{accountId,ownProductId,kind,runs,marketplaces,confirmed:action==='start'});
+      if(!r?.ok){out.textContent=r?.error?.message||'Agendamento recusado.';return;}
+      const plan=r.result;
+      out.textContent=!plan?'Nenhum plano.':(plan.enabled?'Ativo':'Inativo')+' · ciclos restantes: '+(plan.remaining??0)+(plan.enabled&&plan.nextAt?' · próximo: '+new Date(plan.nextAt).toLocaleString('pt-BR'):'')+(plan.last?' · último: '+JSON.stringify(plan.last):'');
+    }catch(e){out.textContent=String(e?.message||e);}
+    finally{buttons.forEach(b=>b.disabled=false);}
+  }
+  $('comp-schedule-start').addEventListener('click',()=>void scheduleAction('start'));
+  $('comp-schedule-stop').addEventListener('click',()=>void scheduleAction('stop'));
+  $('comp-schedule-status').addEventListener('click',()=>void scheduleAction('status'));
+  $('comp-account').addEventListener('change',()=>void compProducts());
+  $('comp-product').addEventListener('change',()=>void compRelations());
+  $('comp-content-capture').addEventListener('click',()=>void compContentCapture());
+  $('comp-capture').addEventListener('click',()=>void compCapture());
+  void compAccounts();
+  $('listing-op-apply').addEventListener('click',()=>void listingOperationApply());
+  $('budget-apply').addEventListener('click',()=>void budgetAction('apply'));
+  $('budget-verify').addEventListener('click',()=>void budgetAction('verify'));
   $('learning-start').addEventListener('click',()=>void learningAction('start'));
   $('learning-stop').addEventListener('click',()=>stopLearning());
   $('learning-observe').addEventListener('click',()=>void learningAction('observe'));

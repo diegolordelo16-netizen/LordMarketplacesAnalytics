@@ -1,5 +1,21 @@
 {
   "keyword.upsert": "term | marketplace | intent | language",
+  "seo.external.research": {
+    "accountId": "active account",
+    "mode": "suggestions|related|ideas|overview|serp|ranked|domain|competitors|pages|backlinks|backlinkRows|referringDomains|backlinkPages|lighthouse|aiGoogle|aiChatGPT",
+    "query": "keyword or public domain",
+    "limit": "integer 1..100",
+    "device": "desktop|mobile",
+    "locationName": "optional canonical SERP location",
+    "confirmed": true
+  },
+  "keyword.googleVolume": {
+    "accountId": "string",
+    "terms": "1..20 Google Ads terms",
+    "login": "transient DataForSEO API login",
+    "password": "transient DataForSEO API password",
+    "confirmedPaidRequest": true
+  },
   "rank.record": "listingId | keywordId | position | isSponsored | context",
   "competitor.upsert": "accountId | marketplace | name | handle | groupKind",
   "competitor.relations": "ownProductId | accountId | status",
@@ -286,6 +302,10 @@
     "payload": "accountId | kind? | limit?",
     "permission": "view_reports"
   },
+  "voc.overview": {
+    "accountId": "string",
+    "days": "integer 1..365, default 30"
+  },
   "voc.items": {
     "payload": "accountId | limit?",
     "permission": "view_reports"
@@ -323,5 +343,277 @@
     "listingId": "string?",
     "skuId": "string?",
     "method": "latest daily snapshots by listing/account, null for missing contributions, observed ratios"
+  },
+  "finance.profitability": {
+    "accountId": "string",
+    "periodStart": "ISO datetime",
+    "periodEnd": "ISO datetime",
+    "method": "exact-window realized listing records; unknown/conflicting values null"
+  },
+  "inventory.dashboard": {
+    "accountId": "string",
+    "days": "1–365 capture recency",
+    "method": "latest listing stock, verified sales-window coverage, no shared SKU summation"
+  },
+  "ads.dashboard": {
+    "accountId": "string",
+    "from": "ISO datetime",
+    "to": "ISO datetime",
+    "kind": "AD|AD_CAMPAIGN?",
+    "externalId": "string?",
+    "method": "latest observations per entity; TACoS only for compatible account source windows"
+  },
+  "listing.change.prepare": {
+    "accountId": "string",
+    "listingId": "string",
+    "kind": "COVER|DUPLICATE",
+    "mediaId": "string?",
+    "reason": "string"
+  },
+  "listing.change.list": {
+    "accountId": "string"
+  },
+  "listing.change.review": {
+    "accountId": "string",
+    "id": "string",
+    "decision": "APPROVED|REJECTED",
+    "reason": "string"
+  },
+  "operation.receipt.record": {
+    "accountId": "string",
+    "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
+    "proposalId": "string",
+    "performedAt": "ISO datetime",
+    "evidenceReference": "string",
+    "confirmedManualExecution": true,
+    "result": "HUMAN_REPORTED, remoteVerified=false"
+  },
+  "operation.receipt.list": {
+    "accountId": "string"
+  },
+  "operation.receipt.verify": {
+    "accountId": "string",
+    "proposalKind": "VARIATION|LISTING_CHANGE",
+    "proposalId": "string",
+    "observedExternalId": "string",
+    "result": "UI_READBACK_MATCHED|CANDIDATE_OBSERVED, remoteVerified=false"
+  },
+  "offer.variation.update": {
+    "accountId": "string",
+    "id": "string",
+    "variationName": "string",
+    "options": "object[]",
+    "proposedPriceCents": "number?",
+    "proposedStock": "number?"
+  },
+  "offer.variation.delete": {
+    "accountId": "string",
+    "id": "string"
+  },
+  "operation.measure": {
+    "accountId": "string",
+    "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
+    "proposalId": "string",
+    "method": "compatible source windows before and after a human-reported action or an assisted operation with matching UI readback, plus the exact variant snapshots when available"
+  },
+  "ads.reconcile": {
+    "accountId": "string",
+    "snapshotId": "string",
+    "netAttributedRevenueCents": "integer >=0",
+    "costs": "all 9 non-Ads cost categories in cents",
+    "sourceReference": "string",
+    "confirmedSameScope": true,
+    "result": "reported attributed profit, not audited or incremental"
+  },
+  "campaign.change.review": {
+    "accountId": "string",
+    "proposalId": "string",
+    "decision": "APPROVED|REJECTED",
+    "reason": "string"
+  },
+  "offer.variation.review": {
+    "accountId": "string",
+    "id": "string",
+    "decision": "APPROVED|REJECTED",
+    "reason": "string"
+  },
+  "campaign.budget.claim": {
+    "accountId": "string",
+    "proposalId": "string",
+    "campaignRef": "string",
+    "sourcePath": "HTTPS public seller route",
+    "documentNonce": "uuid",
+    "budgetCents": "integer",
+    "campaignStatus": "ACTIVE|PAUSED, optional",
+    "roasTargetHundredths": "integer 100..3500, optional",
+    "confirmed": true
+  },
+  "campaign.budget.result": {
+    "id": "uuid",
+    "token": "uuid",
+    "outcome": "CANCELLED|FAILED|NEEDS_VERIFICATION",
+    "message": "string"
+  },
+  "campaign.budget.verify": {
+    "accountId": "string",
+    "proposalId": "string",
+    "campaignRef": "string",
+    "sourcePath": "string",
+    "documentNonce": "new uuid",
+    "budgetCents": "integer",
+    "campaignStatus": "ACTIVE|PAUSED, optional",
+    "roasTargetHundredths": "integer 100..3500, optional"
+  },
+  "campaign.budget.list": {
+    "accountId": "string"
+  },
+  "listing.browser.claim": {
+    "accountId": "string",
+    "proposalId": "string",
+    "externalListingId": "explicit MLB id",
+    "action": "DUPLICATE|CREATE_VARIATION|EDIT_VARIATION",
+    "sourcePath": "HTTPS seller page",
+    "documentNonce": "uuid",
+    "variationId": "string?",
+    "variationLabel": "string?",
+    "beforePriceCents": "integer?",
+    "beforeStock": "integer?",
+    "confirmed": true
+  },
+  "listing.browser.result": {
+    "id": "uuid",
+    "token": "uuid",
+    "outcome": "CANCELLED|FAILED|NEEDS_VERIFICATION",
+    "message": "string",
+    "duplicateReceipt": "optional explicit marketplace confirmation containing original and new IDs"
+  },
+  "listing.browser.verify": {
+    "accountId": "string",
+    "proposalId": "string",
+    "observedExternalId": "string",
+    "result": "UI_READBACK_MATCHED or CANDIDATE_OBSERVED; remoteVerified=false; variant edits include baselineSnapshotId"
+  },
+  "listing.browser.list": {
+    "accountId": "string"
+  },
+  "variation.api.create": {
+    "accountId": "string",
+    "proposalId": "approved legacy variant proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
+  "variation.api.remove": {
+    "accountId": "string",
+    "proposalId": "approved legacy removal proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
+  "variation.api.verify": {
+    "accountId": "string",
+    "proposalId": "string",
+    "accessToken": "transient Mercado Livre OAuth token"
+  },
+  "variation.api.list": {
+    "accountId": "string"
+  },
+  "operation.limits.get": {
+    "accountId": "string"
+  },
+  "operation.limits.set": {
+    "accountId": "string",
+    "limits": {
+      "maxCampaignDailyBudgetCents": "integer",
+      "minVariationPriceCents": "integer",
+      "maxVariationPriceCents": "integer",
+      "maxVariationStock": "integer",
+      "maxVariationPriceChangePct": "0–100"
+    },
+    "confirmed": true
+  },
+  "seo.external.history": {
+    "accountId": "string",
+    "limit": "1..200"
+  },
+  "seo.external.get": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.external.gap": {
+    "accountId": "string",
+    "ownId": "uuid",
+    "otherId": "uuid"
+  },
+  "seo.external.groups": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.watch.create": {
+    "accountId": "string",
+    "keyword": "string",
+    "domain": "public domain",
+    "device": "desktop|mobile",
+    "locationName": "optional canonical location",
+    "intervalDays": "1..30",
+    "maxRuns": "1..30",
+    "confirmedPaidSchedule": true
+  },
+  "seo.watch.list": {
+    "accountId": "string"
+  },
+  "seo.watch.disable": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.watch.history": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.external.opportunities": {
+    "accountId": "string",
+    "id": "uuid",
+    "periodStart": "ISO datetime",
+    "periodEnd": "ISO datetime"
+  },
+  "variation.api.editStock": {
+    "accountId": "string",
+    "proposalId": "approved legacy stock-only edit proposal with beforePriceCents and beforeStock",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
+  "variation.api.createUpOffer": {
+    "accountId": "string",
+    "proposalId": "approved User Product offer proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
+  "seo.config.status": {},
+  "seo.config.save": {
+    "login": "API login",
+    "password": "API password",
+    "enableSchedules": "boolean"
+  },
+  "seo.config.clear": {},
+  "seo.external.volume": {
+    "accountId": "active account",
+    "terms": "1..20 Google Ads terms",
+    "confirmed": true
+  },
+  "voc.insights": {
+    "accountId": "active account",
+    "days": "1..365",
+    "listingId": "optional account listing"
+  },
+  "competitor.searchPlan": {
+    "accountId": "active account",
+    "ownProductId": "account own product",
+    "marketplaces": "mercado_livre|shopee|amazon"
+  },
+  "competitor.capturePublicSearch": {
+    "accountId": "active account",
+    "ownProductId": "account own product",
+    "marketplace": "mercado_livre|shopee|amazon",
+    "sourceUrl": "recognized public search URL",
+    "observedAt": "ISO datetime",
+    "candidates": "1..20 visible cards"
   }
 }

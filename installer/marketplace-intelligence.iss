@@ -9,10 +9,10 @@
 ; Depois de instalar, registra o host nativo no HKCU (Chrome e Edge) apontando
 ; para o manifesto que autoriza a origem da extensão.
 ;
-; Compilar: ISCC.exe installer/marketplace-intelligence.iss /DAppVersion=3.13.0
+; Compilar: ISCC.exe installer/marketplace-intelligence.iss /DAppVersion=3.16.0
 
 #ifndef AppVersion
-  #define AppVersion "3.13.0"
+  #define AppVersion "3.16.0"
 #endif
 #ifndef ExtensionId
   ; ID de desenvolvimento: o instalador grava o ID informado no build.
@@ -60,6 +60,8 @@ Source: "{#SourceRoot}\tools\node.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Serviço local
 Source: "{#SourceRoot}\dist\local-agent\main.js"; DestDir: "{app}\local-agent"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\local-agent\package.json"; DestDir: "{app}\local-agent"; Flags: ignoreversion
+Source: "{#SourceRoot}\dist\local-agent\openseo-mcp.mjs"; DestDir: "{app}\local-agent"; Flags: ignoreversion
+Source: "{#SourceRoot}\dist\local-agent\third-party\open-seo\LICENSE"; DestDir: "{app}\local-agent\third-party\open-seo"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\local-agent\migrations\*.sql"; DestDir: "{app}\local-agent\migrations"; Flags: ignoreversion
 ; Host nativo
 Source: "{#SourceRoot}\dist\native-host\native-host.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
@@ -70,6 +72,7 @@ Source: "{#SourceRoot}\dist\extension\*"; DestDir: "{app}\extension"; Flags: ign
 ; Painel local (interface do serviço)
 Source: "{#SourceRoot}\packages\local-agent\panel\src\*"; DestDir: "{app}\local-agent\panel\dist"; Flags: ignoreversion recursesubdirs
 ; Utilitários
+Source: "{#SourceRoot}\installer\scripts\update-manager.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\start-panel.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\install-extension.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\abrir-extensoes.cmd"; DestDir: "{app}"; Flags: ignoreversion
