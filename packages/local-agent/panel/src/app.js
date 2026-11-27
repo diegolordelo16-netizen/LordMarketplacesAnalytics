@@ -1501,7 +1501,7 @@ async function renderView() {
     host.innerHTML = content;
     initializeTables(host);
     if (state.view === 'competition') await loadRelations();
-    if (isCurrent()&&$('#radar-out'))void refreshProductRadar();
+    if (isCurrent()&&(selectedView==='market'||selectedView==='competition'))void refreshProductRadar();
     if (state.view === 'browserSync') await showBrowserSyncBatch();
     return isCurrent();
   } catch (err) {
