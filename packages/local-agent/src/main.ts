@@ -140,7 +140,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     knowledge,
     autoUpgrade,
     capture,
-    version: options.version ?? process.env.MI_VERSION ?? '3.15.0',
+    version: options.version ?? process.env.MI_VERSION ?? '3.16.0',
   });
 
   // Token de sessão do painel: gerado a cada início, nunca persistido em disco.
@@ -150,7 +150,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     db,
     service,
     gemini,
-    version: options.version ?? process.env.MI_VERSION ?? '3.15.0',
+    version: options.version ?? process.env.MI_VERSION ?? '3.16.0',
     token,
     dataDir,
     close: async () => {
