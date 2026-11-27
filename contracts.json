@@ -286,7 +286,7 @@
     "permission": "view_reports"
   },
   "navigation.observe": {
-    "payload": "accountId | origin | route | pageKind",
+    "payload": "accountId | origin | route | pageKind | fromRoute?",
     "permission": "execute_task",
     "behavior": "Record only whitelisted structural routes for a verified active account; no raw DOM or query parameters."
   },
@@ -295,6 +295,10 @@
     "permission": "execute_task"
   },
   "navigation.clear": {
+    "payload": "accountId | origin",
+    "permission": "execute_task"
+  },
+  "navigation.graph": {
     "payload": "accountId | origin",
     "permission": "execute_task"
   }
