@@ -435,5 +435,33 @@
   },
   "campaign.budget.list": {
     "accountId": "string"
+  },
+  "listing.browser.claim": {
+    "accountId": "string",
+    "proposalId": "string",
+    "externalListingId": "explicit MLB id",
+    "action": "DUPLICATE|CREATE_VARIATION|EDIT_VARIATION",
+    "sourcePath": "HTTPS seller page",
+    "documentNonce": "uuid",
+    "variationId": "string?",
+    "variationLabel": "string?",
+    "beforePriceCents": "integer?",
+    "beforeStock": "integer?",
+    "confirmed": true
+  },
+  "listing.browser.result": {
+    "id": "uuid",
+    "token": "uuid",
+    "outcome": "CANCELLED|FAILED|NEEDS_VERIFICATION",
+    "message": "string"
+  },
+  "listing.browser.verify": {
+    "accountId": "string",
+    "proposalId": "string",
+    "observedExternalId": "string",
+    "result": "UI_READBACK_MATCHED or CANDIDATE_OBSERVED; remoteVerified=false"
+  },
+  "listing.browser.list": {
+    "accountId": "string"
   }
 }
