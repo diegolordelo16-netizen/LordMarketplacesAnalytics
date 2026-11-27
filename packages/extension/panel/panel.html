@@ -42,6 +42,11 @@
       <label class="field-label" for="comp-kind">Critério do plano</label><select id="comp-kind"><option value="TITLE">Título</option><option value="BRAND_MODEL">Marca/modelo</option><option value="SKU">SKU</option><option value="ATTRIBUTES">Atributos</option></select>
       <label><input id="comp-ml" type="checkbox" checked> Mercado Livre</label><label><input id="comp-shopee" type="checkbox"> Shopee</label><label><input id="comp-amazon" type="checkbox"> Amazon</label>
       <button id="comp-plan">Executar plano de busca (até 3 abas)</button>
+      <label class="field-label" for="comp-runs">Monitoramento diário (1 a 30 ciclos)</label><input id="comp-runs" type="number" min="1" max="30" step="1" value="7">
+      <button id="comp-schedule-start">Autorizar agendamento diário</button>
+      <button id="comp-schedule-stop">Desativar agendamento</button>
+      <button id="comp-schedule-status">Consultar agendamento</button>
+      <p class="hint" id="comp-schedule-out" role="status">Um plano por instalação; requer navegador e sessão local ativos. Interrompe em falha ou troca de sessão. Não repete ciclos perdidos.</p>
       <button id="comp-capture">Capturar resultados visíveis</button>
       <p class="hint" id="comp-out" role="status">Nenhuma captura solicitada.</p>
     </section>
