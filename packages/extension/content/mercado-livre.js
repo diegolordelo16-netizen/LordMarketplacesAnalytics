@@ -489,8 +489,9 @@
    * nativa por anúncio. Sem formulário inequívoco ou mensagem positiva, não declara sucesso.
    */
   let budgetDocumentNonce=null;
+  const consumedBudgetGrants=new Set();
   function campaignBudgetContext(campaignRef){
-    if(currentPageKind()!=='seller_ads'||window.MI_DOM.hasChallenge(document)||document.querySelector('input[type="password"],form[action*="login"],form[action*="signin"]'))throw Error('abra a publicidade autenticada sem desafio');
+    if(location.origin!=='https://vendedores.mercadolivre.com.br'||currentPageKind()!=='seller_ads'||window.MI_DOM.hasChallenge(document)||document.querySelector('input[type="password"],form[action*="login"],form[action*="signin"]'))throw Error('abra a publicidade autenticada sem desafio');
     const identity=visibleAccountIdentity();
     if(!identity.accountId||!campaignRef||!/^[A-Za-z0-9_.:-]{1,200}$/.test(campaignRef))throw Error('identidade ou campanha não comprovada');
     const norm=s=>String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
@@ -503,8 +504,8 @@
     });
     if(fields.length!==1)throw Error('orçamento diário numérico explícito não encontrado');
     const field=fields[0],form=field.closest('form');
-    if(!form||!row.contains(form)||form.querySelectorAll('input[type="number"],input:not([type]),select,textarea,[contenteditable="true"],input[type="checkbox"],input[type="radio"],input[type="text"]').length!==1)throw Error('formulário dedicado de orçamento não comprovado');
-    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.getAttribute('formaction')&&!el.getAttribute('form')&&/^(salvar|salvar alteracoes|atualizar orcamento|save|save changes|update budget)$/.test(norm(el.getAttribute('aria-label')||el.textContent)));
+    if(!form||!row.contains(form)||new URL(form.action||location.href,location.href).origin!==location.origin||form.querySelectorAll('input[type="number"],input:not([type]),select,textarea,[contenteditable="true"],input[type="checkbox"],input[type="radio"],input[type="text"]').length!==1)throw Error('formulário dedicado de orçamento não comprovado');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&!el.getAttribute('formaction')&&!el.getAttribute('form')&&/^(salvar|salvar alteracoes|atualizar orcamento|save|save changes|update budget)$/.test(norm(el.getAttribute('aria-label')||el.textContent)));
     if(buttons.length!==1)throw Error('botão exclusivo de salvar orçamento não localizado');
     const raw=String(field.value);
     if(!/^\d+(?:\.\d{1,2})?$/.test(raw)||!Number.isSafeInteger(Math.round(Number(raw)*100)))throw Error('orçamento monetário inválido');
@@ -517,6 +518,8 @@
   async function applyCampaignBudget(grant){
     let touched=false;
     try{
+      if(!grant||typeof grant.id!=='string'||consumedBudgetGrants.has(grant.id)||consumedBudgetGrants.size>=100)throw Error('autorização já utilizada ou limite atingido');
+      consumedBudgetGrants.add(grant.id);
       const ctx=campaignBudgetContext(grant.campaignRef);
       const same=c=>c.accountId===grant.accountId&&c.sourcePath===grant.sourcePath&&c.documentNonce===grant.documentNonce&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
       if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||!Number.isSafeInteger(grant.targetCents)||grant.targetCents<=0||grant.targetCents>100000000||grant.beforeCents===grant.targetCents)throw Error('contexto ou orçamento mudou');
@@ -530,7 +533,7 @@
       again.field.dispatchEvent(new Event('input',{bubbles:true}));again.field.dispatchEvent(new Event('change',{bubbles:true}));
       await new Promise(resolve=>setTimeout(resolve,300));
       const ready=campaignBudgetContext(grant.campaignRef);
-      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||!ready.field.checkValidity())throw Error('valor ou controle não permaneceu verificável; revise manualmente');
+      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
       ready.button.click();
       return {outcome:'NEEDS_VERIFICATION',message:'controle de salvar acionado; recarregue manualmente a página e verifique a campanha. Não repetir automaticamente.'};
     }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
