@@ -249,6 +249,18 @@ describe('capacidades adicionais 3.10.3', () => {
       observedAt:recent,priceDifferenceCents:100,shippingDifferenceCents:null,sponsored:false,
     });
     expect(db.row('SELECT last_seen_at FROM competitor_candidates WHERE id=?','comp-candidate')).toMatchObject({last_seen_at:recent});
+    const base={accountId,ownProductId:'comp-own',sourceClass:'F_USER_INPUT'};
+    expect((await call('competitor.content.record',{...base,side:'OWN',description:'Capacete seguro leve',promotions:['Cupom 10%'],images:[{dhash64:'0000000000000000',sha256:'a'.repeat(64)}]})).ok).toBe(true);
+    expect((await call('competitor.content.record',{...base,side:'RIVAL',relationId,description:'Capacete seguro esportivo',promotions:['Cupom 10%','Frete promocional'],images:[{dhash64:'000000000000000f',sha256:'b'.repeat(64)}]})).ok).toBe(true);
+    expect((await call('competitor.content.record',{...base,accountId:other,side:'OWN',description:'intruso'})).ok).toBe(false);
+    expect((await call('competitor.content.record',{...base,side:'RIVAL',relationId,sourceClass:'A_PRIMARY_UI',sourceUrl:'https://www.amazon.com.br/dp/B012345678',description:'origem incorreta'})).ok).toBe(false);
+    const evidence=await call('competitor.evidence.compare',{relationId,accountId});
+    expect(evidence.result).toMatchObject({content:{
+      description:{comparison:{lexicalSimilarityPct:50,rivalOnlyTerms:['esportivo']},own:{sourceClass:'F_USER_INPUT'}},
+      promotions:{comparison:{common:['Cupom 10%'],rivalOnly:['Frete promocional']}},
+      images:{comparison:{identicalPairs:0,comparableVisualPairs:1,bestMatches:[{visualSimilarityPct:93.8}]}},
+    }});
+
   });
 
   it('consulta volume Google Ads no recorte BR e conserva zero e ausência de dados',async()=>{
