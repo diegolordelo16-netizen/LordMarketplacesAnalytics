@@ -227,6 +227,8 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'campaign.budget.result': 'manage_accounts',
   'campaign.budget.verify': 'manage_accounts',
   'campaign.budget.list': 'view_reports',
+  'operation.limits.get': 'view_reports',
+  'operation.limits.set': 'manage_financial_limits',
   'listing.browser.claim': 'manage_accounts',
   'listing.browser.result': 'manage_accounts',
   'listing.browser.verify': 'manage_accounts',
@@ -1859,7 +1861,8 @@ export class LocalService {
       // "Cannot read properties of undefined". Agora responde validação clara.
       const parsed = z
         .object({
-          action: z.enum(['edit_title', 'edit_description', 'upload_image', 'change_price', 'duplicate_listing', 'toggle_ads']),
+          action: z.enum(['edit_title', 'edit_description', 'upload_image', 'change_price', 'duplicate_listing', 'toggle_ads','change_campaign_budget','create_variation','edit_variation']),
+          campaign:z.object({id:z.string(),accountId:z.string()}).nullable().optional(),
           actorRole: z.enum(['super_admin', 'operador', 'visualizador']).optional(),
           marketplace: z.object({ id: z.string(), enabled: z.boolean() }),
           account: z
@@ -2831,6 +2834,30 @@ export class LocalService {
       return { ok: true, status: i.decision, execution: 'BLOCKED_UNTIL_MARKETPLACE_ADAPTER_AND_SESSION_ARE_VERIFIED', changedRemotely: false };
     });
 
+    const assistedLimitsSchema=z.object({
+      maxCampaignDailyBudgetCents:z.number().int().min(1).max(100000000),
+      minVariationPriceCents:z.number().int().min(1).max(100000000),
+      maxVariationPriceCents:z.number().int().min(1).max(100000000),
+      maxVariationStock:z.number().int().min(0).max(1000000),
+      maxVariationPriceChangePct:z.number().finite().min(0).max(100)
+    }).strict().refine(v=>v.minVariationPriceCents<=v.maxVariationPriceCents,'faixa de preços inválida');
+    const readAssistedLimits=(accountId:string)=>{
+      const row=db.row<{value_json:string}>('SELECT value_json FROM settings WHERE key=?','assisted_limits:'+accountId);
+      if(!row)return null;
+      const parsed=assistedLimitsSchema.safeParse(parseJsonObject(row.value_json));
+      return parsed.success?parsed.data:null;
+    };
+    this.register('operation.limits.get',payload=>{
+      const i=z.object({accountId:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
+      return {limits:readAssistedLimits(i.accountId),scope:'PER_CAMPAIGN_AND_VARIATION',accountTotalBudgetVerified:false};
+    });
+    this.register('operation.limits.set',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),limits:assistedLimitsSchema,confirmed:z.literal(true)}).strict().parse(payload);operationAccount(i.accountId);
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário');
+      db.db.prepare('INSERT INTO settings(key,value_json,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by').run('assisted_limits:'+i.accountId,JSON.stringify(i.limits),nowIso(),auth.userId??null);
+      this.audit(auth,'ASSISTED_LIMITS_SET','account',i.accountId,'OK','limites de operação assistida confirmados');
+      return {ok:true,limits:i.limits};
+    });
     const budgetContext=z.object({accountId:z.string().min(1),campaignRef:z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/),sourcePath:z.string().min(1).max(1000),documentNonce:z.string().uuid(),budgetCents:z.number().int().min(0).max(100000000)});
     const budgetSource=(path:string)=>{
       const url=new URL(path);
@@ -2850,6 +2877,10 @@ export class LocalService {
       if(b!==i.budgetCents||b===t)throw Error('orçamento visível diverge do valor aprovado ou não há mudança');
       if(db.row('SELECT id FROM operation_manual_receipts WHERE proposal_kind=? AND proposal_id=?','CAMPAIGN',i.proposalId))throw Error('já existe relato manual da proposta');
       if(db.row('SELECT id FROM campaign_budget_executions WHERE proposal_id=?',i.proposalId))throw Error('autorização já utilizada; verifique o resultado sem repetir o clique');
+      const limits=readAssistedLimits(i.accountId);
+      const conflict=db.row("SELECT id FROM campaign_budget_executions WHERE account_id=? AND campaign_ref=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,i.campaignRef);
+      const guard=evaluateGuard({action:'change_campaign_budget',actorRole:auth.role,marketplace:{id:account.marketplace,enabled:Boolean(db.row('SELECT id FROM marketplaces WHERE id=? AND enabled=1',account.marketplace))},account:{id:account.id,marketplace:account.marketplace,verified:true,sessionState:'AUTHENTICATED'},listing:null,campaign:{id:i.campaignRef,accountId:account.id},currentState:{dailyBudgetCents:b},financialLimits:limits?{...limits,targetDailyBudgetCents:t}:null,requiredData:{missing:[]},platformRules:{violations:[]},authorization:{approved:true,approvedBy:auth.userId},conflicts:conflict?['execução anterior pendente']:[]});
+      if(!guard.allowed)throw Error(guard.blockedReasons.join('; '));
       const id=randomUUID(),token=randomUUID(),now=nowIso(),expiresAt=new Date(Date.now()+120000).toISOString();
       db.db.prepare('INSERT INTO campaign_budget_executions(id,proposal_id,account_id,campaign_ref,before_cents,target_cents,source_path,document_nonce,token_hash,status,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,i.proposalId,i.accountId,i.campaignRef,b,t,source,i.documentNonce,createHash('sha256').update(token).digest('hex'),'CLAIMED',now,expiresAt,now);
       this.audit(auth,'CAMPAIGN_BUDGET_CLAIM','campaign_change_proposal',i.proposalId,'CLAIMED','autorização de clique único; expira em dois minutos');
@@ -3003,7 +3034,11 @@ export class LocalService {
         }
       }
       if(db.row('SELECT id FROM operation_manual_receipts WHERE proposal_kind=? AND proposal_id=?',kind,i.proposalId)||db.row('SELECT id FROM listing_browser_executions WHERE proposal_kind=? AND proposal_id=?',kind,i.proposalId))throw Error('proposta já utilizada; não repetir');
-      if(db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,listing.id))throw Error('há execução anterior que precisa de verificação');
+      const conflict=db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,listing.id)||db.row("SELECT id FROM task_items WHERE account_id=? AND listing_id=? AND status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH')",i.accountId,listing.id);
+      const limits=readAssistedLimits(i.accountId);
+      const action=i.action==='DUPLICATE'?'duplicate_listing':i.action==='CREATE_VARIATION'?'create_variation':'edit_variation';
+      const guard=evaluateGuard({action,actorRole:auth.role,marketplace:{id:account.marketplace,enabled:Boolean(db.row('SELECT id FROM marketplaces WHERE id=? AND enabled=1',account.marketplace))},account:{id:account.id,marketplace:account.marketplace,verified:true,sessionState:'AUTHENTICATED'},listing:{id:listing.id,accountId:account.id,externalId:listing.external_id,status:listing.status},currentState:{sourcePath:source,externalListingId:listing.external_id,...(i.action==='EDIT_VARIATION'?{beforePriceCents:i.beforePriceCents,beforeStock:i.beforeStock}:{})},financialLimits:limits?{...limits,targetVariationPriceCents:Number(plan.priceCents),targetVariationStock:Number(plan.stock),currentPriceCents:i.beforePriceCents}:null,requiredData:{missing:[]},platformRules:{violations:[]},authorization:{approved:true,approvedBy:auth.userId},conflicts:conflict?['execução ou tarefa anterior pendente']:[]});
+      if(!guard.allowed)throw Error(guard.blockedReasons.join('; '));
       const id=randomUUID(),token=randomUUID(),now=nowIso(),expiresAt=new Date(Date.now()+120000).toISOString();
       const context={accountId:i.accountId,externalListingId:i.externalListingId,sourcePath:source,documentNonce:i.documentNonce,action:i.action,variationId:i.variationId,variationLabel:i.variationLabel,beforePriceCents:i.beforePriceCents,beforeStock:i.beforeStock};
       db.db.prepare('INSERT INTO listing_browser_executions(id,proposal_kind,proposal_id,account_id,listing_id,external_listing_id,action,plan_json,context_json,token_hash,status,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,kind,i.proposalId,i.accountId,listing.id,i.externalListingId,i.action,JSON.stringify(plan),JSON.stringify(context),createHash('sha256').update(token).digest('hex'),'CLAIMED',now,expiresAt,now);
@@ -3111,7 +3146,7 @@ export class LocalService {
     this.register('operation.mode.get', (payload) => {
       const i=z.object({accountId:z.string().optional()}).parse(payload ?? {}); const scopeKey=i.accountId ?? 'global';
       const row=db.row<{mode:string;policy_json:string;updated_at:string}>('SELECT mode,policy_json,updated_at FROM operation_profiles WHERE scope_key=?',scopeKey);
-      return {scopeKey,mode:row?.mode ?? 'MANUAL_GUIDED',policy:{...defaultOperationPolicy,...parseJsonObject(row?.policy_json)},updatedAt:row?.updated_at ?? null,hardLimits:{publish:false,campaignExecution:false,neverBypassGuard:true}};
+      return {scopeKey,mode:row?.mode ?? 'MANUAL_GUIDED',policy:{...defaultOperationPolicy,...parseJsonObject(row?.policy_json)},updatedAt:row?.updated_at ?? null,hardLimits:{publish:false,campaignExecution:false,neverBypassGuard:true,assistedOperationsRequireExplicitClaim:true}};
     });
     this.register('operation.mode.set', (payload, auth) => {
       const i=z.object({accountId:z.string().optional(),mode:z.enum(['AUTO_PILOT','AUTO_ASSISTED','MANUAL_GUIDED'])}).parse(payload ?? {});
