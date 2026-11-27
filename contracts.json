@@ -631,7 +631,8 @@
     "accountId": "active linked account",
     "from": "optional YYYY-MM-DD",
     "to": "optional YYYY-MM-DD",
-    "confirmedExternal": true
+    "confirmedExternal": true,
+    "continueRunId": "optional prior scoped run; one successful continuation"
   },
   "connector.sync.history": {
     "accountId": "string",

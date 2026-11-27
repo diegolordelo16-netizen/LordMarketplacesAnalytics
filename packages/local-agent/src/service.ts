@@ -3866,7 +3866,7 @@ export class LocalService {
       return {ok:true,connectorId:i.connectorId,status:'CONFIGURADO_NAO_TESTADO',secretCount:Object.keys(i.secrets).length,secretValuesReturned:false};
     });
 
-    const connectorOperation=async (connectorId:string,mode:'TEST'|'SYNC',accountId?:string,from?:string,to?:string)=>{
+    const connectorOperation=async (connectorId:string,mode:'TEST'|'SYNC',accountId?:string,from?:string,to?:string,continueRunId?:string)=>{
       if(!supportedId(connectorId))return {ok:false,tested:false,status:'DEPENDENCY_NOT_IMPLEMENTED',message:'Provedor sem adaptador oficial neste build; use importação manual.'};
       const id=connectorId;
       if(this.connectorBusy.has(id))throw Error('conector ocupado');
@@ -3882,6 +3882,13 @@ export class LocalService {
         validateSecrets(id,secrets);
         const scopeKey=createHash('sha256').update(JSON.stringify(cfg)).digest('hex');
         const runId=randomUUID(),started=nowIso();
+        let cursor:string|undefined;
+        if(continueRunId){
+          if(mode!=='SYNC'||id==='google_analytics4'||id==='google_search_console')throw Error('continuação não se aplica ao provedor');
+          const previous=db.row<{next_cursor:string|null}>('SELECT next_cursor FROM connector_sync_runs WHERE id=? AND connector_id=? AND account_id=? AND scope_key=? AND status=?',continueRunId,id,accountId!,scopeKey,'OK');
+          if(!previous?.next_cursor||db.row("SELECT id FROM connector_sync_runs WHERE previous_run_id=? AND status='OK'",continueRunId))throw Error('continuação inválida ou já consumida');
+          cursor=previous.next_cursor;
+        }
         let requests=0;
         const request:RequestFn=async(url,init)=>{
           if(!db.row('SELECT connector_id FROM connector_runtime_config WHERE connector_id=? AND updated_at=? AND public_config_json=?',id,row.updated_at,row.public_config_json))throw new ProviderError('CONFIGURACAO_ALTERADA');
@@ -3917,7 +3924,7 @@ export class LocalService {
         try{
           if(!secrets.accessToken)await refresh();
           const execute=async()=>{
-            if(mode==='SYNC'){report=await readReport(id,cfg,secrets,startDay??'',endDay??'',request);return;}
+            if(mode==='SYNC'){report=await readReport(id,cfg,secrets,startDay??'',endDay??'',request,cursor);return;}
             if(isGoogle){
               const target=googleReadTarget(id,cfg)!;
               const body=await request(target.url,{headers:{authorization:'Bearer '+secrets.accessToken,accept:'application/json'}});
@@ -3938,7 +3945,7 @@ export class LocalService {
           if(mode==='SYNC'){
             const result=report as Awaited<ReturnType<typeof readReport>>|null;
             if(result&&new Set(result.rows.map(x=>x.key)).size!==result.rows.length)throw Error('resposta contém chaves duplicadas');
-            db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(runId,id,accountId!,scopeKey,result?.kind??'UNAVAILABLE',startDay,endDay,started,nowIso(),ok?'OK':status,Number(result?.partial??false),result?.rows.length??0,requests,result?.note??message);
+            db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,next_cursor,previous_run_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(runId,id,accountId!,scopeKey,result?.kind??'UNAVAILABLE',startDay,endDay,started,nowIso(),ok?'OK':status,Number(result?.partial??false),result?.rows.length??0,requests,result?.note??message,result?.nextCursor??null,continueRunId??null);
             const insert=db.db.prepare('INSERT INTO connector_sync_rows(run_id,row_key,reference_date,values_json) VALUES(?,?,?,?)');
             for(const item of result?.rows??[])insert.run(runId,item.key,item.date??null,JSON.stringify(item.values));
           }
@@ -3953,14 +3960,14 @@ export class LocalService {
       return result;
     });
     this.register('connector.sync',async(payload,auth)=>{
-      const i=z.object({connectorId:z.string().min(1).max(160),accountId:z.string().min(1),from:z.string().optional(),to:z.string().optional(),confirmedExternal:z.literal(true)}).strict().parse(payload);
-      const result=await connectorOperation(i.connectorId,'SYNC',i.accountId,i.from,i.to);
+      const i=z.object({connectorId:z.string().min(1).max(160),accountId:z.string().min(1),from:z.string().optional(),to:z.string().optional(),confirmedExternal:z.literal(true),continueRunId:z.string().optional()}).strict().parse(payload);
+      const result=await connectorOperation(i.connectorId,'SYNC',i.accountId,i.from,i.to,i.continueRunId);
       this.audit(auth,'CONNECTOR_SYNC','connector',i.connectorId,result.ok?'OK':'FAILED',result.message);
       return result;
     });
     this.register('connector.sync.history',payload=>{
       const i=z.object({accountId:z.string().min(1),connectorId:z.string().optional(),limit:z.number().int().min(1).max(100).default(30)}).parse(payload);
-      return db.rows('SELECT * FROM connector_sync_runs WHERE account_id=? AND (? IS NULL OR connector_id=?) ORDER BY finished_at DESC,id DESC LIMIT ?',i.accountId,i.connectorId??null,i.connectorId??null,i.limit);
+      return db.rows('SELECT id,connector_id,account_id,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,previous_run_id,CASE WHEN next_cursor IS NOT NULL AND NOT EXISTS(SELECT 1 FROM connector_sync_runs next WHERE next.previous_run_id=connector_sync_runs.id AND next.status='OK') THEN 1 ELSE 0 END has_next FROM connector_sync_runs WHERE account_id=? AND (? IS NULL OR connector_id=?) ORDER BY finished_at DESC,id DESC LIMIT ?',i.accountId,i.connectorId??null,i.connectorId??null,i.limit);
     });
     this.register('connector.trends.import',(payload,auth)=>db.transaction(()=>{
       const i=z.object({accountId:z.string().min(1),csvText:z.string().max(2_000_000),confirmedSource:z.literal(true)}).strict().parse(payload);
@@ -3978,7 +3985,7 @@ export class LocalService {
     }));
     this.register('connector.sync.get',payload=>{
       const i=z.object({accountId:z.string().min(1),runId:z.string().min(1)}).strict().parse(payload);
-      const run=db.row('SELECT * FROM connector_sync_runs WHERE id=? AND account_id=?',i.runId,i.accountId);
+      const run=db.row('SELECT id,connector_id,account_id,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,previous_run_id,CASE WHEN next_cursor IS NOT NULL THEN 1 ELSE 0 END has_next FROM connector_sync_runs WHERE id=? AND account_id=?',i.runId,i.accountId);
       if(!run)throw Error('sincronização não pertence à conta');
       const rows=db.rows<{row_key:string;reference_date:string|null;values_json:string}>('SELECT * FROM connector_sync_rows WHERE run_id=? ORDER BY row_key LIMIT 1000',i.runId);
       return {run,rows:rows.map(row=>({key:row.row_key,date:row.reference_date,values:JSON.parse(row.values_json)})),note:'Fonte externa, não somar com métricas do marketplace.'};

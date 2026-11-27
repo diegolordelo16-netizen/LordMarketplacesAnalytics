@@ -923,8 +923,8 @@ async function viewConnectors() {
     <div class="wide actions"><button class="btn" data-act="connector-configure">Vincular à loja selecionada e salvar</button></div>
     </div><p class="muted small">Credenciais autorizadas pelo titular, armazenadas cifradas. Um vínculo por provedor; salvar novamente substitui a configuração. Teste e habilite antes de sincronizar. Dados web externos não são somados aos KPIs. Limite local 30 chamadas em 24h; custos e cotas do provedor podem variar.</p>`)
   + card('Sincronização externa', `<div class="form-grid"><label>Data inicial (Google, opcional)<input id="co-from" type="date"></label><label>Data final (Google, opcional)<input id="co-to" type="date"></label></div>
-    <p class="muted small">Sem datas, Google usa janela incremental; marketplaces consultam somente a primeira página. Ausência de linha não significa zero.</p>`+
-    table(['Provedor','Escopo','Status','Linhas','Última leitura','Ação'],(syncs||[]).map(r=>`<tr><td>${esc(r.connector_id)}</td><td>${esc(r.kind)} · ${esc(r.period_start||'—')} → ${esc(r.period_end||'—')}</td><td>${esc(r.status)}${r.partial?' · PARCIAL':''}</td><td>${num(r.row_count)}</td><td>${dt(r.finished_at)}</td><td><button class="btn tiny" data-act="connector-sync-get" data-id="${esc(r.id)}">Ver evidência</button></td></tr>`),'Nenhuma leitura nesta loja.')+'<div id="co-out" class="out"></div>')
+    <p class="muted small">Sem datas, Google usa janela incremental; marketplaces consultam páginas limitadas, com continuação autorizada. Ausência de linha não significa zero.</p>`+
+    table(['Provedor','Escopo','Status','Linhas','Última leitura','Ação'],(syncs||[]).map(r=>`<tr><td>${esc(r.connector_id)}</td><td>${esc(r.kind)} · ${esc(r.period_start||'—')} → ${esc(r.period_end||'—')}</td><td>${esc(r.status)}${r.partial?' · PARCIAL':''}</td><td>${num(r.row_count)}</td><td>${dt(r.finished_at)}</td><td><button class="btn tiny" data-act="connector-sync-get" data-id="${esc(r.id)}">Ver evidência</button>${r.has_next?` <button class="btn tiny" data-act="connector-next" data-id="${esc(r.connector_id)}" data-run-id="${esc(r.id)}">Próxima página</button>`:''}</td></tr>`),'Nenhuma leitura nesta loja.')+'<div id="co-out" class="out"></div>')
   + card('Google Trends — importação de exportação oficial',`<p class="muted small">Exporte interesse ao longo do tempo no Google Trends. A API alfa exige acesso específico; a importação local não usa API. Índices de 0 a 100 são relativos à própria exportação.</p><label class="wide">CSV de interesse ao longo do tempo<input id="trends-file" type="file" accept=".csv"></label><button class="btn" data-act="trends-import">Registrar exportação na loja</button>`)
   + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td></tr>`), 'Nenhuma importação para esta conta.'))
   + card('Importar relatório', `
@@ -2386,6 +2386,13 @@ const ACTIONS = {
     const csvText=await file.text();
     const result=await api('connector.trends.import',{accountId,csvText,confirmedSource:true});
     toast(result.duplicate?'Exportação já registrada.':'Exportação registrada: '+result.rowCount+' observações.');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'connector-next':async ({id,runId})=>{
+    const accountId=state.accountId,generation=viewRenderSequence;
+    if(!accountId||!confirm('Consultar a próxima página do mesmo provedor?'))return;
+    const result=await api('connector.sync',{connectorId:id,accountId,continueRunId:runId,confirmedExternal:true});
+    toast(result.ok?'Página registrada: '+result.rowCount+' linhas':result.message,result.ok?'ok':'bad');
     if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
   },
   'connector-sync-get':async ({id})=>{
