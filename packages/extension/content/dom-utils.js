@@ -337,16 +337,26 @@
     const value=parseNumberPtBr(whole);return value!==null&&value>=0?{value,text:whole}:null;
   }
   // Only a single, explicitly identified pagination region and button. No form submits.
+  function semanticNextControl(region){
+    const candidates=Array.from(region.querySelectorAll('button[type="button"],button[aria-label],[role="button"][aria-label]')).filter(el=>{
+      if(!isVisible(el)||el.closest('form')||String(el.getAttribute('type')||'').toLowerCase()==='submit')return false;
+      const label=normalizeLabel(el.getAttribute('aria-label')||el.getAttribute('title')||el.innerText||'');
+      return /^(next|next page|próxima|proxima|próximo|proximo|próxima página|proxima pagina|seguinte|siguiente|página siguiente)$/.test(label);
+    });
+    if(candidates.length!==1)return null;
+    return {button:candidates[0],confidence:'HIGH',evidence:'unique semantic next control within pagination region'};
+  }
   function spaPaginationState(root){
-    const regions=Array.from(root.querySelectorAll('nav[aria-label],[role="navigation"][aria-label],[data-testid="pagination"]')).filter(el=>isVisible(el)&&(/^(pagination|paginação|paginacao)$/i.test(String(el.getAttribute('aria-label')||''))||el.getAttribute('data-testid')==='pagination'));
+    const regions=Array.from(root.querySelectorAll('nav[aria-label],[role="navigation"][aria-label],[data-testid="pagination"]')).filter(el=>isVisible(el)&&(/^(pagination|paginação|paginacao|paginación)$/i.test(String(el.getAttribute('aria-label')||''))||el.getAttribute('data-testid')==='pagination'));
     if(regions.length!==1)return null;
     const region=regions[0],current=Array.from(region.querySelectorAll('[aria-current="page"]')).filter(isVisible);
     if(current.length!==1)return null;
     const raw=String(current[0].innerText??current[0].textContent??'').trim();
     if(!/^\d{1,4}$/.test(raw)||Number(raw)<1)return null;
-    const next=Array.from(region.querySelectorAll('button[type="button"]')).filter(el=>isVisible(el)&&!el.closest('form')&&/^(next|next page|próxima|proxima|próxima página|proxima pagina|seguinte)$/i.test(String(el.getAttribute('aria-label')||el.innerText||'').trim()));
-    if(next.length!==1)return null;
-    return {page:Number(raw),canAdvance:!next[0].disabled&&!next[0].hasAttribute('disabled')&&next[0].getAttribute('aria-disabled')!=='true',button:next[0]};
+    const next=semanticNextControl(region);
+    if(!next)return null;
+    const button=next.button;
+    return {page:Number(raw),canAdvance:!button.disabled&&!button.hasAttribute('disabled')&&button.getAttribute('aria-disabled')!=='true',button};
   }
   function advanceSpaPage(root,expectedPage){
     if(hasChallenge(root)||root.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]'))return false;
