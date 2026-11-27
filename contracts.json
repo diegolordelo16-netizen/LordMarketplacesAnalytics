@@ -409,5 +409,31 @@
     "id": "string",
     "decision": "APPROVED|REJECTED",
     "reason": "string"
+  },
+  "campaign.budget.claim": {
+    "accountId": "string",
+    "proposalId": "string",
+    "campaignRef": "string",
+    "sourcePath": "HTTPS public seller route",
+    "documentNonce": "uuid",
+    "budgetCents": "integer",
+    "confirmed": true
+  },
+  "campaign.budget.result": {
+    "id": "uuid",
+    "token": "uuid",
+    "outcome": "CANCELLED|FAILED|NEEDS_VERIFICATION",
+    "message": "string"
+  },
+  "campaign.budget.verify": {
+    "accountId": "string",
+    "proposalId": "string",
+    "campaignRef": "string",
+    "sourcePath": "string",
+    "documentNonce": "new uuid",
+    "budgetCents": "integer"
+  },
+  "campaign.budget.list": {
+    "accountId": "string"
   }
 }
