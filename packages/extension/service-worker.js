@@ -457,7 +457,7 @@ async function captureTab(tabId, expected = {}) {
   if (payload.listings.length || payload.accountMetrics || payload.details.length || payload.chartPoints.length) pending.push({ method: 'capture.ingest', payload, account, queuedAt: now });
   if (customerVoice.length) pending.push({
     method: 'voc.ingestBatch',
-    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature, ...(payload.capturePageIdentity?{capturePageIdentity:payload.capturePageIdentity}:{}) } : {}) },
+    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature, ...(expected.spaFingerprint?{capturePageIdentity:expected.spaFingerprint}:{}) } : {}) },
     account, queuedAt: now,
   });
   try {
@@ -470,7 +470,7 @@ async function captureTab(tabId, expected = {}) {
     }
     let voiceResult = null;
     if (customerVoice.length) {
-      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature, ...(payload.capturePageIdentity?{capturePageIdentity:payload.capturePageIdentity}:{}) } : {}) });
+      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature, ...(expected.spaFingerprint?{capturePageIdentity:expected.spaFingerprint}:{}) } : {}) });
       if (!captureAccepted(voiceResult)) return { ok: false, error: voiceResult.error?.message ?? 'falha ao registrar avaliações/reclamações', res: voiceResult };
       pending.shift();
     }
@@ -853,11 +853,11 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         let state=info,expectedPage=history[0]?.spaPage??1;
         if(expectedPage!==1||(item.key===keyOf(currentUrl)&&rootSpa&&initialInfo.spaPagination.page!==1)){unsupportedLinks=true;stoppedReason='abra a primeira página SPA para iniciar ou retomar';break;}
         const observedIds=new Set();
-        let finished=false,failed=false;
+        let finished=false,failed=false,initialSummary=null;
         const digest=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(v=>v.toString(16).padStart(2,'0')).join('');
         const contextOk=s=>s?.ok&&s.marketplace===marketplace&&s.accountId===expectedAccountId&&s.pageKind===info.pageKind&&s.url===info.url&&s.filterSignature===info.filterSignature&&!s.loginRequired&&!s.challenge&&!s.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')&&s.spaPagination?.page===expectedPage;
         for(let step=0;step<500;step++){
-          let fingerprint=null,ids=null,stable=false;
+          let fingerprint=null,ids=null,stable=false,summary=null;
           for(let attempt=0;attempt<12;attempt++){
             state=await readCapturePageInfo(temporary.id);
             if(!contextOk(state)){stoppedReason='conta, filtros ou marcador SPA divergentes';break;}
@@ -866,10 +866,13 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
             ids=spaRecordIds(snap);
             if(!ids||snap.marketplace!==marketplace||snap.accountId!==expectedAccountId||snap.pageKind!==info.pageKind||snap.url!==info.url||snap.filterSignature!==info.filterSignature||snap.spaPage!==expectedPage){fingerprint=null;await new Promise(resolve=>setTimeout(resolve,400));continue;}
             const candidate=JSON.stringify(ids);
+            summary=JSON.stringify([snap.accountMetrics??null,snap.chartPoints??[]]);
             if(candidate===fingerprint){stable=true;break;}
             fingerprint=candidate;await new Promise(resolve=>setTimeout(resolve,400));
           }
           if(!stable||!ids||ids.some(id=>observedIds.has(id))){stoppedReason='registros SPA ausentes, instáveis ou repetidos';unsupportedLinks=true;failed=true;break;}
+          if(step===0)initialSummary=summary;
+          else if(summary!==JSON.stringify([null,[]])&&summary!==initialSummary){unsupportedLinks=true;stoppedReason='indicadores de área variam entre páginas SPA; agregação não comprovada';failed=true;break;}
           enqueueLinks(state.authorizedAreaLinks);
           const hash=await digest(fingerprint);
           const existing=pages.findIndex(p=>keyOf(new URL(p.url))===item.key&&p.spaPage===expectedPage);
