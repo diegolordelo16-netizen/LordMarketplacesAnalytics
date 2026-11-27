@@ -1,7 +1,7 @@
 {
   "name": "marketplace-intelligence",
   "private": true,
-  "version": "3.11.0",
+  "version": "3.12.0",
   "description": "Marketplace Intelligence — operação local, análise e inteligência de marketplaces",
   "type": "module",
   "workspaces": [
