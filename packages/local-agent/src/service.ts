@@ -4343,11 +4343,11 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       const i = z.object({ connectorId: z.string().min(1), enabled: z.boolean() }).parse(payload);
       const connector = db.row<{ id: string; requires_credentials: number; status: string }>('SELECT id,requires_credentials,status FROM connector_registry WHERE id=?', i.connectorId);
       if (!connector) throw new Error('conector não encontrado');
-      if(i.enabled&&!supportedId(i.connectorId)&&connector.requires_credentials===1)throw Error('provedor sem adaptador; use importação de exportação autorizada');
       if(this.connectorBusy.has(i.connectorId))throw Error('conector ocupado');
       if (i.enabled && connector.requires_credentials === 1 && connector.status !== 'CONECTADO') {
         throw new Error('conector não pode ser habilitado: credenciais e teste de conexão ainda não foram configurados. O catálogo não representa uma integração ativa.');
       }
+      if(i.enabled&&!supportedId(i.connectorId)&&connector.requires_credentials===1)throw Error('provedor sem adaptador; use importação de exportação autorizada');
       db.db.prepare('INSERT INTO connector_states (connector_id,enabled,updated_at,updated_by) VALUES (?,?,?,?) ON CONFLICT(connector_id) DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at,updated_by=excluded.updated_by')
         .run(i.connectorId, i.enabled ? 1 : 0, nowIso(), auth?.userId ?? null);
       this.audit(auth, 'CONNECTOR_SET_ENABLED', 'connector', i.connectorId, 'OK', i.enabled ? 'ativado' : 'desativado');
