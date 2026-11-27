@@ -1,4 +1,8 @@
-## Versão 3.12.0 — segurança e estabilidade
+## Versão 3.12.0 — extensão, coleta e aprendizado
+
+Coleta paginada SPA, recibos idempotentes, filtros reconhecíveis, memória de navegação por loja, grafo de transições e central de inteligência. A cobertura de interfaces desconhecidas é explicitamente limitada; homologação real dispensada como portão de integração, não executada. [Limites da coleta](docs/ETAPA-03-PENDENCIAS.md) · [Aprendizado adaptativo](docs/ETAPA-03-1-APRENDIZADO.md).
+
+## Versão 3.11.0 — segurança e estabilidade
 
 Etapa 02: dependências auditadas, revogação de sessões, isolamento de contas, proteção de backup e reservas de rascunho com recuperação manual. Validação automatizada em Linux; homologação real e Windows pendentes.
 
