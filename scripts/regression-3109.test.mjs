@@ -277,9 +277,18 @@ test('atalhos de comparação usam dias UTC completos e meses de duração equiv
 
 test('gráfico histórico mantém distância temporal e não conecta dias sem evidência',()=>{
   const ctx=vm.createContext({esc:String,brl:String,num:String,Date});
-  vm.runInContext(dashboard.slice(dashboard.indexOf('function renderHistoryChart('),dashboard.indexOf('function dt(')),ctx);
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function historyMetricConfig('),dashboard.indexOf('function dt(')),ctx);
   const html=vm.runInContext("renderHistoryChart([{date:'2026-11-01',gmvCents:100},{date:'2026-11-02',gmvCents:null},{date:'2026-11-04',gmvCents:150},{date:'2026-11-05',gmvCents:200}])",ctx);
   const path=html.match(/class="trend-path" d="([^"]+)"/)[1];
   assert.equal((path.match(/M /g)||[]).length,2);
   assert.equal((path.match(/L /g)||[]).length,1);
+});
+
+test('gráfico histórico oferece métricas adicionais e mantém zero distinto de ausência',()=>{
+  const ctx=vm.createContext({esc:String,brl:String,num:String,pct:String,Date});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function historyMetricConfig('),dashboard.indexOf('function dt(')),ctx);
+  const keys=vm.runInContext('Object.keys(historyMetricConfig())',ctx);
+  for(const key of ['units','stockAvailable','cvr','roas','aovCents','reviewRating','returnsCount'])assert.ok(keys.includes(key));
+  const html=vm.runInContext("renderHistoryChart([{date:'2026-11-01',units:0},{date:'2026-11-02',units:2}],'units')",ctx);
+  assert.ok(html.includes('trend-path'));
 });
