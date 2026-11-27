@@ -947,3 +947,35 @@ describe('filtro personalizado sem leitura comprovada',()=>{
     expect(window.MI_DOM.collectionFilterState(root)).toEqual({signature:'',warnings:['FILTRO_NAO_RECONHECIDO']});
   });
 });
+
+describe('observação reativa da paginação SPA',()=>{
+  it('confirma o próximo marcador e desconecta o observador',async()=>{
+    let callback:()=>void=()=>{},disconnected=0;
+    class Observer{
+      constructor(fn:()=>void){callback=fn}
+      observe(){}
+      disconnect(){disconnected++}
+    }
+    class E{
+      disabled=false;
+      constructor(public innerText:string,public attrs:Record<string,string>={},public nodes:E[]=[]){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      hasAttribute(n:string){return n in this.attrs}
+      closest(){return null}
+      querySelectorAll(s:string){return this.nodes.filter(x=>s.includes('aria-current')?x.attrs['aria-current']==='page':x.attrs.type==='button')}
+      click(){}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E,MutationObserver:Observer,setTimeout,clearTimeout}));
+    const marker=new E('1',{'aria-current':'page'}),next=new E('Próxima',{type:'button'});
+    const nav=new E('',{'aria-label':'Paginação'},[marker,next]);
+    const root={querySelectorAll:()=>[nav],querySelector:()=>null,body:{innerText:''}};
+    next.click=()=>{marker.innerText='2';callback()};
+    expect(await window.MI_DOM.advanceSpaPageReactive(root,1,1000)).toBe(true);
+    expect(disconnected).toBe(1);
+    next.click=()=>{};
+    expect(await window.MI_DOM.advanceSpaPageReactive(root,2,10)).toBe(false);
+    expect(disconnected).toBe(2);
+  });
+});
