@@ -3967,7 +3967,7 @@ export class LocalService {
     });
     this.register('connector.sync.history',payload=>{
       const i=z.object({accountId:z.string().min(1),connectorId:z.string().optional(),limit:z.number().int().min(1).max(100).default(30)}).parse(payload);
-      return db.rows('SELECT id,connector_id,account_id,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,previous_run_id,CASE WHEN next_cursor IS NOT NULL AND NOT EXISTS(SELECT 1 FROM connector_sync_runs next WHERE next.previous_run_id=connector_sync_runs.id AND next.status='OK') THEN 1 ELSE 0 END has_next FROM connector_sync_runs WHERE account_id=? AND (? IS NULL OR connector_id=?) ORDER BY finished_at DESC,id DESC LIMIT ?',i.accountId,i.connectorId??null,i.connectorId??null,i.limit);
+      return db.rows(`SELECT id,connector_id,account_id,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,previous_run_id,CASE WHEN next_cursor IS NOT NULL AND NOT EXISTS(SELECT 1 FROM connector_sync_runs next WHERE next.previous_run_id=connector_sync_runs.id AND next.status='OK') THEN 1 ELSE 0 END has_next FROM connector_sync_runs WHERE account_id=? AND (? IS NULL OR connector_id=?) ORDER BY finished_at DESC,id DESC LIMIT ?`,i.accountId,i.connectorId??null,i.connectorId??null,i.limit);
     });
     this.register('connector.trends.import',(payload,auth)=>db.transaction(()=>{
       const i=z.object({accountId:z.string().min(1),csvText:z.string().max(2_000_000),confirmedSource:z.literal(true)}).strict().parse(payload);
