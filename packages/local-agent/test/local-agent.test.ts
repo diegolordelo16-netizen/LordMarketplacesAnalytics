@@ -347,6 +347,51 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('finance.realized.summary',{accountId:'acct-realized'})).result).toMatchObject({realizedProfitCents:null,confidence:'CONFLICTING_RECORDS',overlappingPeriods:true});
   });
 
+
+  it('rentabilidade exige registros do mesmo período e não confunde falta de dados com margem negativa',async()=>{
+    const accountId='acct-profitability';seedImportAccount(accountId);
+    const at='2025-01-31T23:59:59.999Z',periodStart='2025-01-01T00:00:00.000Z';
+    for(const id of ['profit-negative','profit-missing'])db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,accountId,'mercado_livre',id,id,'ACTIVE',at,at);
+    const payload={accountId,listingId:'profit-negative',periodStart,periodEnd:at,netRevenueCents:10000,productCostCents:9000,packagingCents:100,shippingCents:1000,marketplaceFeesCents:1000,taxesCents:100,adSpendCents:500,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0,sourceClass:'F_USER_INPUT',evidence:{source:'relatório de teste'}};
+    expect((await call('finance.realized.upsert',payload)).ok).toBe(true);
+    const data=(await call('finance.profitability',{accountId,periodStart,periodEnd:at})).result as any;
+    expect(data.listings.find((l:any)=>l.id==='profit-negative')).toMatchObject({profitCents:-1700,marginPct:-17,negative:true,status:'RECORDED'});
+    expect(data.listings.find((l:any)=>l.id==='profit-missing')).toMatchObject({profitCents:null,negative:false,status:'NO_DATA'});
+    expect((await call('finance.realized.upsert',{...payload,sourceClass:'B_PLATFORM_EXPORT'})).ok).toBe(true);
+    const conflicted=(await call('finance.profitability',{accountId,periodStart,periodEnd:at})).result as any;
+    expect(conflicted.listings.find((l:any)=>l.id==='profit-negative')).toMatchObject({profitCents:null,status:'CONFLICT'});
+  });
+
+  it('estoque distingue zero de ausência, calcula cobertura apenas com janela explícita e preserva conta',async()=>{
+    const accountId='acct-inventory-5';seedImportAccount(accountId);seedImportAccount('acct-inventory-other-5');
+    const at=new Date().toISOString();
+    for(const id of ['inventory-zero','inventory-known','inventory-unknown'])db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,accountId,'mercado_livre',id,id,'ACTIVE',at,at);
+    const insert=db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)');
+    const evidence=JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07'});
+    insert.run('inv-s1','inventory-zero',accountId,at,at,JSON.stringify({stockAvailable:0,units:7,adSpend:20,questionsPending:2}),'A_PRIMARY_UI',evidence);
+    insert.run('inv-s2','inventory-known',accountId,at,at,JSON.stringify({stockAvailable:14,units:7}),'A_PRIMARY_UI',evidence);
+    const result=(await call('inventory.dashboard',{accountId,days:30})).result as any;
+    expect(result.items.find((l:any)=>l.id==='inventory-zero')).toMatchObject({stock:0,coverageDays:0,signals:expect.arrayContaining(['OUT_OF_STOCK','LOW_COVERAGE','ADS_SPEND_WITH_ZERO_STOCK_OBSERVED','PENDING_QUESTIONS'])});
+    expect(result.items.find((l:any)=>l.id==='inventory-known')).toMatchObject({coverageDays:14,signals:[]});
+    expect(result.items.find((l:any)=>l.id==='inventory-unknown')).toMatchObject({stock:null,coverageDays:null,signals:[]});
+    expect((await call('inventory.dashboard',{accountId:'acct-inventory-other-5'})).result).toMatchObject({items:[]});
+  });
+
+  it('Ads limita escopo, não duplica campanha e calcula TACoS somente com janelas compatíveis',async()=>{
+    const accountId='acct-ads-5';seedImportAccount(accountId);
+    const at='2025-01-08T12:00:00.000Z',from='2025-01-08T00:00:00.000Z',to='2025-01-08T23:59:59.999Z';
+    const evidence={filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'};
+    const base={marketplace:'mercado_livre',accountId,sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],evidence};
+    const detail={kind:'AD_CAMPAIGN',externalId:'C5',metrics:{adSpend:100,adAttributedRevenue:0},evidence:{adSpend:'Investimento',adAttributedRevenue:'Receita atribuída'}};
+    expect((await call('capture.ingest',{...base,pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',accountMetrics:{adSpend:100},details:[detail]})).ok).toBe(true);
+    expect((await call('capture.ingest',{...base,pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/vendas',accountMetrics:{gmv:1000}})).ok).toBe(true);
+    const result=(await call('ads.dashboard',{accountId,from,to})).result as any;
+    expect(result).toMatchObject({tacosPct:10,items:[{external_id:'C5',signal:'REVIEW_SPEND',verified:true}]});
+    expect((await call('ads.dashboard',{accountId,from,to,externalId:'C5'})).result).toMatchObject({tacosPct:null});
+    db.db.prepare("UPDATE account_snapshots SET evidence_json=? WHERE account_id=? AND page_kind='seller_dashboard'").run(JSON.stringify({filtersAndPeriod:'start_date=2025-01-02|end_date=2025-01-07|status=all'}),accountId);
+    expect((await call('ads.dashboard',{accountId,from,to})).result).toMatchObject({tacosPct:null});
+  });
+
   it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
     seedImportAccount('acct-voc');
     const inserted = await call('voc.ingestBatch', { accountId: 'acct-voc', items: [
