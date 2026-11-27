@@ -202,6 +202,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'agent.budget': 'view_reports',
   'autoupgrade.propose': 'approve_auto_upgrade',
   'autoupgrade.list': 'view_reports',
+  'autoupgrade.inspect': 'approve_auto_upgrade',
   'autoupgrade.apply': 'approve_auto_upgrade',
   'autoupgrade.rollback': 'approve_auto_upgrade',
   'connector.registry': 'view_reports',
@@ -4144,7 +4145,8 @@ export class LocalService {
 
     // ------------------------------------------------------------ auto-upgrade
     this.register('autoupgrade.propose', async (payload, auth) => {
-      const i = z.object({ module: z.string(), symptoms: z.string(), currentCode: z.string(), testCommand: z.string().default('npx vitest run') }).parse(payload);
+      const i = z.object({ module: z.string().trim().min(1).max(200), symptoms: z.string().trim().min(5).max(8000), currentCode: z.string().min(1).max(40000), confirmedExternal:z.literal(true),testCommand: z.literal('npx vitest run').default('npx vitest run') }).strict().parse(payload);
+      if(auth?.role!=='super_admin')throw Error('somente super_admin');
       const res = await autoUpgrade.proposeAdapterFix(i);
       this.audit(auth, 'AUTOUPGRADE_PROPOSE', 'auto_upgrade_proposal', res.proposalId ?? null, res.ok ? 'OK' : 'FAILED', res.message);
       return res;
@@ -4152,28 +4154,22 @@ export class LocalService {
 
     this.register('autoupgrade.list', () => autoUpgrade.list());
 
-    this.register('autoupgrade.apply', (payload, auth) => {
-      const i = z.object({ proposalId: z.string(), approved: z.boolean(), readFile: z.record(z.string(), z.string()).default({}) }).parse(payload);
-      const readFile = (rel: string) => i.readFile[rel] ?? null;
-      const writes: Array<{ path: string; content: string }> = [];
-      const res = autoUpgrade.apply({
-        proposalId: i.proposalId,
-        approverRole: auth?.role ?? 'visualizador',
-        superAdminApproved: i.approved,
-        targetRoot: '.',
-        readFile,
-        writeFile: (rel, content) => writes.push({ path: rel, content }),
-      });
-      this.audit(auth, 'AUTOUPGRADE_APPLY', 'auto_upgrade_proposal', i.proposalId, res.applied ? 'OK' : 'BLOCKED', res.reasons.join('; '));
-      return { ...res, writes };
+    this.register('autoupgrade.inspect',(payload,auth)=>{
+      const i=z.object({proposalId:z.string().uuid()}).strict().parse(payload);
+      if(auth?.role!=='super_admin')throw Error('somente super_admin');
+      return autoUpgrade.inspect(i.proposalId);
     });
-
-    this.register('autoupgrade.rollback', (payload, auth) => {
-      const i = z.object({ proposalId: z.string(), files: z.record(z.string(), z.string()).default({}) }).parse(payload);
-      const writes: Array<{ path: string; content: string }> = [];
-      const res = autoUpgrade.rollback(i.proposalId, '.', (rel) => i.files[rel] ?? null, (rel, content) => writes.push({ path: rel, content }));
-      this.audit(auth, 'AUTOUPGRADE_ROLLBACK', 'auto_upgrade_proposal', i.proposalId, res.ok ? 'OK' : 'FAILED', res.message);
-      return { ...res, writes };
+    this.register('autoupgrade.apply',(payload,auth)=>{
+      const i=z.object({proposalId:z.string().uuid(),approved:z.boolean()}).strict().parse(payload);
+      const reason='Aplicação direta por IPC bloqueada: exporte o diff, valide em ambiente isolado e publique um build revisado. Nenhum arquivo foi alterado.';
+      this.audit(auth,'AUTOUPGRADE_APPLY','auto_upgrade_proposal',i.proposalId,'BLOCKED',reason);
+      return {applied:false,reasons:[reason]};
+    });
+    this.register('autoupgrade.rollback',(payload,auth)=>{
+      const i=z.object({proposalId:z.string().uuid()}).strict().parse(payload);
+      const message='Rollback de código exige reinstalação da versão anterior validada. Nenhum arquivo foi alterado.';
+      this.audit(auth,'AUTOUPGRADE_ROLLBACK','auto_upgrade_proposal',i.proposalId,'BLOCKED',message);
+      return {ok:false,message};
     });
 
     // ------------------------------------------------------------ conectores, previsão, alertas
