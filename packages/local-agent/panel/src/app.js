@@ -719,19 +719,20 @@ async function viewGrowth() {
 
 // ------------------------------------------------------------------ AGENTES DE IA
 async function viewAgents() {
-  const [runs, budget, memory, recommendations] = await Promise.all([
+  const [runs, budget, memory, recommendations,debates] = await Promise.all([
     api('agent.runs', {accountId:state.accountId||undefined}).catch(() => []),
-    api('agent.budget', {}).catch(() => null),
-    api('agent.memory', {}).catch(() => []),
+    api('agent.budget', {accountId:state.accountId||undefined}).catch(() => null),
+    api('agent.memory', {accountId:state.accountId||undefined}).catch(() => []),
     api('agent.recommendations', { accountId: state.accountId || undefined, limit: 100 }).catch(() => []),
+    state.accountId?api('agent.workspace.history',{accountId:state.accountId}).catch(()=>[]):Promise.resolve([]),
   ]);
   const b = budget || {};
   return card('Orçamento e consumo do Gemini', `
     <div class="kpi-grid">
-      <div class="kpi"><div class="l">Chamadas hoje</div><div class="v">${num(b.callsToday)}</div></div>
+      <div class="kpi"><div class="l">Chamadas (24h)</div><div class="v">${num(b.callsToday)}</div></div>
       <div class="kpi"><div class="l">Tokens entrada</div><div class="v">${num(b.tokensIn)}</div></div>
       <div class="kpi"><div class="l">Tokens saída</div><div class="v">${num(b.tokensOut)}</div></div>
-      <div class="kpi"><div class="l">Custo hoje (US$)</div><div class="v">${num(b.costUsd, 4)}</div></div>
+      <div class="kpi"><div class="l">Custo estimado (24h, US$)</div><div class="v">${num(b.costUsd, 4)}</div></div>
       <div class="kpi"><div class="l">Limite diário (US$)</div><div class="v">${num(b.dailyCostLimitUsd, 2)}</div></div>
     </div>`)
   + card('Executar agentes especializados', `
@@ -762,13 +763,14 @@ async function viewAgents() {
       <label class="grow">Pergunta <textarea id="debate-q" rows="3" placeholder="Minha margem caiu 8% e o concorrente baixou o preço. O que fazer sem destruir margem?"></textarea></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="debate">Debater com o Gemini</button></div>
-    <div id="debate-out" class="out"></div>`)
+    <p class="muted small">Consulta externa paga mediante confirmação. Envia métricas numéricas e referências da loja selecionada, sem textos de clientes ou credenciais. Histórico local por usuário.</p><div id="debate-out" class="out"></div>`)
+  + card('Histórico de debates',table(['Data','Pergunta','Status','Resultado'],(debates||[]).map(r=>`<tr><td>${dt(r.started_at)}</td><td>${esc(r.topic)}</td><td>${esc(r.decision)}</td><td><details><summary>Ver registro</summary><pre class="json">${esc(JSON.stringify(r.context,null,2))}</pre></details></td></tr>`),'Nenhum debate nesta loja.'))
   + card('Histórico de execuções', table(['Quando', 'Agente', 'Recomendações', 'Conflitos'],
-    (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
+    (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.started_at||r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
       <td>${num(r.recommendation_count ?? (r.recommendations || []).length)}</td><td>${num(r.conflict_count ?? 0)}</td></tr>`),
     'Nenhuma execução de agente.'))
   + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
-    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
+    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.scope || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
       <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
     'Memória vazia.'))
   + card('Feedback e resultados das recomendações', table(['Diagnóstico','Ação sugerida','Confiança','Status','Registrar resultado'],
@@ -1552,7 +1554,7 @@ const ACTIONS = {
     const listingId = $('#analysis-listing').value.trim();
     const catalogProductId = $('#analysis-product').value.trim();
     if (listingId && catalogProductId) throw new Error('Escolha um anúncio ou produto, não ambos.');
-    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30 }), 'Análise concluída.');
+    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30,offset:Number($('#analysis-offset').value)||0 }), 'Análise concluída.');
     $('#analysis-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result, null, 2))}</pre>`;
   },
 
@@ -2154,9 +2156,12 @@ const ACTIONS = {
   debate: async () => {
     const q = $('#debate-q').value.trim();
     if (!q) { toast('Escreva a pergunta.', 'bad'); return; }
-    // O serviço recebe o contexto como TEXTO: é o que vai no prompt.
-    const r = await run(() => api('agent.debate', { topic: q, context: 'sem dados coletados ainda' }));
-    $('#debate-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#debate-out');
+    if(!accountId)throw Error('Selecione uma loja.');
+    if(!confirm('Autoriza enviar a pergunta e evidências agregadas desta loja ao Gemini, sujeito ao custo da API?'))return;
+    const r=await run(()=>api('agent.workspace.ask',{accountId,topic:q,confirmedExternal:true}));
+    if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#debate-out'))return;
+    host.innerHTML=`<pre class="json">${esc(JSON.stringify(r,null,2))}</pre>`;
   },
 
   'task-refresh': async () => { if (await renderView()) toast('Progresso atualizado.'); },

@@ -76,14 +76,12 @@ export class KnowledgeBase {
     return id;
   }
 
-  list(scope?: string): KnowledgeItem[] {
-    return scope
-      ? (this.db.rows<KnowledgeItem>('SELECT * FROM knowledge_items WHERE scope = ? ORDER BY updated_at DESC', scope))
-      : (this.db.rows<KnowledgeItem>('SELECT * FROM knowledge_items ORDER BY updated_at DESC'));
+  list(scope?: string,accountId?:string): KnowledgeItem[] {
+    return this.db.rows<KnowledgeItem>('SELECT * FROM knowledge_items WHERE (? IS NULL OR scope=?) AND (account_id IS NULL OR account_id=?) ORDER BY updated_at DESC',scope??null,scope??null,accountId??null);
   }
 
   /** Recuperação BM25 simplificada sobre título+conteúdo+tags. */
-  search(query: string, opts: { scope?: string; marketplace?: string; category?: string; limit?: number } = {}): RetrievalHit[] {
+  search(query: string, opts: { scope?: string; marketplace?: string; category?: string; limit?: number; accountId?:string } = {}): RetrievalHit[] {
     const limit = opts.limit ?? 5;
     const terms = tokenize(query);
     if (terms.length === 0) return [];
@@ -91,6 +89,7 @@ export class KnowledgeBase {
     const rows = this.db.rows<KnowledgeItem>('SELECT * FROM knowledge_items');
     const filtered = rows.filter(
       (r) =>
+        (r.account_id===null||r.account_id===opts.accountId) &&
         (!opts.scope || r.scope === opts.scope) &&
         (!opts.marketplace || r.marketplace === null || r.marketplace === opts.marketplace) &&
         (!opts.category || r.category === null || r.category === opts.category),

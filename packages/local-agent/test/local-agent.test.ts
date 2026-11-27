@@ -2418,6 +2418,11 @@ describe('feedback de agentes com evidência de resultado', () => {
       else expect((response.result as {playbook:{successes:number}}).playbook.successes).toBe(3);
     }
     expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM validated_playbooks')?.count).toBe(1);
+    const replay=await call('agent.feedback',{recommendationId:'rec-feedback-3',decision:'IMPLEMENTADO',outcome:{success:true,measuredAt:now,baseline:{orders:10},after:{orders:12},sampleSize:100,source:'A_PRIMARY_UI'}});
+    expect(replay.result).toMatchObject({playbook:{successes:3,attempts:3}});
+    expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM human_feedback')?.count).toBe(3);
+    await call('agent.feedback',{recommendationId:'rec-feedback-3',decision:'FALHOU',outcome:{success:false,measuredAt:now,baseline:{orders:10},after:{orders:8},sampleSize:100,source:'A_PRIMARY_UI'}});
+    expect(db.row('SELECT observation_status,uses FROM validated_playbooks')).toMatchObject({observation_status:'INSUFFICIENT_OBSERVATIONS',uses:3});
   });
 });
 
@@ -2546,5 +2551,21 @@ describe('relatórios e conectores com estado honesto', () => {
     expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM connector_credentials_metadata WHERE connector_id=?','connector-disconnect-test')?.count).toBe(0);
     const audit = db.row<{reason:string}>('SELECT reason FROM audit_log WHERE entity=? AND entity_id=? ORDER BY id DESC LIMIT 1','connector','connector-disconnect-test');
     expect(audit?.reason).not.toContain('token-que-nao-pode-vazar');
+  });
+});
+
+
+describe('workspace com evidências',()=>{
+  it('exige confirmação, registra indisponibilidade e isola histórico e memória',async()=>{
+    seedImportAccount('workspace-a');seedImportAccount('workspace-b');
+    const denied=await call('agent.workspace.ask',{accountId:'workspace-a',topic:'Avaliar loja',confirmedExternal:false});expect(denied.ok).toBe(false);
+    const missing=await call('agent.workspace.ask',{accountId:'workspace-a',topic:'Avaliar loja',confirmedExternal:true});
+    expect(missing.result).toMatchObject({ok:false,error:'NO_KEY',context:{snapshots:[],seo:[]}});
+    const history=await call('agent.workspace.history',{accountId:'workspace-a'});expect(history.result).toHaveLength(1);
+    expect((await call('agent.workspace.history',{accountId:'workspace-b'})).result).toEqual([]);
+    const knowledge=new KnowledgeBase(db);knowledge.add({scope:'operacao',title:'Teste',content:'Privado',source:'HUMAN',confidence:1,accountId:'workspace-a'});
+    expect((await call('agent.memory',{accountId:'workspace-a'})).result).toHaveLength(1);
+    expect((await call('agent.memory',{accountId:'workspace-b'})).result).toEqual([]);
+    expect((await call('agent.budget',{accountId:'workspace-a'})).result).toMatchObject({callsToday:0,tokensIn:0,tokensOut:0,costUsd:0,windowHours:24});
   });
 });
