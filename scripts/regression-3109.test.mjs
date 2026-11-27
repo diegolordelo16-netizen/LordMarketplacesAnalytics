@@ -8,12 +8,13 @@ const dashboard = readFileSync(new URL('../packages/local-agent/panel/src/app.js
 const root = 'https://seller.shopee.com.br/datacenter';
 const orders = 'https://seller.shopee.com.br/order';
 
-function scanFixture({ captureOk = true, links = [], current = root, next = {}, pageInfo = {} } = {}) {
+function scanFixture({ captureOk = true, links = [], current = root, next = {}, pageInfo = {}, learned = [] } = {}) {
   const captured = [], progress = [], created = [];
   let tabUrl = current;
   const info = (url) => ({ ok: true, url, accountId: 'store-a', pageKind: url === root ? 'seller_dashboard' : 'seller_orders', authorizedAreaLinks: url === root ? links : [], nextPageUrl: next[url], ...(pageInfo[url] || {}) });
   const ctx = vm.createContext({ URL, URLSearchParams, setTimeout: (fn) => fn(),
     marketplaceOf: () => 'shopee',
+    callService: async (method) => method==='navigation.list'?{ok:true,result:learned}:{ok:false},
     captureTab: async (id, expected) => { captured.push(expected.url); return { ok: captureOk, error: captureOk ? undefined : 'offline' }; },
     readCapturePageInfo: async () => info(tabUrl),
     waitForTabComplete: async () => {},
@@ -246,4 +247,12 @@ test('SPA geral interrompe registros repetidos e mudança de conta',async()=>{
     assert.equal(result.pagesSucceeded,1);assert.equal(result.pendingPages,1);assert.equal(result.unsupportedLinks,true);
     assert.equal(f.captures.length,1);assert.equal(f.closed(),true);
   }
+});
+
+test('memória prioriza apenas rotas visíveis, sem introduzir links ocultos',async()=>{
+  const ratings='https://seller.shopee.com.br/ratings';
+  const f=scanFixture({links:[{url:orders,pageKind:'seller_orders'},{url:ratings,pageKind:'seller_reputation'}],pageInfo:{[ratings]:{pageKind:'seller_reputation'}},learned:[{route:'/ratings',page_kind:'seller_reputation'},{route:'/inventory',page_kind:'seller_inventory'}]});
+  const result=await f.scan(5);
+  assert.equal(result.pagesSucceeded,3);
+  assert.deepEqual(f.captured,[root,ratings,orders]);
 });
