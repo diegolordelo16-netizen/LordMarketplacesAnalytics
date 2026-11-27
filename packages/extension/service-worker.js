@@ -1244,6 +1244,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind,...(typeof requested.fromRoute==='string'?{fromRoute:requested.fromRoute}:{}),...(actionKind?{actionKind}:{})}:base);
         sendResponse(result);return;
       }
+      if(message.method==='listing.browser.apply'){
+        const input=message.payload??{};
+        if(typeof input.proposalId!=='string'||typeof input.externalListingId!=='string'||!['DUPLICATE','CREATE_VARIATION','EDIT_VARIATION'].includes(input.action)||input.confirmed!==true)throw Error('proposta, anúncio, ação e confirmação explícitas necessárias');
+        const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+        if(!tab?.id||marketplaceOf(tab.url)!=='mercado_livre')throw Error('abra a área do vendedor do Mercado Livre');
+        const info=await chrome.tabs.sendMessage(tab.id,{type:'MI_LISTING_OPERATION_CONTEXT',action:input.action,externalListingId:input.externalListingId,variationId:input.variationId||undefined});
+        if(!info?.ok)throw Error(info?.error||'controle não reconhecido');
+        const {ok,...ctx}=info;
+        const claim=await callService('listing.browser.claim',{...ctx,proposalId:input.proposalId,confirmed:true});
+        if(!claim?.ok||!claim.result){sendResponse(claim);return;}
+        const grant=claim.result;
+        let result;
+        try{
+          const current=await chrome.tabs.get(tab.id);
+          if(!current.active||current.url!==tab.url)throw Error('aba mudou após autorização');
+          result=await chrome.tabs.sendMessage(tab.id,{type:'MI_LISTING_OPERATION_APPLY',grant});
+        }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
+        const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
+        sendResponse(await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)}));return;
+      }
       if(['campaign.browser.apply','campaign.browser.verify'].includes(message.method)){
         const input=message.payload??{};
         if(typeof input.proposalId!=='string'||typeof input.campaignRef!=='string'||input.confirmed!==true)throw Error('proposta, campanha e confirmação explícitas necessárias');
