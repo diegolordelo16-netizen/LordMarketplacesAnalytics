@@ -1180,12 +1180,32 @@ async function showBrowserSyncBatch() {
 }
 
 // ------------------------------------------------------------------ roteador de views
+function observedAdsMetrics(metrics){
+  const known=k=>typeof metrics?.[k]==='number'&&Number.isFinite(metrics[k])&&metrics[k]>=0?metrics[k]:null;
+  const spend=known('adSpend'),revenue=known('adAttributedRevenue'),clicks=known('adClicks'),impressions=known('paidImpressions'),orders=known('adAttributedOrders');
+  return {spend,revenue,clicks,impressions,orders,roas:spend!==null&&spend>0&&revenue!==null?revenue/spend:null,acos:revenue!==null&&revenue>0&&spend!==null?spend/revenue*100:null,ctr:impressions!==null&&impressions>0&&clicks!==null?clicks/impressions*100:null,cpc:clicks!==null&&clicks>0&&spend!==null?spend/clicks:null,signal:spend!==null&&spend>0&&revenue===0?'INVESTIMENTO_SEM_RECEITA_ATRIBUIDA':spend!==null&&revenue!==null&&spend>revenue?'INVESTIMENTO_SUPERIOR_RECEITA_ATRIBUIDA':null};
+}
+async function viewAds(){
+  if(!state.accountId)return card('Publicidade e campanhas','<p class="muted">Selecione uma loja para consultar dados de Ads.</p>');
+  const [campaigns,ads]=await Promise.all([
+    api('capture.details',{accountId:state.accountId,kind:'AD_CAMPAIGN',limit:100}),
+    api('capture.details',{accountId:state.accountId,kind:'AD',limit:100})
+  ]);
+  const money=n=>n===null?'—':brl(Math.round(n*100));
+  const display=(rows)=>table(['Identificador','Campanha pai','Investimento','Receita atribuída','Cliques','Impressões','Pedidos atribuídos','ROAS','ACoS','CTR','CPC','Sinal','Período e origem','Captura'],rows.map(r=>{
+    const m=observedAdsMetrics(r.metrics);
+    return '<tr><td>'+esc(r.label||r.external_id)+'<div class="muted small">'+esc(r.external_id)+'</div></td><td>'+esc(r.parent_external_id||'—')+'</td><td>'+money(m.spend)+'</td><td>'+money(m.revenue)+'</td><td>'+num(m.clicks)+'</td><td>'+num(m.impressions)+'</td><td>'+num(m.orders)+'</td><td>'+num(m.roas,2)+'</td><td>'+pct(m.acos)+'</td><td>'+pct(m.ctr)+'</td><td>'+money(m.cpc)+'</td><td>'+esc(m.signal||'—')+'</td><td>'+esc(r.context?.filtersAndPeriod||'Não comprovado')+' · '+esc(r.source_class)+'</td><td>'+dt(r.captured_at)+'</td></tr>';
+  }),'Nenhuma observação disponível. Capture a área de publicidade na extensão.');
+  return card('Publicidade — observações por loja','<p class="muted small">Até 100 snapshots recentes por tipo; linhas não são somadas, pois podem representar períodos repetidos. Ausência não é zero. Sinais são observações, não comprovação de prejuízo. TACoS requer GMV com janela e escopo equivalentes.</p><button class="btn" data-act="nav" data-view="browserSync">Abrir coletas</button>')
+    +card('Campanhas',display(campaigns))+card('Anúncios patrocinados',display(ads));
+}
 const VIEWS = {
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
   prestart: { label: 'Pré-Start & Diagnóstico', icon: '✓', render: viewPrestart },
   browserSync: { label: 'Extensão & Coletas', icon: '⇄', render: viewBrowserSync },
   listings: { label: 'Anúncios & Captura', icon: '▤', render: viewListings },
   finance: { label: 'Financeiro', icon: '⊞', render: viewFinance },
+  ads: { label: 'Publicidade & Ads', icon: '◈', render: viewAds },
   keywords: { label: 'SEO & Keywords', icon: '⌕', render: viewKeywords },
   market: { label: 'Radar de mercado', icon: '◎', render: viewMarket },
   competition: { label: 'Concorrência', icon: '⚔', render: viewCompetition },
