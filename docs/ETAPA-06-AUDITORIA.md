@@ -23,3 +23,7 @@ Novos relatos manuais usam a fonte `F_USER_INPUT`. A migração 035 corrige regi
 ## Revisão da visibilidade SEO
 
 A presença e o share Top 20 usam capturas com posições válidas e sem empates de posição. Capturas vazias ou ambíguas são contabilizadas separadamente no painel. O registro do cálculo é transacional.
+
+## Comparativo de concorrentes
+
+O histórico de cada relação no painel mostra as diferenças observadas de preço, frete e prazo, o patrocínio informado e a contagem de arquivos idênticos por hash. Campos sem observação ficam vazios. A resposta é descartada se o usuário trocar a loja, o produto ou o filtro enquanto a consulta está em andamento.

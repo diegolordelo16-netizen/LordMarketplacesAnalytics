@@ -1650,12 +1650,29 @@ const ACTIONS = {
     renderView();
   },
   history: async (d) => {
-    const h = await run(() => api('competitor.monitoring.history', { relationId: d.id }));
-    const out = document.querySelector(`[data-out="${d.id}"]`);
-    if (!out || !h) return;
+    const generation=viewRenderSequence,accountId=state.accountId,productId=state.ownProductId,status=state.relationsStatus;
+    const out=document.querySelector(`[data-out="${CSS.escape(d.id)}"]`);
+    if(!out)return;
+    const [h,evidence]=await run(()=>Promise.all([
+      api('competitor.monitoring.history',{relationId:d.id}),
+      api('competitor.evidence.compare',{relationId:d.id}).catch(()=>null),
+    ]))||[];
+    if(!h||generation!==viewRenderSequence||accountId!==state.accountId||productId!==state.ownProductId||
+       status!==state.relationsStatus||!out.isConnected)return;
+    const difference=(value,format)=>value==null?'—':format(value);
+    const comparison=evidence?table(['Indicador','Valor observado'],[
+      ['Diferença de preço (concorrente menos próprio)',difference(evidence.priceDifferenceCents,brl)],
+      ['Diferença de frete',difference(evidence.shippingDifferenceCents,brl)],
+      ['Prazo mínimo',difference(evidence.deliveryDaysMinDifference,value=>num(value,1)+' dias')],
+      ['Prazo máximo',difference(evidence.deliveryDaysMaxDifference,value=>num(value,1)+' dias')],
+      ['Anúncio concorrente patrocinado',evidence.sponsored==null?'—':evidence.sponsored?'Sim':'Não'],
+      ['Arquivos de imagem idênticos',num(evidence.images.identicalHashes)],
+    ].map(([label,value])=>`<tr><td>${esc(label)}</td><td>${esc(value)}</td></tr>`),'Sem evidências comparáveis.')+
+    `<p class="muted small">${esc(evidence.images.explanation)}</p>`:'<p class="muted small">Comparativo de evidências indisponível.</p>';
     const pts = h.points || [];
     const max = Math.max(...pts.map((p) => p.price_cents || 0), h.ownPriceCents || 0, 1);
     out.innerHTML = `
+      ${comparison}
       <div class="small">Preço atual: ${brl(h.competitorPriceCents)} · mínimo: ${brl(h.minPriceCents)} · meu preço: ${brl(h.ownPriceCents)}</div>
       <div class="spark">${pts.map((p) => `<div class="bar" style="height:${Math.max(4, ((p.price_cents || 0) / max) * 60)}px" title="${brl(p.price_cents)} · ${dt(p.captured_at)}"></div>`).join('')}</div>
       ${table(['Quando', 'Preço', 'Posição', 'Nota', 'Avaliações'],
