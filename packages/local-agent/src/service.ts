@@ -4041,7 +4041,7 @@ export class LocalService {
       const rec = db.row<{id:string;account_id:string|null;listing_id:string|null;action_proposed:string|null;verification_criteria:string|null;agent_key:string}>('SELECT r.id,r.account_id,r.listing_id,r.action_proposed,r.verification_criteria,a.agent_key FROM agent_recommendations r JOIN agent_runs a ON a.id=r.agent_run_id WHERE r.id=?',input.recommendationId);
       if (!rec) throw new Error('recomendação não encontrada');
       const verificationStatus = input.outcome ? 'OBSERVADO_NAO_CAUSAL' : 'NOT_PROVIDED';
-      let feedbackId=randomUUID();
+      let feedbackId:string=randomUUID();
       let playbook: {id:string;successes:number;attempts:number}|null=null;
       db.transaction(() => {
         const previous=db.row<{id:string;decision:string;reason:string|null;outcome_json:string|null}>('SELECT id,decision,reason,outcome_json FROM human_feedback WHERE recommendation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1',rec.id);
