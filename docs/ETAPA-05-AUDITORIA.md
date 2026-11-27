@@ -55,3 +55,5 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - Migration 039: edição de estoque por API em variação legada ativa, com preço mantido, baseline aprovado, lista completa de IDs, reserva única e dupla releitura. Adicionada proteção de conflito entre publicação de tarefas e tentativas assistidas pendentes. Homologação real dispensada; CI do novo SHA deve ser verificada.
 
 - Medição de operações confirmadas pela API: mantém o estado exato da variação e compara métricas do anúncio inteiro em janelas compatíveis, fora do intervalo de execução. Teste com janela ausente e janela válida. Não atribui causalidade.
+
+- Migration 040: alteração assistida do ROAS objetivo, em centésimos de multiplicador (100–3500), com orçamento mantido, autorização de uso único, formulário dedicado, leitura em documento novo e regressão simulada. Não testada em conta real.

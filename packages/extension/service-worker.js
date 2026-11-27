@@ -512,9 +512,9 @@ async function verifyCampaignInFreshTab(tab, grant, proposalId) {
     verificationTab = await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
     if (!Number.isInteger(verificationTab.id)) return null;
     await waitForTabComplete(verificationTab.id,tab.url,8000);
-    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef,changeKind:grant.targetStatus?'STATUS':'BUDGET'});
+    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef,changeKind:grant.targetStatus?'STATUS':grant.targetRoas!==undefined?'ROAS':'BUDGET'});
     if (!info?.ok || info.accountId!==grant.accountId || info.campaignRef!==grant.campaignRef ||
-        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents || info.campaignStatus!==grant.targetStatus) return null;
+        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents || info.campaignStatus!==grant.targetStatus || info.roasTargetHundredths!==grant.targetRoas) return null;
     const {ok,...context}=info;
     const verified=await callService('campaign.budget.verify',{...context,proposalId});
     return verified?.ok && verified.result?.status==='UI_READBACK_MATCHED' ? verified : null;

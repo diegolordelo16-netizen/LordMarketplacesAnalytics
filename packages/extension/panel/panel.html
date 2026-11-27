@@ -42,14 +42,14 @@
       <button id="listing-op-apply">Executar proposta aprovada</button><p class="hint" id="listing-op-out" role="status">Nenhuma operação solicitada.</p>
     </section>
     <section class="card">
-      <h2>Orçamento diário — Mercado Livre</h2>
-      <p class="hint">Proposta aprovada no dashboard com baseline e changes contendo apenas dailyBudgetCents. Abra a campanha na aba ativa. A execução exige confirmação no navegador; a leitura após recarga não prova causalidade.</p>
+      <h2>Configurações de campanha — Mercado Livre</h2>
+      <p class="hint">Proposta aprovada no dashboard: orçamento diário, status ou ROAS objetivo (uma alteração por proposta). Abra a campanha na aba ativa. A execução exige confirmação no navegador; a leitura após recarga não prova causalidade.</p>
       <label class="field-label" for="budget-proposal">ID da proposta aprovada</label>
       <input id="budget-proposal" maxlength="200" autocomplete="off">
       <label class="field-label" for="budget-campaign">ID externo da campanha</label>
       <input id="budget-campaign" maxlength="200" autocomplete="off">
       <label class="field-label" for="campaign-setting">Tipo de alteração</label>
-      <select id="campaign-setting"><option value="BUDGET">Orçamento diário</option><option value="STATUS">Pausa ou reativação</option></select>
+      <select id="campaign-setting"><option value="BUDGET">Orçamento diário</option><option value="STATUS">Pausa ou reativação</option><option value="ROAS">ROAS objetivo</option></select>
       <div class="actions"><button id="budget-apply">Executar proposta aprovada</button><button id="budget-verify">Conferir após recarregar</button></div>
       <p class="hint" id="budget-out" role="status">Nenhuma operação solicitada.</p>
     </section>

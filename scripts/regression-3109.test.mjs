@@ -372,7 +372,16 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   const statusField=new StatusSelect();
   const statusButton={...button,get form(){return statusForm;}};
   const statusForm={...form,elements:[statusField],querySelectorAll:()=>[statusButton]};
-  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:selector=>selector==='select'?[statusField]:[field],contains:el=>el===form||el===statusForm};
+  class RoasInput extends Input {
+    constructor(){super();this.raw='5.00';}
+    getAttribute(n){return n==='aria-label'?'ROAS objetivo (x)':null;}
+    closest(selector){return selector==='[data-campaign-id]'?row:roasForm;}
+    get form(){return roasForm;}
+  }
+  const roasField=new RoasInput();
+  const roasButton={...button,get form(){return roasForm;}};
+  const roasForm={...form,elements:[roasField],querySelectorAll:()=>[roasButton]};
+  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:selector=>selector==='select'?[statusField]:[field,roasField],contains:el=>el===form||el===statusForm||el===roasForm};
   const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:()=>ambiguous?[row,row]:[row]};
   const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(form.action),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=> 'seller_ads',visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,HTMLSelectElement:StatusSelect,Event:class{},setTimeout:fn=>fn()});
   vm.runInContext(snippet,ctx);
@@ -391,6 +400,9 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   ctx.grant={...grant('pause'),beforeCents:1200,targetCents:1200,beforeStatus:'ACTIVE',targetStatus:'PAUSED'};
   assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
   assert.equal(statusField.value,'paused');assert.equal(field.value,'12.00');assert.equal(clicks,2);
+  ctx.grant={...grant('roas'),beforeCents:1200,targetCents:1200,beforeRoas:500,targetRoas:650};
+  assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
+  assert.equal(roasField.value,'6.50');assert.equal(field.value,'12.00');assert.equal(clicks,3);
 });
 
 test('variação simples e duplicação assistidas recusam ambiguidade e repetição',async()=>{

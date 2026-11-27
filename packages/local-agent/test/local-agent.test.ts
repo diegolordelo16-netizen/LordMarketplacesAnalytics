@@ -480,6 +480,25 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED'})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false});
   });
 
+  it('autoriza meta ROAS com orçamento constante e exige releitura correspondente',async()=>{
+    const accountId='campaign-roas-shop',campaignRef='C-ROAS';seedImportAccount(accountId);
+    const base={dailyBudgetCents:1000,roasTargetHundredths:500};
+    const proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,baseline:base,changes:{...base,roasTargetHundredths:650},reason:'Alteração de ROAS aprovada'})).result as {id:string};
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{maxCampaignDailyBudgetCents:1200,minVariationPriceCents:100,maxVariationPriceCents:10000,maxVariationStock:50,maxVariationPriceChangePct:20}})).ok).toBe(true);
+    const ctx={accountId,campaignRef,proposalId:proposal.id,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',
+      documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,roasTargetHundredths:500,confirmed:true};
+    expect((await call('campaign.budget.claim',{...ctx,roasTargetHundredths:501})).ok).toBe(false);
+    const grant=(await call('campaign.budget.claim',ctx)).result as {id:string;token:string};
+    expect(grant).toMatchObject({beforeRoas:500,targetRoas:650,beforeCents:1000,targetCents:1000});
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Clique autorizado'})).ok).toBe(true);
+    const {confirmed,...verified}=ctx;
+    expect((await call('campaign.budget.verify',{...verified,roasTargetHundredths:650})).ok).toBe(false);
+    const fresh={...verified,documentNonce:'22222222-2222-4222-8222-222222222222',roasTargetHundredths:650};
+    expect((await call('campaign.budget.verify',{...fresh,budgetCents:1001})).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',fresh)).result).toMatchObject({status:'UI_READBACK_MATCHED'});
+  });
+
   it('cria variação legada pela API com loja validada, ID retornado e conferência independente',async()=>{
     const accountId='api-variant-shop',itemId='MLB1234567',listingId='api-item',at='2025-01-01T00:00:00.000Z';
     seedImportAccount(accountId);

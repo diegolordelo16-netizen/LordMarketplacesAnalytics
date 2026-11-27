@@ -425,6 +425,7 @@
     "documentNonce": "uuid",
     "budgetCents": "integer",
     "campaignStatus": "ACTIVE|PAUSED, optional",
+    "roasTargetHundredths": "integer 100..3500, optional",
     "confirmed": true
   },
   "campaign.budget.result": {
@@ -440,7 +441,8 @@
     "sourcePath": "string",
     "documentNonce": "new uuid",
     "budgetCents": "integer",
-    "campaignStatus": "ACTIVE|PAUSED, optional"
+    "campaignStatus": "ACTIVE|PAUSED, optional",
+    "roasTargetHundredths": "integer 100..3500, optional"
   },
   "campaign.budget.list": {
     "accountId": "string"
