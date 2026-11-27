@@ -445,7 +445,10 @@ export class CompetitorService {
   approve(raw: unknown): { ok: true; monitoring: 'ATIVO' } {
     const input = reviewInput.parse(raw);
     const relation = this.requireRelation(input.relationId);
-    if (relation.status === 'APROVADO') return { ok: true, monitoring: 'ATIVO' };
+    if (relation.status === 'APROVADO') {
+      this.db.db.prepare("UPDATE competitor_relations SET monitoring_state='ATIVO' WHERE id=?").run(relation.id);
+      return { ok: true, monitoring: 'ATIVO' };
+    }
 
     const now = new Date().toISOString();
     this.db.db
@@ -539,8 +542,11 @@ export class CompetitorService {
     const input = reviewInput.extend({ candidateId: z.string().min(1) }).parse(raw);
     const relation = this.requireRelation(input.relationId);
     const candidate = this.db.row<CandidateRow>('SELECT * FROM competitor_candidates WHERE id = ?', input.candidateId);
-    if (!candidate) throw new Error('anúncio candidato não encontrado');
-    this.db.db.prepare('UPDATE competitor_relations SET candidate_id = ? WHERE id = ?').run(candidate.id, relation.id);
+    if (!candidate || candidate.own_product_id !== relation.own_product_id) throw new Error('candidato não pertence ao mesmo produto');
+    if (candidate.id === relation.candidate_id) return { ok: true };
+    if (this.db.row('SELECT id FROM competitor_relations WHERE own_product_id=? AND candidate_id=?',relation.own_product_id,candidate.id)) throw new Error('candidato já relacionado');
+    if (this.db.row('SELECT id FROM competitor_monitoring_points WHERE relation_id=? LIMIT 1',relation.id)) throw new Error('preserve o histórico: crie uma nova relação para outro candidato');
+    this.db.db.prepare("UPDATE competitor_relations SET candidate_id=?,status='PENDENTE',monitoring_state='PAUSADO',reviewed_at=NULL,reviewed_by=NULL WHERE id=?").run(candidate.id,relation.id);
     this.recordFeedback(relation, 'EDITADO', input.actorUserId ?? null, input.actorRole, 'produto relacionado alterado', null, null);
     return { ok: true };
   }
@@ -604,7 +610,8 @@ export class CompetitorService {
       })
       .parse(raw);
     const relation = this.requireRelation(input.relationId);
-    if (relation.status !== 'APROVADO') throw new Error('monitoramento só existe para concorrente aprovado');
+    if (relation.status !== 'APROVADO' || relation.monitoring_state !== 'ATIVO') throw new Error('monitoramento requer concorrente aprovado e ativo');
+    if (input.capturedAt && Date.parse(input.capturedAt)>Date.now()) throw new Error('data da captura no futuro');
 
     this.db.db
       .prepare(
@@ -634,10 +641,11 @@ export class CompetitorService {
     const relation = this.requireRelation(input.relationId);
     const own = this.getOwnProduct(relation.own_product_id);
     const points = this.db.rows<Record<string, unknown>>(
-      'SELECT captured_at, price_cents, position, rating, reviews, stock_signal, title FROM competitor_monitoring_points WHERE relation_id = ? ORDER BY captured_at ASC LIMIT ?',
+      'SELECT captured_at, price_cents, position, rating, reviews, stock_signal, title, variations_json, promotions_json, source_class FROM competitor_monitoring_points WHERE relation_id = ? AND captured_at<=? ORDER BY captured_at DESC,rowid DESC LIMIT ?',
       relation.id,
+      new Date().toISOString(),
       input.limit ?? 365,
-    );
+    ).reverse();
     const prices = points.map((p) => p.price_cents).filter((p): p is number => typeof p === 'number');
     return {
       relationId: relation.id,
@@ -691,8 +699,8 @@ export class CompetitorService {
 
     const rules = this.db.rows<Record<string, unknown>>(
       `SELECT scope, value, direction, support, counter_support, weight FROM competitor_learning_rules
-       ${input.accountId ? 'WHERE account_id = ?' : ''} ORDER BY weight DESC LIMIT 50`,
-      ...(input.accountId ? [input.accountId] : []),
+       WHERE account_id=COALESCE(?,(SELECT account_id FROM own_products WHERE id=?)) ORDER BY weight DESC LIMIT 50`,
+      input.accountId ?? null,input.ownProductId ?? null,
     );
     const feedback = this.db.row<{ n: number }>(
       `SELECT COUNT(*) AS n FROM competitor_feedback f JOIN own_products o ON o.id = f.own_product_id ${filter.replace(/r\./g, 'f.')}`,
@@ -742,9 +750,9 @@ export class CompetitorService {
       decision: string;
       candidate_id: string;
     }>(
-      `SELECT decision, candidate_id FROM competitor_feedback
-       WHERE own_product_id = ? AND decision IN ('APROVADO','REJEITADO') ORDER BY created_at ASC`,
-      ownProductId,
+      `SELECT f.decision, f.candidate_id FROM competitor_feedback f JOIN own_products o ON o.id=f.own_product_id
+       WHERE o.account_id=? AND f.decision IN ('APROVADO','REJEITADO') AND f.id=(SELECT latest.id FROM competitor_feedback latest WHERE latest.own_product_id=f.own_product_id AND latest.candidate_id=f.candidate_id AND latest.decision IN ('APROVADO','REJEITADO') ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1) ORDER BY f.created_at ASC`,
+      own.account_id,
     );
 
     const samples: FeedbackSample[] = [];
