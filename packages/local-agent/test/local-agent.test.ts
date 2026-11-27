@@ -1152,6 +1152,27 @@ describe('evidência em snapshots individuais', () => {
   });
 });
 
+describe('captura Growth por anúncio',()=>{
+  it('persiste novos indicadores com evidência individual, sem copiar para o anúncio vizinho',async()=>{
+    seedImportAccount('acct-growth-funnel');
+    const at='2025-01-20T12:00:00.000Z';
+    const captured=await call('capture.ingest',{
+      marketplace:'mercado_livre',accountId:'acct-growth-funnel',pageKind:'seller_listings',
+      url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',
+      referenceAt:at,collectedAt:at,method:'content_script_dom',
+      listings:[{listingId:'GROWTH-A',totalImpressions:1000,checkoutStarts:12,funnelEvidence:{totalImpressions:'Impressões totais: 1000',checkoutStarts:'Checkouts iniciados: 12'}},{listingId:'GROWTH-B',visits:100}],
+      evidence:{filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all'}
+    });
+    expect(captured.ok).toBe(true);
+    const rows=db.rows<{external_id:string;metrics_json:string;evidence_json:string}>('SELECT l.external_id,s.metrics_json,s.evidence_json FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id WHERE s.account_id=? ORDER BY l.external_id','acct-growth-funnel');
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[0]!.metrics_json)).toMatchObject({totalImpressions:1000,checkoutStarts:12});
+    expect(JSON.parse(rows[0]!.evidence_json)).toMatchObject({listingFunnelEvidence:{checkoutStarts:'Checkouts iniciados: 12'}});
+    expect(JSON.parse(rows[1]!.metrics_json).checkoutStarts).toBeUndefined();
+    expect(JSON.parse(rows[1]!.evidence_json).listingFunnelEvidence).toBeUndefined();
+  });
+});
+
 describe('captura de métricas agregadas da conta', () => {
   it('aceita página de Ads sem listingId e alimenta histórico com proveniência', async () => {
     seedImportAccount('acct-account-snapshot');
@@ -1344,13 +1365,35 @@ describe('comparação de períodos e entidades', () => {
     const growth=(await call('kpi.compare.detail',payload)).result as any;
     expect(growth.rows[0].diagnostics.map((d:any)=>d.code)).toContain('GROWTH_REVIEW');
 
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:6000,orders:60,visits:600,units:72,stockAvailable:120}),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:10000,orders:100,visits:1000,units:120,stockAvailable:300}),'verified-b');
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({rows:[{revenueDrivers:{deltaCents:-400000,drivers:{trafficCents:-400000,conversionCents:0,ticketCents:0}},growthOpportunity:{underused:true,best:{kind:'TRAFFIC',incrementalGmvCents:100000},funnel:{visits:600,orders:60,conversionPct:10,impressions:null}}}]});
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=?,evidence_json=? WHERE id=?').run(JSON.stringify({gmv:6000,netRevenue:4800,orders:60,visits:600,units:72,stockAvailable:120,organicImpressions:2000,paidImpressions:1000,addToCart:90}),JSON.stringify({filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all',organicImpressions:'Impressões orgânicas',addToCart:'Adições ao carrinho'}),'verified-a');
+    expect((await call('finance.realized.upsert',{accountId,listingId,periodStart:'2025-01-08T00:00:00.000Z',periodEnd:'2025-01-14T23:59:59.999Z',netRevenueCents:480000,productCostCents:240000,packagingCents:6000,shippingCents:12000,marketplaceFeesCents:6000,taxesCents:6000,adSpendCents:30000,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0,sourceClass:'F_USER_INPUT',evidence:{reference:'fixture'}})).ok).toBe(true);
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({rows:[{financialGrowth:{status:'HISTORICAL_SCENARIO',profitCents:180000,projectedProfitBeforeExtraActionCostCents:30000},funnelDetails:{organicImpressions:2000,paidImpressions:null,addToCart:90,checkout:null}}]});
+    const extraMetrics={gmv:6000,netRevenue:4800,orders:60,visits:600,units:72,stockAvailable:120,totalImpressions:3000,checkoutStarts:80};
+    const extraEvidence={filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all',totalImpressions:'page-level only',checkoutStarts:'page-level only'};
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=?,evidence_json=? WHERE id=?').run(JSON.stringify(extraMetrics),JSON.stringify(extraEvidence),'verified-a');
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({rows:[{funnelDetails:{totalImpressions:null,checkout:null}}]});
+    db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(JSON.stringify({...extraEvidence,listingFunnelEvidence:{totalImpressions:'Total de impressões: 3000',checkoutStarts:'Checkouts iniciados: 80'}}),'verified-a');
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({rows:[{funnelDetails:{totalImpressions:3000,checkout:80}}]});
+    db.db.prepare('DELETE FROM realized_profit_snapshots WHERE account_id=? AND listing_id=?').run(accountId,listingId);
+    db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(evidence('2025-01-08','2025-01-14','all'),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:120,orders:25,visits:200,stockAvailable:4}),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:100,orders:20,visits:200,adSpend:100,commission:10,stockAvailable:4}),'verified-b');
+
     db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(evidence('2025-01-01','2025-01-07','active'),'verified-b');
     const incompatible=await call('kpi.compare.detail',payload);
     expect((incompatible.result as any).rows[0].diagnostics).toEqual([]);
+    expect(incompatible.result).toMatchObject({rows:[{revenueDrivers:{status:'INSUFFICIENT_EVIDENCE'},growthOpportunity:{status:'INSUFFICIENT_EVIDENCE',best:null}}]});
     expect(incompatible.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:null},comparisonQuality:{sameFilters:false,comparable:false}}]});
     const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
     expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
     expect((await call('kpi.compare.detail',{...payload,listingId:'nonexistent'})).result).toMatchObject({rows:[]});
+    insert.run('after-window-a',listingId,accountId,'2025-01-20T12:00:00.000Z','2025-01-20T12:00:00.000Z',JSON.stringify({gmv:6000,orders:60,visits:600,units:72,stockAvailable:120}),'A_PRIMARY_UI',evidence('2025-01-08','2025-01-14','all'));
+    insert.run('after-window-b',listingId,accountId,'2025-01-20T13:00:00.000Z','2025-01-20T13:00:00.000Z',JSON.stringify({gmv:10000,orders:100,visits:1000,units:120,stockAvailable:300}),'A_PRIMARY_UI',evidence('2025-01-01','2025-01-07','all'));
+    expect((await call('kpi.compare.detail',{...payload,sourceWindows:true})).result).toMatchObject({sourceWindows:true,rows:[{comparisonQuality:{comparable:true},growthOpportunity:{best:{incrementalGmvCents:100000}}}]});
+    expect((await call('kpi.compare.detail',{...payload,accountId:undefined,sourceWindows:true})).ok).toBe(false);
     const campaignAt='2025-01-14T22:00:00.000Z';
     const base={marketplace:'mercado_livre',accountId,pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',sourceClass:'A_PRIMARY_UI',referenceAt:campaignAt,collectedAt:campaignAt,method:'content_script_dom',listings:[],evidence:{filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all'}};
     const detail=(externalId:string,adSpend:number,adAttributedRevenue:number)=>({kind:'AD_CAMPAIGN',externalId,metrics:{adSpend,adAttributedRevenue},evidence:{adSpend:'Investimento',adAttributedRevenue:'Receita atribuída'}});

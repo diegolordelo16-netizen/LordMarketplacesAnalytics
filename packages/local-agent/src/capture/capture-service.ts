@@ -172,6 +172,8 @@ export class CaptureService {
           visibleImageUrls: listing.visibleImageUrls,
           tax: listing.tax,
           marketplaceFee: listing.marketplaceFee,
+          totalImpressions: listing.totalImpressions,
+          checkoutStarts: listing.checkoutStarts,
           organicImpressions: listing.organicImpressions,
           paidImpressions: listing.paidImpressions,
           adSpend: listing.adSpend,
@@ -207,7 +209,7 @@ export class CaptureService {
             JSON.stringify(metrics),
             data.sourceClass,
             null,
-            JSON.stringify(data.evidence ?? {}),
+            JSON.stringify({...data.evidence,...(listing.funnelEvidence?{listingFunnelEvidence:listing.funnelEvidence}:{})}),
           );
         if (!inserted.changes) continue;
 

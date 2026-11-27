@@ -1403,7 +1403,80 @@ async function viewProductOperations(){
       return '<tr><td>'+esc(r.proposal_kind)+'</td><td>'+esc(r.proposal_id)+'</td><td>'+dt(r.performed_at)+'</td><td>'+esc(r.evidence_reference)+'</td><td>'+check+'</td><td><button class="btn tiny" data-act="operation-measure" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Medir antes/depois</button></td></tr>';
     }),'Nenhum relato humano.')+'<p class="muted small">A conferência registra o que a loja exibe após a operação. A medição exige janelas compatíveis.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
 }
+async function viewRevenueRadar() {
+  const accountId = state.accountId;
+  if (!accountId) return card('Radar de vendas perdidas', '<p>Selecione uma loja para comparar seus anúncios.</p>');
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo] = comparisonPreset('7');
+  const result = await api('kpi.compare.detail', { accountId, groupBy:'listing',sourceWindows:true, primaryFrom,primaryTo,comparisonFrom,comparisonTo });
+  const rows = Array.isArray(result?.rows) ? result.rows : [];
+  const comparable = rows.filter(r => r.accountId === accountId && r.comparisonQuality?.comparable === true && Number.isSafeInteger(r.revenueDrivers?.deltaCents));
+  const losses = comparable.filter(r => r.revenueDrivers.observedDeclineCents > 0).sort((a,b) => b.revenueDrivers.observedDeclineCents - a.revenueDrivers.observedDeclineCents);
+  const format = n => Number.isSafeInteger(n) ? brl(n) : '—';
+  const investigations = d => {
+    if (!d) return 'Métricas insuficientes para decomposição';
+    const factors = [[d.trafficCents,'Tráfego: investigar visibilidade, estoque e demanda'],[d.conversionCents,'Conversão: investigar oferta, conteúdo e entrega'],[d.ticketCents,'Ticket: investigar preço e mix']];
+    const largest = factors.filter(f => f[0] < 0).sort((a,b) => a[0]-b[0])[0];
+    return largest ? largest[1] : 'Sem fator negativo isolado';
+  };
+  const summary = '<p>Loja selecionada · '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+' (UTC).</p>'
+    + '<p class="muted small">Queda histórica de GMV observado; não é previsão de faturamento recuperável nem perda líquida da loja. Sem soma de perdas de anúncios. Cobertura integral não comprovada. Períodos sem evidência de filtros e datas compatíveis ficam excluídos.</p>'
+    + '<p>Anúncios retornados: '+num(rows.length)+' · Comparáveis com GMV: '+num(comparable.length)+' · Com queda: '+num(losses.length)+' · Com decomposição: '+num(losses.filter(r=>r.revenueDrivers.drivers).length)+'</p>'
+    + '<p class="muted small">Exibindo até 100 anúncios, ordenados por queda observada.</p>';
+  const details = table(['Anúncio','GMV anterior','GMV atual','Queda observada','Tráfego','Conversão','Ticket médio','Investigar primeiro'], losses.slice(0,100).map(r=>{
+    const g=r.revenueDrivers,d=g.drivers;
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+brl(r.previous.metrics.gmv*100)+'</td><td>'+brl(r.current.metrics.gmv*100)+'</td><td>'+format(g.observedDeclineCents)+'</td><td>'+format(d?.trafficCents)+'</td><td>'+format(d?.conversionCents)+'</td><td>'+format(d?.ticketCents)+'</td><td>'+esc(investigations(d))+'</td></tr>';
+  }), comparable.length ? 'Nenhuma queda observada entre os anúncios comparáveis.' : 'Nenhum anúncio com evidência suficiente. Na extensão, capture os dois períodos comerciais encerrados e com os mesmos filtros.');
+  return card('Radar de vendas perdidas — diagnóstico histórico',summary+details+'<p class="muted small">A decomposição usa GMV = visitas × pedidos/visitas × GMV/pedidos e a média das seis ordens de substituição. Contribuições positivas compensam negativas; não há inferência causal. Sem denominadores positivos, somente a queda total é exibida.</p><button class="btn" data-act="nav" data-view="compare">Comparar outros períodos</button>');
+}
+
+async function viewGrowthOpportunities() {
+  const accountId = state.accountId;
+  if (!accountId) return card('Oportunidades de crescimento', '<p>Selecione uma loja para analisar seus anúncios.</p>');
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo] = comparisonPreset('7');
+  const result = await api('kpi.compare.detail', { accountId,groupBy:'listing',sourceWindows:true,primaryFrom,primaryTo,comparisonFrom,comparisonTo });
+  const rows = (Array.isArray(result?.rows)?result.rows:[]).filter(r=>r.accountId===accountId);
+  const eligible = rows.filter(r=>r.comparisonQuality?.comparable===true && r.growthOpportunity);
+  const candidates = eligible.filter(r=>r.growthOpportunity.best).sort((a,b)=>b.growthOpportunity.best.incrementalGmvCents-a.growthOpportunity.best.incrementalGmvCents);
+  const financial = candidates.filter(r=>r.financialGrowth?.status==='HISTORICAL_SCENARIO').sort((a,b)=>b.financialGrowth.projectedProfitBeforeExtraActionCostCents-a.financialGrowth.projectedProfitBeforeExtraActionCostCents);
+  const scenarioRows = eligible.flatMap(r=>(r.growthOpportunity.scenarios||[]).map(s=>({r,s})));
+  const type = k=>k==='TRAFFIC'?'Tráfego':'Conversão';
+  const format = n=>Number.isSafeInteger(n)?brl(n):'—';
+  const period = '<p>Janelas comerciais encerradas (UTC): '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+'.</p>';
+  const intro = period+'<p class="muted small">Cenários de recuperação de 25%, 50% e 100% da diferença para o desempenho anterior do próprio anúncio; ticket atual constante, no mesmo intervalo de duração. Exige 100 visitas e 10 pedidos em cada período. Não é previsão nem lucro realizado. Estoque observado é histórico, não garantia de disponibilidade atual.</p>';
+  const radar = table(['Anúncio','Alavanca','Pedidos adicionais','GMV adicional simulado','Estoque observado','Sinal'],candidates.slice(0,100).map(r=>{
+    const g=r.growthOpportunity,s=g.best;
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+type(s.kind)+'</td><td>'+num(s.incrementalOrders)+'</td><td>'+format(s.incrementalGmvCents)+'</td><td>'+num(g.stockObserved)+'</td><td>'+esc(g.underused?'Tráfego subaproveitado':'Recuperação a investigar')+'</td></tr>';
+  }),'Nenhuma oportunidade priorizável com estoque e unidades observados.');
+  const financialRows=table(['Anúncio','GMV adicional simulado','Lucro histórico / GMV','Resultado simulado antes do custo extra','Origem','Avaliação'],financial.slice(0,100).map(r=>{
+    const f=r.financialGrowth,s=r.growthOpportunity.best;
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+format(s.incrementalGmvCents)+'</td><td>'+pct(f.historicalProfitOverGmvPct)+'</td><td>'+format(f.projectedProfitBeforeExtraActionCostCents)+'</td><td>'+esc(f.sourceClass)+'</td><td>'+esc(f.projectedProfitBeforeExtraActionCostCents>0?'Avaliar custo adicional e estoque':'Não escalar com esta premissa')+'</td></tr>';
+  }),'Sem cenários com receita líquida e custos conciliados no intervalo exato.');
+  const missingFinancial=table(['Anúncio','Motivo'],candidates.filter(r=>r.financialGrowth?.status!=='HISTORICAL_SCENARIO').slice(0,100).map(r=>{
+    const reason={NO_RECORD:'Sem registro financeiro',CONFLICT:'Registros sobrepostos ou divergentes',INVALID_RECORD:'Custos ou origem inválidos',REVENUE_MISMATCH:'Receita líquida ausente ou divergente',NO_SCENARIO:'Sem cenário elegível'}[r.financialGrowth?.status]||'Sem evidência financeira';
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+esc(reason)+'</td></tr>';
+  }),'Nenhuma lacuna entre os candidatos.');
+  const funnel = table(['Anúncio','Impressões totais','Impressões orgânicas','Impressões pagas','Visitas','Adições ao carrinho','Checkout iniciado','Pedidos','Pedidos/visitas'],eligible.slice(0,100).map(r=>{
+    const f=r.growthOpportunity.funnel;
+    const d=r.funnelDetails||{};
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+num(d.totalImpressions)+'</td><td>'+num(d.organicImpressions)+'</td><td>'+num(d.paidImpressions)+'</td><td>'+num(f.visits)+'</td><td>'+num(d.addToCart)+'</td><td>'+num(d.checkout)+'</td><td>'+num(f.orders)+'</td><td>'+pct(f.conversionPct)+'</td></tr>';
+  }),'Sem observações com janelas compatíveis.');
+  const shown = scenarioRows.slice(0,600);
+  const option = shown.map(({r,s})=>'<option value="'+s.incrementalGmvCents+'">'+esc((r.label||r.id)+' · '+type(s.kind)+' · '+Math.round(s.recoveryFraction*100)+'% · '+format(s.incrementalGmvCents))+'</option>').join('');
+  const scenarios = table(['Anúncio','Alavanca','Recuperação','Visitas alvo','Conversão alvo','Pedidos adicionais','GMV adicional simulado','Estoque'],shown.map(({r,s})=>{
+    const g=r.growthOpportunity;
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+type(s.kind)+'</td><td>'+num(s.recoveryFraction*100)+'%</td><td>'+num(s.targetVisits)+'</td><td>'+pct(s.targetConversionPct)+'</td><td>'+num(s.incrementalOrders)+'</td><td>'+format(s.incrementalGmvCents)+'</td><td>'+esc(!g.best?'Capacidade não comprovada ou cenário conservador indisponível':s.stockLimited?'Limitado pelo estoque observado':'Sem limite atingido na observação')+'</td></tr>';
+  }),'Sem cenários positivos com a amostra mínima.');
+  const tableFinancialNote=()=>'<h3>Dados financeiros a completar</h3>'+missingFinancial+'<p class="muted small">Registros da loja inteira não substituem a conciliação do anúncio. Até 100 lacunas exibidas.</p><button class="btn" data-act="nav" data-view="finance">Abrir financeiro</button>';
+  return card('Radar de oportunidades — recuperação histórica',intro+'<p>Anúncios retornados: '+num(rows.length)+' · Comparáveis: '+num(eligible.length)+' · Priorizáveis: '+num(candidates.length)+'</p>'+radar+'<p class="muted small">Até 100 anúncios por maior GMV adicional no cenário conservador de 25%; escolhe somente uma alavanca por anúncio. Não soma alternativas, não recomenda investimento sem validar margem e custo.</p>')
+    +card('Priorização financeira — cenário histórico', '<p class="muted small">Até 100 resultados ordenados por lucro histórico projetado sobre GMV adicional no cenário de 25%. A receita líquida deve coincidir com um registro único do mesmo anúncio e período; todos os custos devem estar confirmados. A proporção histórica inclui custos registrados e Ads históricos, não comprova margem incremental futura. Não desconta o custo extra da ação; valores negativos são preservados. Não autoriza investimento.</p>'+financialRows+tableFinancialNote())
+    +card('Simulador por anúncio',scenarios+'<p class="muted small">Exibindo '+num(shown.length)+' de '+num(scenarioRows.length)+' alternativas. Tráfego e conversão são alternativas, não aditivas.</p>')
+    +card('Simulação de contribuição incremental', shown.length?'<div class="form-grid"><label>Cenário<select id="growth-scenario">'+option+'</select></label><label>Margem incremental estimada (%)<input id="growth-margin" type="number" min="-100" max="100" step="0.01" placeholder="Informe sua premissa"></label><label>Custo adicional da ação (R$)<input id="growth-cost" type="number" min="0" step="0.01" placeholder="Informe inclusive zero"></label></div><button class="btn" data-act="growth-evaluate">Calcular contribuição simulada</button><div id="growth-evaluation" aria-live="polite"></div><p class="muted small">Margem informada deve descontar custos variáveis incrementais, taxas, frete, tributos e devoluções; não duplicar custo da ação. Sem premissas, não estimar contribuição. Estoque deve ser revalidado antes de executar.</p>':'<p>Sem cenários para simular.</p>')
+    +card('Raio-X do funil observado',funnel+'<p class="muted small">Até 100 anúncios. Impressões orgânicas e pagas e adições ao carrinho são exibidas separadamente apenas com evidência explícita do anúncio. Não somar impressões, inferir usuários únicos ou abandono. Impressões totais e checkout iniciado exigem rótulos específicos do anúncio; ausência permanece indisponível.</p>');
+}
+
 const VIEWS = {
+  growthOpportunities: { label: 'Oportunidades de crescimento', icon: '↗', render: viewGrowthOpportunities },
+  revenueRadar: { label: 'Radar de vendas perdidas', icon: '◎', render: viewRevenueRadar },
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
   prestart: { label: 'Pré-Start & Diagnóstico', icon: '✓', render: viewPrestart },
   browserSync: { label: 'Extensão & Coletas', icon: '⇄', render: viewBrowserSync },
@@ -1567,6 +1640,17 @@ function createXlsxReport(report) {
 
 let compareRequestSequence=0;
 const ACTIONS = {
+  'growth-evaluate': () => {
+    const selected=$('#growth-scenario'),margin=$('#growth-margin'),cost=$('#growth-cost'),out=$('#growth-evaluation');
+    if(!selected||!margin||!cost||!out)return;
+    if(!selected.value||!margin.value.trim()||!cost.value.trim())throw Error('Informe cenário, margem e custo adicional.');
+    const gmv=Number(selected.value), m=Number(margin.value), c=Number(cost.value);
+    if(!Number.isSafeInteger(gmv)||gmv<=0||!Number.isFinite(m)||m<-100||m>100||!Number.isFinite(c)||c<0||!Number.isSafeInteger(Math.round(c*100)))throw Error('Premissas inválidas.');
+    const projected=Math.round(gmv*m/100)-Math.round(c*100);
+    if(!Number.isSafeInteger(projected))throw Error('Resultado fora do limite numérico.');
+    out.textContent='Contribuição incremental simulada: '+brl(projected)+' · '+(projected>0?'positiva nas premissas informadas':'não positiva nas premissas informadas')+'. Não é lucro realizado nem autorização para executar.';
+  },
+
   'alert-ack': async d => {
     const generation=viewRenderSequence,selectedAccount=state.accountId,accountId=d.account||null,falsePositive=d.false==='true';
     if(selectedAccount&&accountId&&selectedAccount!==accountId)throw Error('Alerta de outra conta.');

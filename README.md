@@ -1,6 +1,6 @@
-# Marketplace Intelligence & Autonomous Operations — 3.19.0 candidata
+# Marketplace Intelligence & Autonomous Operations — 3.20.0 candidata
 
-Plataforma Local First para inteligência e operação de marketplaces. A versão oficial permanece 3.16.0 até integração e validação da cadeia de candidatas. A candidata 3.19.0 deriva da 3.18.0 (PR 13). Não representa uma release estável aprovada.
+Plataforma Local First para inteligência e operação de marketplaces. A candidata 3.20.0 parte da master 3.19.0 (etapa 10) e acrescenta Lord Growth Intelligence (etapa 11). Não representa uma release estável aprovada. Consulte [o plano e as evidências](docs/LORD-GROWTH-ROADMAP.md).
 
 ## Instalação e operação
 

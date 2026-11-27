@@ -622,3 +622,35 @@ test('detalhamento de KPI ignora resposta depois de troca de conta e usa dias UT
   ctx.state.accountId='B';ctx.viewRenderSequence=2;resolve({rows:[]});await promise;
   assert.equal(host.innerHTML,'');assert.equal(calls[0].accountId,'A');assert.equal(calls[0].primaryTo,'2026-11-07');
 });
+
+
+test('funil lê apenas contagens explícitas e não converte percentuais em eventos',()=>{
+  const dom=readFileSync(new URL('../packages/extension/content/dom-utils.js',import.meta.url),'utf8');
+  const start=dom.indexOf('function observedExtraMetrics('),end=dom.indexOf('// Detailed rows',start);
+  const context=vm.createContext({explicitPercent:()=>null,findValueByLabel:(root,labels)=>{
+    for(const label of labels)if(Object.hasOwn(root,label))return {label,text:root[label]};
+    return null;
+  },parseNumberPtBr:v=>Number(v)});
+  vm.runInContext(dom.slice(start,end),context);
+  const observed=vm.runInContext("observedExtraMetrics({'impressões totais':'1200','checkouts iniciados':'30','adições ao carrinho':'12%','impressões pagas':'500'},true)",context);
+  assert.equal(observed.metrics.totalImpressions,1200);
+  assert.equal(observed.metrics.checkoutStarts,30);
+  assert.equal(observed.metrics.paidImpressions,500);
+  assert.equal(observed.metrics.addToCart,undefined);
+  assert.match(observed.metrics.funnelEvidence.checkoutStarts,/30/);
+  assert.equal(vm.runInContext("observedExtraMetrics({'impressões totais':'1200'},false).metrics.totalImpressions",context),undefined);
+});
+
+test('painel Growth utiliza o escopo da conta e preserva valores ausentes',async()=>{
+  const calls=[];
+  const ctx=vm.createContext({state:{accountId:'loja-b'},comparisonPreset:()=>['2025-01-08','2025-01-14','2025-01-01','2025-01-07'],api:async(method,payload)=>{
+    calls.push([method,structuredClone(payload)]);
+    return {rows:[{id:'one',accountId:'loja-b',label:'Anúncio B',comparisonQuality:{comparable:true},growthOpportunity:{funnel:{visits:100,orders:10,conversionPct:10},scenarios:[],best:null},funnelDetails:{totalImpressions:200,checkout:12}},{id:'two',accountId:'loja-a',label:'Não exibir',comparisonQuality:{comparable:true},growthOpportunity:{funnel:{},scenarios:[]}}]};
+  },card:(title,body)=>title+body,table:(headers,rows,empty)=>headers.join('|')+(rows.length?rows.join(''):empty),esc:String,num:v=>v==null?'—':String(v),pct:v=>v==null?'—':String(v)+'%',brl:String});
+  const start=dashboard.indexOf('async function viewGrowthOpportunities()'),end=dashboard.indexOf('const VIEWS = {',start);
+  const html=await vm.runInContext(dashboard.slice(start,end)+'\nviewGrowthOpportunities()',ctx);
+  assert.equal(calls[0][0],'kpi.compare.detail');
+  assert.equal(calls[0][1].accountId,'loja-b');
+  assert.match(html,/Anúncio B/);assert.doesNotMatch(html,/Não exibir/);
+  assert.match(html,/<td>200<\/td>/);assert.match(html,/<td>12<\/td>/);
+});

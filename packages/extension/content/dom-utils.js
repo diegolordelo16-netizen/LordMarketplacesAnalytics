@@ -229,6 +229,40 @@
     const found=findValueByLabel(root,['cliques orgânicos','organic clicks']), clicks=found&&parseNumberPtBr(found.text);
     if(typeof clicks==='number'&&Number.isInteger(clicks)&&clicks>=0){metrics.organicClicks=clicks;evidence.organicClicks=String(found.label+': '+found.text).slice(0,200);}
     if(listing){
+      // Financial/traffic values must be scoped to the listing row, not totals of the account.
+      if(String(root.tagName??'').toUpperCase()!=='BODY'){
+        const commercialLabels={
+          gmv:['faturamento bruto','receita bruta','gross sales','ordered product sales'],
+          netRevenue:['receita líquida','net revenue','net sales'],
+          visits:['visitas','visits'],
+          orders:['pedidos','orders'],
+          units:['unidades vendidas','units sold','units ordered'],
+          stockAvailable:['estoque disponível','available stock','available quantity'],
+        };
+        for(const [field,labels] of Object.entries(commercialLabels)){
+          const item=findValueByLabel(root,labels);
+          if(!item||/%\s*$/.test(item.text))continue;
+          const value=parseNumberPtBr(item.text);
+          if(value===null||value<0||!Number.isFinite(value)||(!['gmv','netRevenue'].includes(field)&&!Number.isSafeInteger(value)))continue;
+          metrics[field]=value;evidence[field]=String(item.label+': '+item.text).slice(0,200);
+        }
+      }
+      const funnelLabels={
+        totalImpressions:['impressões totais','total de impressões','total impressions'],
+        checkoutStarts:['checkouts iniciados','inícios de checkout','finalizações de compra iniciadas','checkout starts','initiated checkouts'],
+        organicImpressions:['impressões orgânicas','organic impressions'],
+        paidImpressions:['impressões pagas','paid impressions','ad impressions'],
+        addToCart:['adições ao carrinho','adicionaram ao carrinho','add to cart events','adds to cart'],
+      };
+      const funnelEvidence={};
+      for(const [field,labels] of Object.entries(funnelLabels)){
+        const item=findValueByLabel(root,labels);
+        if(!item||!/^\d[\d.,]*$/.test(item.text.trim()))continue;
+        const value=parseNumberPtBr(item.text);
+        if(!Number.isSafeInteger(value)||value<0)continue;
+        metrics[field]=value;funnelEvidence[field]=String(item.label+': '+item.text).slice(0,200);
+      }
+      if(Object.keys(funnelEvidence).length)metrics.funnelEvidence=funnelEvidence;
       const found=findValueByLabel(root,['preço original','preço anterior','original price','previous price']);
       const value=found&&parseNumberPtBr(found.text);
       if(typeof value==='number'&&value>=0){metrics.originalPrice=value;evidence.originalPrice=String(found.label+': '+found.text).slice(0,200);}
