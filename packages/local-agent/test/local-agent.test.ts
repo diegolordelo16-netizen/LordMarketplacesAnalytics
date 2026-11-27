@@ -89,6 +89,12 @@ describe('SEO externo integrado',()=>{
       expect((await call('seo.external.gap',{accountId,ownId:first.id,otherId:second.id})).result).toMatchObject({rows:[{keyword:'luva moto',comparison:'NOT_OBSERVED_IN_OWN_SAMPLE'}]});
       expect((await call('seo.external.groups',{accountId,id:first.id})).result).toMatchObject({groups:[{members:[{keyword:'capacete',opportunitySignal:null}]}]});
       expect(JSON.stringify((await call('seo.external.history',{accountId})).result)).not.toContain('fixture-secret');
+      const periodStart='2025-01-01T00:00:00.000Z',periodEnd='2025-01-31T23:59:59.999Z';
+      const stamp='2025-01-01T00:00:00.000Z';
+      db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run('seo-catalog-match',accountId,'mercado_livre','MLB987654321','Capacete','ACTIVE',stamp,stamp);
+      const joined=await call('seo.external.opportunities',{accountId,id:first.id,periodStart,periodEnd});
+      expect(joined.result).toMatchObject({rows:[{keyword:'capacete',matches:[{listingId:'seo-catalog-match',profitCents:null,stock:null,status:'INSUFFICIENT_DATA'}]}]});
+      expect((await call('seo.external.opportunities',{accountId:other,id:first.id,periodStart,periodEnd})).ok).toBe(false);
       const watch=(await call('seo.watch.create',{accountId,keyword:'capacete',domain:'own.com',intervalDays:1,maxRuns:1,confirmedPaidSchedule:true})).result as {id:string};
       expect(watch.id).toBeTruthy();db.db.prepare("UPDATE seo_rank_watches SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(watch.id);
       await service.processScheduledWork();expect(count).toBe(2);

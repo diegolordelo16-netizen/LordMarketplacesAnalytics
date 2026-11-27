@@ -129,6 +129,7 @@ export const IPC_METHODS = [
   'seo.external.get',
   'seo.external.gap',
   'seo.external.groups',
+  'seo.external.opportunities',
   'seo.watch.create',
   'seo.watch.list',
   'seo.watch.disable',

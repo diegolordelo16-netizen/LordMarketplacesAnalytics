@@ -36,6 +36,22 @@ export function groupSeoKeywords(rows:Row[],titles:string[]){
   }
   return groups.map(({label,members})=>({label,members}));
 }
+export function correlateSeoListings(rows:Row[],listings:Array<{id:string;title:string|null;external_id:string}>,profitRows:Array<{id:string;profitCents:number|null;marginPct:number|null;status:string}>,stockRows:Array<{id:string;stock:number|null;units:number|null;adSpend:number|null;capturedAt:string|null;window:unknown}>){
+  const profits=new Map(profitRows.map(r=>[r.id,r])),inventory=new Map(stockRows.map(r=>[r.id,r]));
+  const titles=listings.slice(0,1000).filter(r=>r.title).map(r=>({...r,tokens:lexical(r.title!)}));
+  return rows.filter(r=>typeof r.keyword==='string').slice(0,100).map(row=>{
+    const key=lexical(String(row.keyword)),matches=titles.map(l=>({l,fit:similarity(key,l.tokens)})).filter(x=>x.fit>=0.5).sort((a,b)=>b.fit-a.fit||a.l.id.localeCompare(b.l.id)).slice(0,3);
+    return {keyword:row.keyword,searchVolume:row.searchVolume??null,keywordDifficulty:row.keywordDifficulty??null,
+      matches:matches.map(({l,fit})=>{
+        const profit=profits.get(l.id),stock=inventory.get(l.id),known=profit?.status==='RECORDED'&&profit.profitCents!==null&&profit.marginPct!==null;
+        const profitCents=known?profit.profitCents:null,marginPct=known?profit.marginPct:null;
+        const status=stock?.stock===0?'OUT_OF_STOCK':profitCents!==null&&profitCents<=0?'REVIEW_MARGIN':
+          profitCents===null||marginPct===null||stock?.stock==null||row.searchVolume==null||row.keywordDifficulty==null?'INSUFFICIENT_DATA':'REVIEW_OPPORTUNITY';
+        return {listingId:l.id,externalId:l.external_id,title:l.title,lexicalFitPct:Math.round(fit*100),profitCents,marginPct,
+          stock:stock?.stock??null,units:stock?.units??null,adSpend:stock?.adSpend??null,capturedAt:stock?.capturedAt??null,observedWindow:stock?.window??null,status};
+      })};
+  });
+}
 export function observedRank(rows:Row[],domain:string){
   const target=safeDomain(domain);
   const matches=rows.filter(r=>r.type==='organic'&&typeof r.domain==='string'&&(r.domain.toLowerCase()===target||r.domain.toLowerCase().endsWith('.'+target))&&typeof r.position==='number'&&r.position>0);
@@ -76,6 +92,7 @@ export class ExternalSeoWorkspace{
     const rows=compareKeywordSamples(rowsOf(own),rowsOf(other));
     return {scope:own.scope,ownDomain:own.query,otherDomain:other.query,ownSample:rowsOf(own).length,otherSample:rowsOf(other).length,rows,note:'Ausência na amostra não comprova ausência no ranking completo.'};
   }
+  keywords(accountId:string,id:string){const run=this.get(accountId,id);if(!['suggestions','related','ideas','overview','ranked'].includes(run.mode)||run.status!=='OK')throw Error('Escolha uma consulta de palavras-chave bem-sucedida.');return rowsOf(run);}
   groups(accountId:string,id:string){
     const run=this.get(accountId,id);
     if(!['suggestions','related','ideas','overview','ranked'].includes(run.mode)||run.status!=='OK')throw Error('Escolha uma consulta de palavras-chave bem-sucedida.');

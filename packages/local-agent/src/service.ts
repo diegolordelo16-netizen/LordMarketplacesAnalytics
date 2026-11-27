@@ -7,7 +7,7 @@ import { parsePdfBase64 } from './importers/pdf';
 import { googleAdsTerm, lookupGoogleAdsVolume } from './connectors/dataforseo';
 import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { seoResearchInput } from './connectors/openseo';
-import { ExternalSeoWorkspace } from './competitive/external-seo';
+import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/external-seo';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -140,6 +140,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'seo.external.get': 'view_reports',
   'seo.external.gap': 'view_reports',
   'seo.external.groups': 'view_reports',
+  'seo.external.opportunities': 'view_reports',
   'seo.watch.create': 'manage_connectors',
   'seo.watch.list': 'view_reports',
   'seo.watch.disable': 'manage_connectors',
@@ -1967,6 +1968,17 @@ export class LocalService {
     });
     this.register('seo.external.groups',payload=>{
       const i=seoRun.parse(payload);return this.externalSeo.groups(i.accountId,i.id);
+    });
+    this.register('seo.external.opportunities',async(payload,auth)=>{
+      const i=seoRun.extend({periodStart:z.string().datetime(),periodEnd:z.string().datetime()}).strict().parse(payload);
+      if(i.periodStart>i.periodEnd||Date.parse(i.periodEnd)>Date.now()||Date.parse(i.periodEnd)-Date.parse(i.periodStart)>366*86400000)throw Error('Intervalo financeiro inválido.');
+      const keywords=this.externalSeo.keywords(i.accountId,i.id);
+      const profitHandler=this.handlers.get('finance.profitability'),inventoryHandler=this.handlers.get('inventory.dashboard');
+      if(!profitHandler||!inventoryHandler)throw Error('Indicadores internos indisponíveis.');
+      const profits=z.object({listings:z.array(z.object({id:z.string(),profitCents:z.number().nullable(),marginPct:z.number().nullable(),status:z.string()}))}).parse(await profitHandler({accountId:i.accountId,periodStart:i.periodStart,periodEnd:i.periodEnd},auth));
+      const inventory=z.object({items:z.array(z.object({id:z.string(),stock:z.number().nullable(),units:z.number().nullable(),adSpend:z.number().nullable(),capturedAt:z.string().nullable(),window:z.unknown()}))}).parse(await inventoryHandler({accountId:i.accountId,days:30},auth));
+      const listings=db.rows<{id:string;title:string|null;external_id:string}>('SELECT id,title,external_id FROM listings WHERE account_id=? ORDER BY id LIMIT 1000',i.accountId);
+      return {periodStart:i.periodStart,periodEnd:i.periodEnd,rows:correlateSeoListings(keywords,listings,profits.listings,inventory.items.map(row=>({...row,window:row.window}))),note:'Demanda do Google e aderência lexical não comprovam demanda interna ou causalidade. Margem do intervalo exato e estoque/vendas/Ads da última captura em 30 dias são exibidos separadamente. Nenhuma ordem de investimento.'};
     });
     this.register('seo.watch.create',(payload,auth)=>{
       if(auth?.role!=='super_admin')throw Error('super_admin necessário para agendamento tarifado');

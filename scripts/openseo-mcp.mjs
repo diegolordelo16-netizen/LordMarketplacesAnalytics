@@ -7,6 +7,7 @@ const definitions={
   seo_result:{method:'seo.external.get',description:'Read a saved external SEO result, no provider request',props:{accountId:{type:'string'},id:{type:'string'}},required:['accountId','id']},
   seo_gap:{method:'seo.external.gap',description:'Compare two saved ranked-domain samples in the same account',props:{accountId:{type:'string'},ownId:{type:'string'},otherId:{type:'string'}},required:['accountId','ownId','otherId']},
   seo_groups:{method:'seo.external.groups',description:'Group saved keywords and compare lexical fit to the catalog',props:{accountId:{type:'string'},id:{type:'string'}},required:['accountId','id']},
+  seo_opportunities:{method:'seo.external.opportunities',description:'Cross saved external keyword research with observed marketplace profit, inventory, sales and Ads for an explicit financial interval',props:{accountId:{type:'string'},id:{type:'string'},periodStart:{type:'string'},periodEnd:{type:'string'}},required:['accountId','id','periodStart','periodEnd']},
   seo_rank_history:{method:'seo.watch.history',description:'Read saved Google ranking history for a watch',props:{accountId:{type:'string'},id:{type:'string'}},required:['accountId','id']},
 };
 export function toolList(){return Object.entries(definitions).map(([name,d])=>({name,description:d.description,inputSchema:{type:'object',properties:d.props,required:d.required,additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false}}));}

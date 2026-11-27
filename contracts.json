@@ -564,5 +564,11 @@
   "seo.watch.history": {
     "accountId": "string",
     "id": "uuid"
+  },
+  "seo.external.opportunities": {
+    "accountId": "string",
+    "id": "uuid",
+    "periodStart": "ISO datetime",
+    "periodEnd": "ISO datetime"
   }
 }
