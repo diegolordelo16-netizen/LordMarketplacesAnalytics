@@ -174,7 +174,7 @@
         }
         const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
         observed.filterSignature=filters.signature;
-        observed.spaPage=observed.pageKind==='seller_listings'?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;
+        observed.spaPage=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(observed.pageKind)?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;
         observed.coverageWarnings=[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])];
         if(filters.signature) observed.evidence={...observed.evidence,filtersAndPeriod:filters.signature};
         return observed;
@@ -200,7 +200,7 @@
       const kind=detectPageKind(location.href);
       const identity=visibleAccountIdentity();
       const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
-      const ok=kind==='seller_listings'&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page));
+      const ok=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(kind)&&(message.pageKind===kind||(!message.pageKind&&kind==='seller_listings'))&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page));
       sendResponse({ok});return false;
     }
     if (message?.type === 'MI_CAPTURE_PAGE_INFO') {
@@ -208,7 +208,7 @@
       const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
       sendResponse({
         filterSignature:filters.signature,
-        spaPagination: (()=>{const state=pageKind==='seller_listings'?window.MI_DOM.spaPaginationState?.(document):null;return state?{page:state.page,canAdvance:state.canAdvance}:null;})(),
+        spaPagination: (()=>{const state=['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(pageKind)?window.MI_DOM.spaPaginationState?.(document):null;return state?{page:state.page,canAdvance:state.canAdvance}:null;})(),
         coverageWarnings:[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])],
         ok: true,
         marketplace: 'amazon',
