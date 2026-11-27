@@ -355,6 +355,25 @@
     state.button.click();
     return true;
   }
+  // Observe DOM transitions, then let the worker independently validate the new records.
+  function advanceSpaPageReactive(root,expectedPage,timeoutMs=8000){
+    return new Promise(resolve=>{
+      let observer,timer,quiet,finished=false;
+      const finish=ok=>{if(finished)return;finished=true;observer?.disconnect();clearTimeout(timer);clearTimeout(quiet);resolve(ok);};
+      const check=()=>{
+        clearTimeout(quiet);
+        if(hasChallenge(root)||root.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')){finish(false);return;}
+        if(spaPaginationState(root)?.page===expectedPage+1)quiet=setTimeout(()=>finish(spaPaginationState(root)?.page===expectedPage+1),250);
+      };
+      try{
+        observer=new MutationObserver(check);
+        observer.observe(root.documentElement??root,{subtree:true,childList:true,characterData:true,attributes:true});
+        timer=setTimeout(()=>finish(false),timeoutMs);
+        if(!advanceSpaPage(root,expectedPage)){finish(false);return;}
+        check();
+      }catch{finish(false);}
+    });
+  }
   // Scroll only a recognized grid; verify every declared row index and stable listing ID.
   async function collectVirtualizedListings(root,initial,readSnapshot,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))){
     if(initial.pageKind!=='seller_listings'||!initial.coverageWarnings?.includes('TABELA_VIRTUALIZADA'))return initial;
@@ -551,5 +570,5 @@
     }
     return {points,incomplete};
   }
-  window.MI_DOM = { visibleChartPoints, restoreVisibleFilters, observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  window.MI_DOM = { visibleChartPoints, restoreVisibleFilters, observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, advanceSpaPageReactive, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();
