@@ -99,6 +99,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'navigation.observe': 'execute_task',
   'navigation.list': 'execute_task',
   'navigation.graph': 'execute_task',
+  'navigation.summary': 'view_reports',
   'navigation.clear': 'execute_task',
   'kpi.listing': 'view_reports',
   'kpi.dashboard': 'view_reports',
@@ -778,6 +779,14 @@ export class LocalService {
     this.register('navigation.graph',(payload)=>{
       const i=navigationContext.strict().parse(payload);navigationAccount(i);
       return db.rows('SELECT from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? AND origin=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId,i.origin);
+    });
+    this.register('navigation.summary',(payload)=>{
+      const i=z.object({accountId:z.string().min(1).max(200)}).strict().parse(payload);
+      if(!db.row('SELECT 1 FROM accounts WHERE id=? AND is_active=1 AND verified_by_user=1',i.accountId))throw new Error('conta ativa e verificada necessária');
+      return {
+        routes:db.rows('SELECT origin,route,page_kind,observations,last_seen_at FROM navigation_memory WHERE account_id=? ORDER BY last_seen_at DESC,route LIMIT 100',i.accountId),
+        transitions:db.rows('SELECT origin,from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId)
+      };
     });
     this.register('navigation.clear',(payload,auth)=>{
       const i=navigationContext.strict().parse(payload);navigationAccount(i);
