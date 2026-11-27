@@ -143,7 +143,8 @@
     "marketplace": "mercado_livre|shopee|amazon?",
     "method": "observed deltas; compatible source windows and filters required for diagnostics; no proof of full coverage",
     "listingId": "string?",
-    "skuId": "string?"
+    "skuId": "string?",
+    "sourceWindows": "boolean?; true exige loja e anúncio, captura posterior à janela"
   },
   "task.approvePublish": "taskId | confirmation=PUBLICAR <item count> | reason",
   "task.claimNextPublish": "marketplace | accountId | externalListingId (manage_accounts; uso exclusivo da extensão na aba ativa)",
