@@ -26,3 +26,13 @@ A CI verde não comprova cobertura universal. Não declarar os 34 requisitos int
 - Testes adicionados: retomada sem duplicação, mudança de conta, registros repetidos, SQLite e timeout do observador. CI da revisão final ainda pendente; não considerar aprovada antes de verificar.
 - Limites conservadores: início na página 1, somente controles reconhecidos, registros com identidade explícita; métricas de área divergentes, filtros desconhecidos, tabelas sem cobertura comprovada e interfaces sem marcador inequívoco interrompem a coleta. Teste em contas reais continua necessário. Gráficos exclusivamente em pixels não são estimados.
 - Esta revisão substitui o diagnóstico anterior de ausência de implementação SPA geral, mas não comprova homologação universal.
+
+## Fechamento de escopo autorizado
+
+Em 27/11/2026 o usuário autorizou a integração e o avanço para a etapa 04, dispensando testes que dependam de utilização real. A dispensa é de portão de entrega, não um resultado de teste. A versão candidata agora é 3.12.0 nos metadados de distribuição.
+
+- SPA reconhecível: motor reativo implementado e aprovado na CI 53; revisões posteriores exigem CI final.
+- Aprendizado de navegação: primeira camada aprovada na CI 63; grafo, observações de ações internas, recuperação semântica, filtros listbox, rolagem indexada de feedback e painel adicionados depois. CI 90: 333/334 Vitest aprovados, erro do analisador estático corrigido em 74885ae; executar CI novamente.
+- Interfaces sem marcador/ID verificável, seletores arbitrários, widgets desconhecidos e gráficos exclusivamente em pixels permanecem fora da cobertura comprovada. Não interpretar essas limitações como implementação universal; coleta parcial é indicada e ações incertas são recusadas. Não usar APIs privadas ou simular números.
+- Homologação real com contas dos marketplaces, Chrome/Edge e Windows: dispensada para a entrega, não executada. Conciliação com relatórios reais permanece recomendada.
+- A etapa 04 deve partir da versão integrada, após aprovação dos testes automatizados disponíveis. Não alterar testes para esconder falhas.
