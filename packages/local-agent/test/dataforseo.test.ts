@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { decodeSeoResponse, researchSeo, seoRequest, seoResearchInput } from '../src/connectors/dataforseo';
+import { decodeSeoResponse, researchSeo, seoRequest, seoResearchInput } from '../src/connectors/openseo';
 
 const input=seoResearchInput.parse({mode:'suggestions',query:'capacete',limit:5,confirmed:true});
 const envelope=(result:unknown,status_code=20000,status_message='Ok.')=>({status_code:20000,cost:0.012,tasks:[{status_code,status_message,cost:0.012,result:[result]}]});

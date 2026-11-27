@@ -1,6 +1,13 @@
 {
   "keyword.upsert": "term | marketplace | intent | language",
   "seo.external.research": {"mode":"suggestions|related|ideas|serp|ranked|domain|backlinks","query":"keyword or public domain","limit":"integer 1..100","device":"desktop|mobile","confirmed":true},
+  "keyword.googleVolume": {
+    "accountId": "string",
+    "terms": "1..20 Google Ads terms",
+    "login": "transient DataForSEO API login",
+    "password": "transient DataForSEO API password",
+    "confirmedPaidRequest": true
+  },
   "rank.record": "listingId | keywordId | position | isSponsored | context",
   "competitor.upsert": "accountId | marketplace | name | handle | groupKind",
   "competitor.relations": "ownProductId | accountId | status",

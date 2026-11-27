@@ -165,6 +165,41 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(db.row('SELECT last_seen_at FROM competitor_candidates WHERE id=?','comp-candidate')).toMatchObject({last_seen_at:recent});
   });
 
+  it('consulta volume Google Ads no recorte BR e conserva zero e ausência de dados',async()=>{
+    const accountId='google-volume-br';
+    seedImportAccount(accountId);
+    const input={accountId,terms:['Capacete','capacete','Sem medida','Outro'],login:'fixture@example.test',password:'fixture-password',confirmedPaidRequest:true};
+    let taskStatus=20000;
+    const fetchMock=vi.fn(async (url:string,init:RequestInit)=>{
+      expect(url).toBe('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live');
+      expect(init.redirect).toBe('error');
+      expect(JSON.parse(String(init.body))).toEqual([{keywords:['Capacete','Sem medida','Outro'],location_code:2076,language_code:'pt',search_partners:false}]);
+      return Response.json({status_code:20000,cost:0.02,tasks:[{status_code:taskStatus,result:[
+        {keyword:'capacete',search_volume:0,competition:'LOW',competition_index:0,
+          monthly_searches:[{year:2025,month:2,search_volume:null},{year:2025,month:3,search_volume:0}]},
+        {keyword:'sem medida',search_volume:null},
+        {keyword:'fora da consulta',search_volume:400},
+      ]}]});
+    });
+    vi.stubGlobal('fetch',fetchMock);
+    try{
+      expect((await call('keyword.googleVolume',{...input,confirmedPaidRequest:false})).ok).toBe(false);
+      expect((await call('keyword.googleVolume',{...input,terms:['emoji 😀']})).ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      const result=await call('keyword.googleVolume',input);
+      expect(result.result).toMatchObject({source:'GOOGLE_ADS_VIA_DATAFORSEO',country:'BR',providerCostUsd:0.02,items:[
+        {term:'Capacete',volume:0,competitionIndex:0,monthly:[{year:2025,month:3,volume:0},{year:2025,month:2,volume:null}]},
+        {term:'Sem medida',volume:null},
+        {term:'Outro',volume:null},
+      ]});
+      expect(JSON.stringify(result)).not.toContain(input.password);
+      taskStatus=40501;
+      expect((await call('keyword.googleVolume',input)).ok).toBe(false);
+    }finally{
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('persiste detalhes de campanha e variação por conta sem somar aos totais e rejeita escopo inválido',async()=>{
     seedImportAccount('acct-details');
     seedImportAccount('acct-details-other');

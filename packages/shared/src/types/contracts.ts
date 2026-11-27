@@ -127,6 +127,7 @@ export const IPC_METHODS = [
   'seo.external.research',
   'keyword.gap',
   'keyword.suggest',
+  'keyword.googleVolume',
   'keyword.cluster',
   'keyword.visibility',
   'keyword.cannibalization',

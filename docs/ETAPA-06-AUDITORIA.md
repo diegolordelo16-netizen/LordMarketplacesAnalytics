@@ -29,3 +29,18 @@ A presença e o share Top 20 usam capturas com posições válidas e sem empates
 O histórico de cada relação no painel mostra as diferenças observadas de preço, frete e prazo, o patrocínio informado e a contagem de arquivos idênticos por hash. Campos sem observação ficam vazios. A resposta é descartada se o usuário trocar a loja, o produto ou o filtro enquanto a consulta está em andamento.
 
 A comparação utiliza uma única captura recente identificada por data e ID. Capturas antigas ficam no histórico, campos ausentes continuam sem valor e a consulta do painel verifica a loja selecionada.
+
+
+## Pesquisa de volume do Google Ads
+
+O OpenSEO, licenciado sob MIT, usa o DataForSEO em seus fluxos de pesquisa. O painel SEO & Keywords adota a consulta de volume via contrato público do provedor. A implementação usa o serviço local existente.
+
+O operador informa as credenciais da API e confirma uma consulta paga de até 20 termos. O painel mostra volume médio mensal, concorrência em Google Ads, índice de concorrência e até 12 observações mensais. A consulta usa Brasil e português. Resultados ausentes permanecem vazios. O custo exibido vem da resposta do provedor. As credenciais são transitórias.
+
+A consulta fornece sinal de demanda no Google. A visibilidade e a demanda dos marketplaces continuam baseadas nas fontes próprias já existentes. A validação automatizada usa respostas simuladas do provedor.
+
+Referências
+
+- [OpenSEO no commit revisado](https://github.com/every-app/open-seo/tree/6f68494e92a695db17f4b22da25e84b9bf1e582c)
+- [Licença MIT do OpenSEO](https://github.com/every-app/open-seo/blob/6f68494e92a695db17f4b22da25e84b9bf1e582c/LICENSE)
+- [Documentação DataForSEO Search Volume Live](https://docs.dataforseo.com/v3/keywords_data/google_ads/search_volume/live/)

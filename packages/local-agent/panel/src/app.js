@@ -444,6 +444,15 @@ async function viewKeywords() {
     <div class="form-row"><button class="btn" data-act="kw-suggest">Sugerir termos pelos títulos</button><button class="btn" data-act="kw-cluster">Agrupar termos</button><button class="btn" data-act="kw-visibility">Calcular visibilidade</button><button class="btn" data-act="kw-cannibal">Detectar canibalização</button></div>
     <p class="muted small">Sugestões são extraídas do catálogo local, sem estimar volume de busca. Visibilidade usa apenas SERPs capturadas e não representa participação de mercado.</p>
     <div id="kw-intelligence-out" class="out"></div>`)
+  + (state.accountId?card('Volume de busca no Google',`
+    <div class="form-grid">
+      <label class="wide">Termos (até 20, um por linha) <textarea id="google-volume-terms" rows="4" maxlength="1620"></textarea></label>
+      <label>Login da API DataForSEO <input id="google-volume-login" autocomplete="off" maxlength="254"></label>
+      <label>Senha da API DataForSEO <input id="google-volume-password" type="password" autocomplete="off" maxlength="256"></label>
+    </div>
+    <p class="muted small">Brasil, português. O DataForSEO cobra pela consulta. Os resultados descrevem buscas no Google.</p>
+    <button class="btn" id="google-volume-submit" data-act="kw-google-volume">Consultar volume</button>
+    <div id="google-volume-out" class="out" aria-live="polite"></div>`):'')
   + card('Rank tracker', `
     <div class="form-row">
       <label class="grow">Anúncio (MLB...) <input id="rk-listing" placeholder="MLB1234567890"></label>
@@ -1919,6 +1928,35 @@ const ACTIONS = {
     initializeTables($('#bundle-out'));
   },
 
+  'kw-google-volume': async()=>{
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#google-volume-out'),button=$('#google-volume-submit');
+    if(!accountId||button.disabled)return;
+    const terms=$('#google-volume-terms').value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+    const login=$('#google-volume-login').value.trim(),passwordInput=$('#google-volume-password'),password=passwordInput.value;
+    if(!login||!password||!terms.length||terms.length>20)throw Error('Informe as credenciais da API e de 1 a 20 termos.');
+    if(!confirm('Confirma uma consulta paga no DataForSEO para '+terms.length+' termo(s)?'))return;
+    const current=()=>generation===viewRenderSequence&&state.accountId===accountId&&host===$('#google-volume-out');
+    passwordInput.value='';
+    button.disabled=true;
+    host.textContent='Consultando Google Ads via DataForSEO…';
+    try{
+      const result=await api('keyword.googleVolume',{accountId,terms,login,password,confirmedPaidRequest:true});
+      if(!current())return;
+      const competition={LOW:'Baixa',MEDIUM:'Média',HIGH:'Alta'};
+      const rows=result.items.map(row=>{
+        const history=row.monthly.map(point=>point.year+'-'+String(point.month).padStart(2,'0')+' · '+num(point.volume)).join(' | ');
+        return '<tr><td>'+esc(row.term)+'</td><td>'+num(row.volume)+'</td><td>'+esc(competition[row.competition]||'—')+'</td><td>'+num(row.competitionIndex)+'</td><td>'+esc(history||'—')+'</td></tr>';
+      });
+      host.innerHTML=table(['Termo','Volume médio mensal','Concorrência em Ads','Índice em Ads','Histórico mensal'],rows,'Nenhum termo retornado.')+
+        '<p class="muted small">Google Ads via DataForSEO · Brasil · português'+
+        (result.providerCostUsd==null?'':' · Custo informado: US$ '+num(result.providerCostUsd,6))+'</p>';
+      initializeTables(host);
+    }catch(error){
+      if(current())host.textContent=error.message;
+    }finally{
+      button.disabled=false;
+    }
+  },
   'seo-external-research':async()=>{
     const host=$('#seo-external-out'),generation=viewRenderSequence,button=document.querySelector('[data-act="seo-external-research"]');
     const query=$('#seo-external-query').value.trim(),mode=$('#seo-external-mode').value,limit=Number($('#seo-external-limit').value),device=$('#seo-external-device').value;
