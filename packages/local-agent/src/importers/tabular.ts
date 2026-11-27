@@ -24,6 +24,20 @@ function assertRows(rows: ImportedRow[]): ImportedRow[] {
   return rows;
 }
 
+function uniqueColumnNames(headers: string[]): string[] {
+  const reserved = new Set(headers);
+  const used = new Set<string>();
+  return headers.map(base => {
+    let name = base;
+    let suffix = 2;
+    while (used.has(name)) {
+      do { name = base + '_' + suffix++; } while (reserved.has(name) || used.has(name));
+    }
+    used.add(name);
+    return name;
+  });
+}
+
 export function parseCsvText(text: string): ImportedRow[] {
   if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Error('CSV maior que 2 MB');
   text = text.replace(/^\uFEFF/, '');
@@ -76,12 +90,7 @@ export function parseCsvText(text: string): ImportedRow[] {
   const headerWidth = matrix[0]!.length;
   if (matrix.slice(1).some((cells) => cells.length > headerWidth)) throw new Error('CSV contém linhas com mais colunas que o cabeçalho');
   const headers = matrix[0]!.map((header, index) => header.trim() || `coluna_${index + 1}`);
-  const seen = new Map<string, number>();
-  const uniqueHeaders = headers.map((header) => {
-    const count = seen.get(header) ?? 0;
-    seen.set(header, count + 1);
-    return count ? `${header}_${count + 1}` : header;
-  });
+  const uniqueHeaders = uniqueColumnNames(headers);
   const rows = matrix.slice(1).map((cells) => Object.fromEntries(uniqueHeaders.map((header, i) => [header, cells[i] ?? ''])));
   return assertRows(rows);
 }
@@ -145,6 +154,7 @@ function readZipEntries(archive: Buffer): Map<string, Buffer> {
     else if (method === 8) data = inflateRawSync(compressed, { maxOutputLength: Math.max(1, uncompressedSize) });
     else throw new Error(`método de compressão XLSX não suportado: ${method}`);
     if (data.length !== uncompressedSize || crc32(data) !== expectedCrc) throw new Error(`integridade ZIP inválida: ${name}`);
+    if (result.has(name)) throw new Error('XLSX contém entradas ZIP duplicadas: ' + name);
     result.set(name, data);
   }
   return result;
@@ -252,14 +262,13 @@ export function parseXlsxBase64(base64: string): ImportedRow[] {
   while (lastColumn >= 0 && (header[lastColumn] === null || header[lastColumn] === undefined || String(header[lastColumn]).trim() === '')) lastColumn -= 1;
   if (lastColumn < 0) throw new Error('cabeçalho da planilha está vazio');
   if (lastColumn + 1 > MAX_COLUMNS) throw new Error(`XLSX excede ${MAX_COLUMNS} colunas`);
-  const seen = new Map<string, number>();
-  const headers = Array.from({ length: lastColumn + 1 }, (_, index) => {
+  if (matrix.slice(1).some(cells => cells.slice(lastColumn + 1).some(value => value !== null && value !== undefined && String(value).trim() !== ''))) {
+    throw new Error('XLSX contém dados sem cabeçalho correspondente');
+  }
+  const headers = uniqueColumnNames(Array.from({ length: lastColumn + 1 }, (_, index) => {
     const value = header[index] === null || header[index] === undefined ? '' : String(header[index]).trim();
-    const base = value || `coluna_${index + 1}`;
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return count ? `${base}_${count + 1}` : base;
-  });
+    return value || `coluna_${index + 1}`;
+  }));
   const rows = matrix.slice(1).map((cells) => Object.fromEntries(headers.map((name, index) => [name, cells[index] ?? null])))
     .filter((row) => Object.values(row).some((value) => value !== null && String(value).trim() !== ''));
   if (rows.length === 0) throw new Error('planilha não contém linhas de dados');
