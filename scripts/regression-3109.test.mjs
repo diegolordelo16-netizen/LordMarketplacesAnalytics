@@ -264,3 +264,13 @@ test('grafo prioriza transições conhecidas da página atual sem inventar camin
   assert.equal(result.pagesSucceeded,3);
   assert.deepEqual(f.captured,[root,ratings,orders]);
 });
+
+test('atalhos de comparação usam dias UTC completos e meses de duração equivalente',()=>{
+  const ctx=vm.createContext({Date});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function comparisonPreset('),dashboard.indexOf('async function viewCompare()')),ctx);
+  const dates=(preset,at)=>JSON.parse(JSON.stringify(vm.runInContext('comparisonPreset('+JSON.stringify(preset)+',new Date('+JSON.stringify(at)+'))',ctx)));
+  assert.deepEqual(dates('7','2026-03-01T02:00:00Z'),['2026-02-22','2026-02-28','2026-02-15','2026-02-21']);
+  assert.deepEqual(dates('today','2026-01-01T01:00:00Z'),['2026-01-01','2026-01-01','2025-12-31','2025-12-31']);
+  assert.deepEqual(dates('month','2026-03-31T12:00:00Z'),['2026-03-01','2026-03-28','2026-02-01','2026-02-28']);
+  assert.equal(dates('month','2026-03-01T12:00:00Z'),null);
+});
