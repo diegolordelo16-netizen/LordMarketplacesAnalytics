@@ -427,11 +427,20 @@ describe('capacidades adicionais 3.10.3', () => {
     const after='2025-01-16T12:00:00.000Z';
     insert.run('ops-after',listingId,accountId,after,after,JSON.stringify({orders:12,gmv:120}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
     expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:id})).result).toMatchObject({status:'OBSERVED_CHANGE',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:false,causalityVerified:false});
+    const campaign=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef:'C-OPS',baseline:{budget:10},changes:{budget:15},reason:'Revisão de teste'})).result as any;
+    expect((await call('campaign.change.review',{accountId:other,proposalId:campaign.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    expect((await call('campaign.change.review',{accountId,proposalId:campaign.id,decision:'APPROVED',reason:'Teste'})).result).toMatchObject({status:'APPROVED',changedRemotely:false});
+    expect((await call('campaign.change.review',{accountId,proposalId:campaign.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
     const variant=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Cor',options:[{name:'Azul'}]})).result as any;
     expect((await call('offer.variation.update',{accountId:other,id:variant.id,variationName:'Cor',options:[{name:'Preto'}]})).ok).toBe(false);
     expect((await call('offer.variation.update',{accountId,id:variant.id,variationName:'Cor',options:[{name:'Preto'}]})).result).toMatchObject({status:'DRAFT',published:false});
     expect((await call('offer.variation.delete',{accountId,id:variant.id})).ok).toBe(true);
     expect((await call('offer.variation.list',{accountId})).result).toEqual([]);
+    const next=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Tamanho',options:[{name:'M'}]})).result as any;
+    expect((await call('offer.variation.review',{accountId:other,id:next.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(false);
+    expect((await call('offer.variation.review',{accountId,id:next.id,decision:'APPROVED',reason:'Teste'})).result).toMatchObject({status:'APPROVED',published:false});
+    expect((await call('offer.variation.delete',{accountId,id:next.id})).ok).toBe(false);
+
   });
 
   it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
