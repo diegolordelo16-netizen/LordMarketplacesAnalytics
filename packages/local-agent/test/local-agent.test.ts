@@ -209,7 +209,10 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('navigation.observe',{...payload,route:'/stock',pageKind:'seller_inventory',fromRoute:'/unknown'})).ok).toBe(false);
     expect((await call('navigation.graph',{accountId,origin})).result).toEqual([expect.objectContaining({from_route:'/reputacao',to_route:'/orders',observations:1})]);
     expect((await call('navigation.graph',{accountId:'acct-learn-b',origin})).result).toEqual([]);
+    expect((await call('navigation.observe',{...payload,fromRoute:'/reputacao',actionKind:'SPA_NEXT'})).ok).toBe(true);
+    expect((await call('navigation.observe',{...payload,fromRoute:'/orders',actionKind:'FILTER_CHANGE'})).ok).toBe(false);
     const summary=(await call('navigation.summary',{accountId})).result as any;
+    expect(summary.actions).toEqual([expect.objectContaining({route:'/reputacao',action_kind:'SPA_NEXT',observations:1})]);
     expect(summary.routes).toHaveLength(2);expect(summary.transitions).toHaveLength(1);
     expect((await call('navigation.clear',{accountId,origin})).result).toEqual({ok:true});
     expect((await call('navigation.graph',{accountId,origin})).result).toEqual([]);
