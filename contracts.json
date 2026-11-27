@@ -235,8 +235,14 @@
     "behavior": "activates/deactivates user; revokes sessions on deactivation; disallows self-deactivation and deactivation of the last active super_admin",
     "permission": "manage_users"
   },
-  "sync.claimAccount": {"payload":"batchId | accountId | leaseToken? (renewal)","permission":"execute_task"},
-  "sync.completeAccount": {"payload":"batchId | accountId | leaseToken | status | pagesScanned | pagesSucceeded","permission":"execute_task"},
+  "sync.claimAccount": {
+    "payload": "batchId | accountId | leaseToken? (renewal)",
+    "permission": "execute_task"
+  },
+  "sync.completeAccount": {
+    "payload": "batchId | accountId | leaseToken | status | pagesScanned | pagesSucceeded",
+    "permission": "execute_task"
+  },
   "sync.accountProgress": {
     "payload": {
       "batchId": "string",
@@ -262,5 +268,9 @@
     "payload": "sem parâmetros",
     "permission": "execute_task",
     "result": "Reserva lote do dashboard, com retomada após expiração sem progresso recente."
+  },
+  "capture.accountSnapshots": {
+    "payload": "accountId | limit?",
+    "permission": "view_reports"
   }
 }

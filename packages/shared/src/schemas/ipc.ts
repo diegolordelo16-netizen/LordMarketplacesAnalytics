@@ -52,6 +52,11 @@ export function assertPayloadSize(
 
 /** Dados capturados da UI. Todos os números são opcionais: ausente = NOT_COLLECTED. */
 export const capturedListingMetricsSchema = z.object({
+  conversionRatePct: z.number().finite().min(0).max(100).optional(),
+  adConversionRatePct: z.number().finite().min(0).max(100).optional(),
+  organicClicks: z.number().int().nonnegative().optional(),
+  originalPrice: z.number().finite().nonnegative().optional(),
+  promotionDiscountPct: z.number().finite().min(0).max(100).optional(),
   listingId: z.string().min(1).max(200),
   sku: z.string().max(200).optional(),
   title: z.string().max(2000).optional(),
@@ -95,6 +100,9 @@ export const capturedListingMetricsSchema = z.object({
 });
 
 export const capturedAccountMetricsSchema = z.object({
+  conversionRatePct: z.number().finite().min(0).max(100).optional(),
+  adConversionRatePct: z.number().finite().min(0).max(100).optional(),
+  organicClicks: z.number().int().nonnegative().optional(),
   visits: z.number().finite().nonnegative().optional(),
   orders: z.number().finite().nonnegative().optional(),
   units: z.number().finite().nonnegative().optional(),

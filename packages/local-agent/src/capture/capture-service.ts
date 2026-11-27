@@ -145,6 +145,11 @@ export class CaptureService {
         const snapshotId = randomUUID();
         const metrics = {
           price: listing.price,
+          originalPrice:listing.originalPrice,
+          promotionDiscountPct:listing.promotionDiscountPct,
+          conversionRatePct:listing.conversionRatePct,
+          adConversionRatePct:listing.adConversionRatePct,
+          organicClicks:listing.organicClicks,
           visits: listing.visits,
           orders: listing.orders,
           units: listing.units,

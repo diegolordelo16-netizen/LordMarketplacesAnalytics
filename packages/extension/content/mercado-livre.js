@@ -273,6 +273,8 @@
       }
     }
 
+    const extra=window.MI_DOM.observedExtraMetrics?.(document.body,!accountPage);
+    if(extra){Object.assign(accountPage?accountMetrics:listing,extra.metrics);Object.assign(evidence,extra.evidence);}
     return {
       marketplace: 'mercado_livre',
       pageKind: currentKind,
@@ -313,6 +315,8 @@
         const value = found && window.MI_DOM.parseNumberPtBr(found.text);
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) item[field] = value;
       }
+      const extraRow=window.MI_DOM.observedExtraMetrics?.(row,true);
+      if(extraRow) Object.assign(item,extraRow.metrics);
       rows.push(item);
     }
     return {
@@ -541,6 +545,7 @@
         loginRequired: currentKind === 'login' || Boolean(document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')),
         challenge: window.MI_DOM.hasChallenge(document),
         nextPageUrl: currentKind.startsWith('seller_') && currentKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'mercado_livre') : null,
+        paginationUnsupported: currentKind.startsWith('seller_') && Boolean(window.MI_DOM.paginationUnsupported?.(document,location.href,'mercado_livre')),
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

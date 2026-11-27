@@ -656,3 +656,23 @@ describe('voz do cliente: campos visíveis e identidade real', () => {
     expect(result).toEqual([{kind,text:'Texto igual',externalRef:'A1'},{kind,text:'Texto igual',externalRef:'A2'},{kind,text:'Outro comentário'}]);
   });
 });
+
+
+describe('DOM: percentuais explícitos e paginação sem URL', () => {
+  it('distingue porcentagem observada de número sem unidade e detecta botão de paginação',()=>{
+    class E {
+      constructor(public innerText:string,public nextElementSibling:E|null=null,public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(name:string){return this.attrs[name]??null}
+      hasAttribute(name:string){return name in this.attrs}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E,URL});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const pairs=[new E('Taxa de conversão',new E('12,5%')),new E('Ad conversion rate',new E('3')),new E('Preço original',new E('R$ 120,00')),new E('Desconto promocional',new E('25%'))];
+    expect(window.MI_DOM.observedExtraMetrics({querySelectorAll:()=>pairs},true).metrics).toEqual({conversionRatePct:12.5,originalPrice:120,promotionDiscountPct:25});
+    const button=new E('Próxima',null,{'aria-label':'Próxima'});
+    const root={querySelectorAll:(selector:string)=>selector.startsWith('a[')?[]:[button]};
+    expect(window.MI_DOM.paginationUnsupported(root,'https://seller.shopee.com.br/order','shopee')).toBe(true);
+  });
+});

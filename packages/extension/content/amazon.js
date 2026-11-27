@@ -52,7 +52,8 @@
   function firstText(root, selectors) {
     for (const selector of selectors) {
       const el = root.querySelector(selector);
-      const value = String(el?.textContent ?? el?.value ?? '').replace(/\s+/g, ' ').trim();
+      if(!el || !window.MI_DOM.isVisible(el)) continue;
+      const value = String(el.textContent ?? el.value ?? '').replace(/\s+/g, ' ').trim();
       if (value) return value;
     }
     return '';
@@ -109,6 +110,8 @@
         if (title) listing.title = title.slice(0, 2000);
         if (price !== null) listing.price = price;
         if (stock !== null) listing.stockAvailable = stock;
+        const extraRow=window.MI_DOM.observedExtraMetrics?.(row,true);
+        if(extraRow) Object.assign(listing,extraRow.metrics);
         listings.push(listing);
       }
       evidence.visibleInventoryRows = String(rows.length);
@@ -132,6 +135,10 @@
           accountMetrics[field] = value; evidence[field] = String(found.label + ': ' + found.text).slice(0,200);
         }
       }
+    }
+    if(pageKind!=='seller_listings'){
+      const extra=window.MI_DOM.observedExtraMetrics?.(document.body,false);
+      if(extra){Object.assign(accountMetrics,extra.metrics);Object.assign(evidence,extra.evidence);}
     }
     return {
       marketplace: 'amazon',
@@ -171,6 +178,7 @@
         loginRequired: challengeDetected() || pageKind === 'login',
         challenge: window.MI_DOM.hasChallenge(document),
         nextPageUrl: pageKind.startsWith('seller_') && pageKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'amazon') : null,
+        paginationUnsupported: pageKind.startsWith('seller_') && Boolean(window.MI_DOM.paginationUnsupported?.(document,location.href,'amazon')),
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

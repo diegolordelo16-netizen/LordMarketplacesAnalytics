@@ -191,6 +191,8 @@
           const value = window.MI_DOM.parseNumberPtBr(found?.text ?? (el && window.MI_DOM.isVisible(el) ? el.textContent : null));
           if (typeof value === 'number' && value >= 0) item[field] = value;
         }
+      const extraRow=window.MI_DOM.observedExtraMetrics?.(row,true);
+      if(extraRow) Object.assign(item,extraRow.metrics);
         listings.push(item);
       }
       if (listings.length) return { marketplace:'shopee', pageKind, ...visibleAccountIdentity(), url:location.href, listings, evidence:{...evidence, rows:String(listings.length)}, missing:['price','stockAvailable','units','visits','orders'].filter(field=>listings.every(row=>row[field] === undefined)) };
@@ -236,6 +238,8 @@
       }
     }
 
+    const extra=window.MI_DOM.observedExtraMetrics?.(document.body,!accountPage);
+    if(extra){Object.assign(accountPage?accountMetrics:listing,extra.metrics);Object.assign(evidence,extra.evidence);}
     return {
       marketplace: 'shopee',
       pageKind,
@@ -449,6 +453,7 @@
         loginRequired: pageKind === 'login' || Boolean(document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')),
         challenge: window.MI_DOM.hasChallenge(document),
         nextPageUrl: pageKind.startsWith('seller_') && pageKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'shopee') : null,
+        paginationUnsupported: pageKind.startsWith('seller_') && Boolean(window.MI_DOM.paginationUnsupported?.(document,location.href,'shopee')),
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

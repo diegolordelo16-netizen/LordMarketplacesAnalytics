@@ -154,5 +154,38 @@
     return items;
   }
 
-  window.MI_DOM = { visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  function paginationUnsupported(root,currentUrl,marketplace) {
+    if (paginationInfo(root,currentUrl,marketplace)) return false;
+    const selector='button[aria-label],button[title],button[data-testid],button.next,button.pagination__next,[role="button"][aria-label],a[rel="next"],a[aria-label],a[title],a[data-testid],a.next';
+    for (const el of root.querySelectorAll(selector)) {
+      if (!isVisible(el) || el.disabled || el.getAttribute('aria-disabled')==='true' || el.hasAttribute('disabled')) continue;
+      const names=[el.getAttribute('aria-label'),el.getAttribute('title'),el.getAttribute('data-testid'),el.innerText ?? el.textContent].filter(Boolean).map(normalizeLabel);
+      if (el.rel==='next' || names.some(name=>/^(next|próxima|proxima|seguinte|siguiente|próximo|proximo)(?:\s+(?:page|página|pagina))?$|pagination[-_ ]?next|next[-_ ]?page/i.test(name))) return true;
+    }
+    return false;
+  }
+  function explicitPercent(root, labels) {
+    const found=findValueByLabel(root,labels);
+    if (!found || !/%\s*$/.test(found.text)) return null;
+    const value=parseNumberPtBr(found.text);
+    return value!==null && value>=0 && value<=100 ? {value,evidence:String(found.label+': '+found.text).slice(0,200)} : null;
+  }
+  function observedExtraMetrics(root, listing=false) {
+    const metrics={}, evidence={};
+    const percentages={conversionRatePct:['taxa de conversão','conversion rate','tasa de conversión'],adConversionRatePct:['taxa de conversão de anúncios','ad conversion rate','taxa de conversão ads']};
+    if (listing) percentages.promotionDiscountPct=['desconto promocional','percentual de desconto','promotion discount','discount percentage'];
+    for (const [field,labels] of Object.entries(percentages)) {
+      const found=explicitPercent(root,labels);
+      if(found){metrics[field]=found.value;evidence[field]=found.evidence;}
+    }
+    const found=findValueByLabel(root,['cliques orgânicos','organic clicks']), clicks=found&&parseNumberPtBr(found.text);
+    if(typeof clicks==='number'&&Number.isInteger(clicks)&&clicks>=0){metrics.organicClicks=clicks;evidence.organicClicks=String(found.label+': '+found.text).slice(0,200);}
+    if(listing){
+      const found=findValueByLabel(root,['preço original','preço anterior','original price','previous price']);
+      const value=found&&parseNumberPtBr(found.text);
+      if(typeof value==='number'&&value>=0){metrics.originalPrice=value;evidence.originalPrice=String(found.label+': '+found.text).slice(0,200);}
+    }
+    return {metrics,evidence};
+  }
+  window.MI_DOM = { paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

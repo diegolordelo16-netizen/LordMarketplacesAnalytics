@@ -272,19 +272,23 @@ async function viewExec() {
 // ------------------------------------------------------------------ ANÚNCIOS / CAPTURA
 async function viewListings() {
   const snaps = await api('capture.snapshot', state.accountId ? { accountId: state.accountId } : {});
+  const accountSnaps = state.accountId ? await api('capture.accountSnapshots',{accountId:state.accountId,limit:30}) : [];
   const listings = new Map();
   for (const snapshot of snaps) if (!listings.has(snapshot.listing_id)) listings.set(snapshot.listing_id, snapshot);
   return card('Snapshots capturados', table(
-    ['Marketplace', 'Anúncio', 'Preço capturado', 'Quando', 'Origem', 'Qualidade'],
+    ['Marketplace', 'Anúncio', 'Preço capturado', 'Promoção observada', 'Conversão observada', 'Quando', 'Origem', 'Qualidade'],
     (snaps || []).slice(0, 100).map((s) => `<tr>
       <td>${esc(s.marketplace || '—')}</td>
       <td>${esc(s.external_id || s.listing_id || '—')}${s.title ? `<div class="muted small">${esc(s.title)}</div>` : ''}</td>
       <td>${typeof s.metrics?.price === 'number' ? brl(Math.round(s.metrics.price * 100)) : '—'}</td>
+      <td>${typeof s.metrics?.originalPrice==='number'?brl(Math.round(s.metrics.originalPrice*100)):'—'}${typeof s.metrics?.promotionDiscountPct==='number'?` · ${num(s.metrics.promotionDiscountPct)}%` : ''}</td>
+      <td>${typeof s.metrics?.conversionRatePct==='number'?`${num(s.metrics.conversionRatePct)}%`:'—'}</td>
       <td>${dt(s.captured_at || s.created_at)}</td>
       <td>${esc(s.source_class || '—')}</td>
       <td>${qualityBadge(s.quality || s.status)}</td></tr>`),
     'Nenhum snapshot. Use a extensão na página do anúncio para capturar.')
     + '<div class="actions"><button class="btn" data-act="nav" data-view="browserSync">Abrir Extensão & Coletas</button></div>')
+  + card('Indicadores observados da loja',table(['Área','Conversão exibida','Conversão Ads exibida','Cliques orgânicos','Período/filtros observados','Capturado em'],(accountSnaps||[]).map(s=>`<tr><td>${esc(s.page_kind)}</td><td>${typeof s.metrics?.conversionRatePct==='number'?num(s.metrics.conversionRatePct)+'%':'—'}</td><td>${typeof s.metrics?.adConversionRatePct==='number'?num(s.metrics.adConversionRatePct)+'%':'—'}</td><td>${typeof s.metrics?.organicClicks==='number'?num(s.metrics.organicClicks):'—'}</td><td>${esc(s.evidence?.filtersAndPeriod||'não informado')}</td><td>${dt(s.captured_at)}</td></tr>`),'Selecione uma loja com capturas. Valores ausentes não são zeros.')+'<p class="muted small">Taxas exibidas na origem; não substituem KPIs calculados nem comprovam períodos compatíveis.</p>')
   + card('Detalhe de KPI por anúncio', `
     <div class="form-row">
       <label class="grow">Anúncio <select id="kpi-listing-id">${listings.size ? [...listings.values()].map((item) =>
