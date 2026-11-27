@@ -979,3 +979,24 @@ describe('observação reativa da paginação SPA',()=>{
     expect(disconnected).toBe(2);
   });
 });
+
+describe('filtros personalizados acessíveis',()=>{
+  it('reconhece valores inequívocos, mas não aceita seleção conflitante',()=>{
+    class E{
+      tagName='DIV';
+      constructor(public attrs:Record<string,string>,public nodes:E[]=[],public innerText=''){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return null}
+      querySelectorAll(){return this.nodes}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const selected=new E({'aria-selected':'true'},[],'Últimos 7 dias');
+    const control=new E({'aria-label':'Período','aria-valuetext':'Últimos 7 dias'},[selected]);
+    const root={querySelectorAll:(s:string)=>s.startsWith('[role="combobox"]')?[control]:[]};
+    expect(window.MI_DOM.collectionFilterState(root)).toEqual({signature:'período=últimos 7 dias',warnings:[]});
+    control.attrs['aria-valuetext']='Últimos 30 dias';
+    expect(window.MI_DOM.collectionFilterState(root).warnings).toContain('FILTRO_NAO_RECONHECIDO');
+  });
+});
