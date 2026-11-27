@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, statSync, readdirSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, renameSync, realpathSync } from 'node:fs';
-import { join, resolve, relative, dirname, sep } from 'node:path';
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, renameSync, realpathSync } from 'node:fs';
+import { join, resolve, relative, dirname, sep, isAbsolute } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,15 +11,16 @@ const semver=/^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 const digest=path=>createHash('sha256').update(readFileSync(path)).digest('hex');
 const readJson=path=>JSON.parse(readFileSync(path,'utf8'));
 const samePath=(a,b)=>process.platform==='win32'?resolve(a).toLowerCase()===resolve(b).toLowerCase():resolve(a)===resolve(b);
-const inside=(a,b)=>{const p=relative(resolve(a),resolve(b));return p===''||(!p.startsWith('..'+sep)&&p!=='..'&&!p.startsWith(sep)&&!p.includes(':'));};
+const inside=(a,b)=>{const p=relative(resolve(a),resolve(b));return p===''||(!p.startsWith('..'+sep)&&p!=='..'&&!isAbsolute(p)&&!p.includes(':'));};
 function plain(path){const st=lstatSync(path);if(st.isSymbolicLink()||(!st.isFile()&&!st.isDirectory()))throw Error('link ou tipo de arquivo recusado: '+path);return st;}
 function inventory(root){
-  const entries={};let count=0,size=0;
+  const entries=Object.create(null),caseNames=new Set();let count=0,size=0;
   function visit(path){
     const st=plain(path);
     if(st.isDirectory()){for(const name of readdirSync(path).sort())visit(join(path,name));return;}
     const name=relative(root,path).split(sep).join('/');
     if(!/^[a-zA-Z0-9_.\/-]+$/.test(name)||name.split('/').some(p=>p==='.'||p==='..'||!p))throw Error('nome de arquivo inválido: '+name);
+    if(caseNames.has(name.toLowerCase()))throw Error('colisão de nomes em Windows');caseNames.add(name.toLowerCase());
     if(++count>10000||(size+=st.size)>500*1024*1024)throw Error('pacote acima do limite');
     entries[name]={sha256:digest(path),size:st.size};
   }
@@ -134,6 +135,22 @@ export async function rollbackUpdate({root,data,approved,hooks}){
     return {ok:true,version:state.from,backupId:state.id};
   }finally{guard.release();}
 }
+export async function recoverUpdate({root,data,approved,hooks}){
+  if(approved!==true)throw Error('aprovação explícita de recuperação necessária');
+  root=resolve(root);data=resolve(data);assertLocations(root,data);
+  const marker=join(data,'update-in-progress.json'),journal=join(data,'updates','current.json');
+  if(existsSync(marker)){
+    const state=readJson(marker);
+    if(!Number.isSafeInteger(state.pid)||state.pid<=0)throw Error('marcador inválido; revisão manual necessária');
+    let alive=true;try{process.kill(state.pid,0);}catch(e){if(e.code==='ESRCH')alive=false;else throw e;}
+    if(alive)throw Error('processo do atualizador ainda ativo');
+    rmSync(marker);
+  }
+  if(!existsSync(journal))return {ok:true,note:'nenhuma alteração iniciada; execute novamente a instalação'};
+  const state=readJson(journal);
+  if(['APPLIED','ROLLED_BACK'].includes(state.phase))return {ok:true,version:versionAt(root),note:'transação já concluída'};
+  return rollbackUpdate({root,data,approved:true,hooks});
+}
 async function windowsQuiesce(root){
   if(process.platform!=='win32')throw Error('instalação suportada somente no Windows');
   const raw=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',"Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress"],{encoding:'utf8',windowsHide:true});
@@ -169,6 +186,7 @@ async function cli(){
   const data=join(process.env.LOCALAPPDATA,'MarketplaceIntelligence'),hooks={quiesce:windowsQuiesce,startAndVerify};
   if(action==='install'&&args.length===3&&args[2]==='--approve'){console.log(await installUpdate({root,data,payload:args[0],expectedDigest:args[1],approved:true,hooks}));return;}
   if(action==='rollback'&&args.length===1&&args[0]==='--approve'){console.log(await rollbackUpdate({root,data,approved:true,hooks}));return;}
-  throw Error('Uso: node.exe update-manager.mjs install <pasta do artefato> <SHA-256 aprovado> --approve | rollback --approve');
+  if(action==='recover'&&args.length===1&&args[0]==='--approve'){console.log(await recoverUpdate({root,data,approved:true,hooks}));return;}
+  throw Error('Uso: node.exe update-manager.mjs install <pasta do artefato> <SHA-256 aprovado> --approve | rollback --approve | recover --approve');
 }
 if(process.argv[1]&&samePath(process.argv[1],fileURLToPath(import.meta.url)))cli().catch(e=>{console.error(e.message);process.exitCode=1;});
