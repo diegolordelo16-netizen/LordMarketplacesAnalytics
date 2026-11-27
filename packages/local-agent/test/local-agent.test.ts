@@ -492,20 +492,21 @@ describe('capacidades adicionais 3.10.3', () => {
       maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20,
     }})).ok).toBe(true);
     const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
-    let nickname='outra loja',created=false,postCount=0,failReadback=true;
+    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0;
     const mock=vi.fn(async (url:URL,init:RequestInit)=>{
       expect(url.origin).toBe('https://api.mercadolibre.com');
       expect(init.redirect).toBe('error');
       if(url.pathname==='/users/me')return Response.json({id:23,nickname,site_id:'MLB',tags:[]});
       if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',status:'active',
         user_product_id:null,pictures:[{id:'PIC1'}],variations:[{id:41,attribute_combinations:[{id:'COLOR',value_id:'1'}]},
-          ...(created?[{id:42,attribute_combinations:option.attributeCombinations}]:[])]});
+          ...(created&&!deleted?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:sold}]:[])]});
       if(url.pathname==='/items/'+itemId+'/variations'&&init.method==='POST'){
         postCount++;
         expect(JSON.parse(String(init.body))).toEqual({attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:0,picture_ids:['PIC1']});
         created=true;return Response.json({id:42},{status:201});
       }
       if(url.pathname==='/items/'+itemId+'/variations/42'){
+        if(init.method==='DELETE'){deleteCount++;deleted=true;return new Response(null,{status:204});}
         if(failReadback)throw Error('timeout simulado');
         return Response.json({id:42,price:12,available_quantity:0,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
       }
@@ -531,6 +532,21 @@ describe('capacidades adicionais 3.10.3', () => {
         createdVariation:{externalId:'42',priceCents:1200,stock:0},
       });
       expect(JSON.stringify(list.result)).not.toContain(request.accessToken);
+      const removal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Remover Azul',
+        options:[{removeVariationId:'42'}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:removal.id,decision:'APPROVED',reason:'Remoção autorizada'})).ok).toBe(true);
+      const remove={...request,proposalId:removal.id};
+      sold=1;
+      expect((await call('variation.api.remove',remove)).ok).toBe(false);
+      expect(deleteCount).toBe(0);
+      sold=0;
+      expect((await call('variation.api.remove',remove)).result).toMatchObject({status:'REMOTE_VERIFIED',action:'REMOVE_VARIATION',variationId:'42'});
+      expect((await call('variation.api.remove',remove)).ok).toBe(false);
+      expect(deleteCount).toBe(1);
+      expect((await call('operation.measure',{accountId,proposalId:removal.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_REMOVAL_CONFIRMED',removedVariation:{externalId:'42'},
+      });
+
     }finally{
       vi.unstubAllGlobals();
     }

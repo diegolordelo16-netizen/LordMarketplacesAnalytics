@@ -168,3 +168,9 @@ falha sem ID mantém a tentativa pendente sem repetir a criação.
 O teste usa a API simulada. Homologação real continua adiada.
 A integração ainda precisa atender User Products, operações adicionais
 de gestão de variações e comprovação da origem da duplicação.
+
+A migração 038 adiciona remoção aprovada de variação legada. A opção da
+proposta é {"removeVariationId":"ID"}, com preço atual e estoque zero.
+A API exige prova de zero vendas e outra variação no anúncio. A leitura
+posterior verifica a ausência do ID. O teste simulado cobre a recusa de
+variação vendida e bloqueio de repetição.

@@ -236,6 +236,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'listing.browser.verify': 'manage_accounts',
   'listing.browser.list': 'view_reports',
   'variation.api.create': 'manage_accounts',
+  'variation.api.remove': 'manage_accounts',
   'variation.api.verify': 'manage_accounts',
   'variation.api.list': 'view_reports',
   'offer.variation.prepare': 'manage_market_intelligence',
@@ -3033,22 +3034,32 @@ export class LocalService {
         FROM offer_variation_proposals p JOIN listings l ON l.id=p.listing_id AND l.account_id=p.account_id
         WHERE p.id=? AND p.account_id=? AND p.status='APPROVED' AND l.marketplace='mercado_livre'`,proposalId,accountId);
       if(!row||row.listing_status==='CLOSED')throw Error('proposta aprovada de anúncio da mesma conta necessária');
-      const [option]=z.tuple([legacyVariationOption]).parse(JSON.parse(row.options_json));
+      const [option]=z.tuple([z.union([legacyVariationOption,z.object({removeVariationId:z.string().regex(/^\d{1,20}$/)}).strict()])]).parse(JSON.parse(row.options_json));
       const priceCents=z.number().int().min(1).max(100000000).parse(row.proposed_price_cents);
       const stock=z.number().int().min(0).max(1000000).parse(row.proposed_stock);
       return { handle,listingId:row.listing_id,externalId:row.external_id,status:row.listing_status,option,priceCents,stock };
     };
-    type VariationApiExecution={seller_id:string;item_id:string;variation_id:string|null;status:string;updated_at:string;price_cents:number;stock:number};
+    type VariationApiExecution={seller_id:string;item_id:string;variation_id:string|null;status:string;updated_at:string;price_cents:number;stock:number;action:'CREATE_VARIATION'|'REMOVE_VARIATION'};
     const readVariationExecution=(accountId:string,proposalId:string)=>db.row<VariationApiExecution>(
-      'SELECT seller_id,item_id,variation_id,status,updated_at,price_cents,stock FROM listing_api_executions WHERE account_id=? AND proposal_id=?',accountId,proposalId);
-    this.register('variation.api.create',async(payload,auth)=>{
+      'SELECT seller_id,item_id,variation_id,status,updated_at,price_cents,stock,action FROM listing_api_executions WHERE account_id=? AND proposal_id=?',accountId,proposalId);
+    const executeVariationApi=(removing:boolean):Handler=>async(payload,auth)=>{
+
       if(auth?.role!=='super_admin')throw Error('super_admin necessário');
       const i=legacyApiInput.extend({confirmed:z.literal(true)}).strict().parse(payload);
       if(readVariationExecution(i.accountId,i.proposalId))throw Error('proposta já encaminhada; não repetir a criação');
       const p=variationApiTarget(i.accountId,i.proposalId);
       const api=new MercadoLivreVariations(i.accessToken);
       const {item,sellerId}=await api.readOwner(p.externalId,p.handle);
-      api.checkNewOption(item,p.option);
+      const option=p.option;
+      const action=removing?'REMOVE_VARIATION':'CREATE_VARIATION';
+      if(removing){
+        if(!('removeVariationId' in option)||p.stock!==0)throw Error('proposta de remoção com estoque zero necessária');
+        api.checkRemoval(item,option.removeVariationId,p.priceCents);
+      }else{
+        if('removeVariationId' in option)throw Error('proposta de criação necessária');
+        api.checkNewOption(item,option);
+      }
+
       db.transaction(()=>{
         if(canonicalJson(variationApiTarget(i.accountId,i.proposalId))!==canonicalJson(p))throw Error('contexto local mudou durante a consulta');
         if(readVariationExecution(i.accountId,i.proposalId)||
@@ -3058,28 +3069,34 @@ export class LocalService {
            db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,p.listingId)||
            db.row("SELECT id FROM task_items WHERE account_id=? AND listing_id=? AND status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH','UNCERTAIN')",i.accountId,p.listingId))throw Error('execução anterior pendente');
         const limits=readAssistedLimits(i.accountId);
-        const guard=evaluateGuard({action:'create_variation',actorRole:auth.role,
+        const guard=evaluateGuard({action:removing?'edit_variation':'create_variation',actorRole:auth.role,
           marketplace:{id:'mercado_livre',enabled:Boolean(db.row("SELECT id FROM marketplaces WHERE id='mercado_livre' AND enabled=1"))},
           account:{id:i.accountId,marketplace:'mercado_livre',verified:true,sessionState:'AUTHENTICATED'},
           listing:{id:p.listingId,accountId:i.accountId,externalId:p.externalId,status:p.status},
           currentState:{externalListingId:p.externalId,sourcePath:'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+item.id},
-          financialLimits:limits?{...limits,targetVariationPriceCents:p.priceCents,targetVariationStock:p.stock}:null,
+          financialLimits:limits?{...limits,targetVariationPriceCents:p.priceCents,targetVariationStock:p.stock,currentPriceCents:p.priceCents}:null,
           requiredData:{missing:[]},platformRules:{violations:[]},authorization:{approved:true,approvedBy:auth.userId},conflicts:[]});
         if(!guard.allowed)throw Error(guard.blockedReasons.join('; '));
         const now=nowIso();
-        db.db.prepare('INSERT INTO listing_api_executions(proposal_id,account_id,listing_id,seller_id,item_id,price_cents,stock,status,started_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
-          .run(i.proposalId,i.accountId,p.listingId,sellerId,item.id,p.priceCents,p.stock,'DISPATCHED',now,now);
-        this.audit(auth,'VARIATION_API_CREATE','offer_variation_proposal',i.proposalId,'DISPATCHED');
+        db.db.prepare('INSERT INTO listing_api_executions(proposal_id,account_id,listing_id,seller_id,item_id,price_cents,stock,status,started_at,updated_at,action,variation_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(i.proposalId,i.accountId,p.listingId,sellerId,item.id,p.priceCents,p.stock,'DISPATCHED',now,now,action,'removeVariationId' in option?option.removeVariationId:null);
+        this.audit(auth,'VARIATION_API_WRITE','offer_variation_proposal',i.proposalId,'DISPATCHED',action);
       });
-      let variationId:string|null=null;
+      let variationId:string|null='removeVariationId' in option?option.removeVariationId:null;
       let verified=false;
       try{
-        const created=await api.create(item.id,p.option,p.priceCents,p.stock);
-        if(item.variations.some(variant=>variant.id===created))throw Error('ID da resposta já existia antes da criação');
-        variationId=created;
-        db.db.prepare("UPDATE listing_api_executions SET variation_id=?,updated_at=? WHERE proposal_id=? AND status='DISPATCHED'")
-          .run(variationId,nowIso(),i.proposalId);
-        verified=await api.matches(item.id,variationId,p.option,p.priceCents,p.stock);
+        if('removeVariationId' in option){
+          await api.remove(item.id,option.removeVariationId);
+          const after=await api.readOwner(item.id,p.handle);
+          verified=after.sellerId===sellerId&&!after.item.variations.some(row=>row.id===option.removeVariationId);
+        }else{
+          const created=await api.create(item.id,option,p.priceCents,p.stock);
+          if(item.variations.some(variant=>variant.id===created))throw Error('ID da resposta já existia antes da criação');
+          variationId=created;
+          db.db.prepare("UPDATE listing_api_executions SET variation_id=?,updated_at=? WHERE proposal_id=? AND status='DISPATCHED'")
+            .run(variationId,nowIso(),i.proposalId);
+          verified=await api.matches(item.id,variationId,option,p.priceCents,p.stock);
+        }
       }catch{
         // Uma falha de transporte depois da reserva pode ter ocorrido após a gravação.
       }
@@ -3089,8 +3106,10 @@ export class LocalService {
           .run(status,nowIso(),i.proposalId);
         this.audit(auth,'VARIATION_API_RESULT','offer_variation_proposal',i.proposalId,status,variationId??'sem ID retornado');
       });
-      return {status,variationId,remoteVerified:verified};
-    });
+      return {status,variationId,action,remoteVerified:verified};
+    };
+    this.register('variation.api.create',executeVariationApi(false));
+    this.register('variation.api.remove',executeVariationApi(true));
     this.register('variation.api.verify',async(payload,auth)=>{
       if(auth?.role!=='super_admin')throw Error('super_admin necessário');
       const i=legacyApiInput.strict().parse(payload);
@@ -3098,11 +3117,13 @@ export class LocalService {
       const execution=readVariationExecution(i.accountId,i.proposalId);
       if(!execution?.variation_id)throw Error('a criação não registrou um ID retornado pela API');
       if(execution.status==='REMOTE_VERIFIED')return {status:execution.status,variationId:execution.variation_id,remoteVerified:true};
-      if(execution.status==='DISPATCHED'&&Date.parse(execution.updated_at)>Date.now()-30_000)throw Error('aguarde a leitura da criação em andamento');
+      if(execution.status==='DISPATCHED'&&Date.parse(execution.updated_at)>Date.now()-30_000)throw Error('aguarde a leitura da operação em andamento');
       const api=new MercadoLivreVariations(i.accessToken);
       const {item,sellerId}=await api.readOwner(p.externalId,p.handle);
       if(sellerId!==execution.seller_id||item.id!==execution.item_id)throw Error('a conta ou o anúncio diverge da execução');
-      const verified=await api.matches(item.id,execution.variation_id,p.option,p.priceCents,p.stock);
+      const verified=execution.action==='REMOVE_VARIATION'
+        ? 'removeVariationId' in p.option&&p.option.removeVariationId===execution.variation_id&&!item.variations.some(row=>row.id===execution.variation_id)
+        : !('removeVariationId' in p.option)&&await api.matches(item.id,execution.variation_id,p.option,p.priceCents,p.stock);
       if(verified)db.transaction(()=>{
         db.db.prepare("UPDATE listing_api_executions SET status='REMOTE_VERIFIED',updated_at=? WHERE proposal_id=? AND status<>'REMOTE_VERIFIED'")
           .run(nowIso(),i.proposalId);
@@ -3113,7 +3134,7 @@ export class LocalService {
     this.register('variation.api.list',payload=>{
       const {accountId}=z.object({accountId:z.string().min(1)}).strict().parse(payload);
       operationAccount(accountId);
-      return db.rows('SELECT proposal_id,listing_id,item_id,variation_id,status,started_at,updated_at FROM listing_api_executions WHERE account_id=? ORDER BY started_at DESC LIMIT 200',accountId);
+      return db.rows('SELECT proposal_id,listing_id,item_id,variation_id,status,started_at,updated_at,action FROM listing_api_executions WHERE account_id=? ORDER BY started_at DESC LIMIT 200',accountId);
     });
     this.register('listing.browser.claim',(payload,auth)=>db.transaction(()=>{
       const i=listingBrowserContext.extend({proposalId:z.string().min(1),confirmed:z.literal(true)}).strict().parse(payload);
@@ -3300,6 +3321,10 @@ export class LocalService {
       const account=operationAccount(i.accountId);
       if(i.proposalKind==='VARIATION'){
         const created=readVariationExecution(i.accountId,i.proposalId);
+        if(created?.status==='REMOTE_VERIFIED'&&created.variation_id&&created.action==='REMOVE_VARIATION'){
+          return {status:'API_VARIATION_REMOVAL_CONFIRMED',remoteVerified:true,causalityVerified:false,metrics:null,
+            removedVariation:{externalId:created.variation_id,confirmedAt:created.updated_at}};
+        }
         if(created?.status==='REMOTE_VERIFIED'&&created.variation_id){
           return {status:'API_VARIATION_CONFIRMED',remoteVerified:true,causalityVerified:false,metrics:null,
             createdVariation:{externalId:created.variation_id,confirmedAt:created.updated_at,priceCents:created.price_cents,stock:created.stock}};
