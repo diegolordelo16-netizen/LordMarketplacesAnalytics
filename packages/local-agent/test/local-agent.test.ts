@@ -638,6 +638,9 @@ describe('capacidades adicionais 3.10.3', () => {
       const {confirmed,...verify}=request;readback=true;
       expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:newId});
       expect((await call('operation.measure',{accountId,proposalId:draft.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_UP_OFFER_CONFIRMED',measurementScope:'USER_PRODUCT_ORIGINAL_VS_OFFER',createdOffer:{externalId:newId,stock:3},metrics:null,causalityVerified:false});
+      const again=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Outra proposta da mesma oferta',options:[option],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:again.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+      expect((await call('variation.api.createUpOffer',{...request,proposalId:again.id})).ok).toBe(false);
       expect(posts).toBe(1);
     }finally{vi.unstubAllGlobals();}
   });

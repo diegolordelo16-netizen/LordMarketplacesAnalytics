@@ -176,3 +176,5 @@ posterior verifica a ausência do ID. O teste simulado cobre a recusa de
 variação vendida e bloqueio de repetição.
 
 Atualização: edição de estoque de variação legada por API (editVariationId, beforePriceCents, beforeStock), sem mudar preço. Migration 039. Metadados da candidata em 3.14.0. CI do novo SHA pendente de confirmação.
+
+Atualização: candidata 3.14.0 sincronizada; CI 208 aprovada. Inclui edição de estoque legada (039), ROAS objetivo (040), duplicação com prova de ambos IDs e medição comparável. Migração 041 adiciona oferta de User Product existente e bloqueio de repetição por produto/tipo. Consulte ETAPA-05-AUDITORIA.md para limites técnicos atuais. Homologação real dispensada, não efetuada.

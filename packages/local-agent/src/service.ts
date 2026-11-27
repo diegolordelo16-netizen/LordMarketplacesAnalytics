@@ -3057,6 +3057,12 @@ export class LocalService {
         if(db.row("SELECT proposal_id FROM listing_api_executions WHERE account_id=? AND listing_id=? AND status<>'REMOTE_VERIFIED'",i.accountId,p.listingId)||
            db.row("SELECT id FROM listing_browser_executions WHERE account_id=? AND listing_id=? AND status IN ('CLAIMED','NEEDS_VERIFICATION')",i.accountId,p.listingId)||
            db.row("SELECT id FROM task_items WHERE account_id=? AND listing_id=? AND status IN ('PROCESSING','PUBLISHING','APPROVED_TO_PUBLISH','UNCERTAIN')",i.accountId,p.listingId))throw Error('execução anterior pendente');
+        if(action==='CREATE_UP_OFFER'){
+          if(!('userProductId' in p.option))throw Error('proposta User Products divergente');
+          if(db.row(`SELECT r.proposal_id FROM listing_api_executions r JOIN offer_variation_proposals v ON v.id=r.proposal_id AND v.account_id=r.account_id
+            WHERE r.account_id=? AND r.action='CREATE_UP_OFFER' AND json_extract(v.options_json,'$[0].userProductId')=?
+            AND (r.status<>'REMOTE_VERIFIED' OR json_extract(v.options_json,'$[0].listingTypeId')=?)`,i.accountId,p.option.userProductId,p.option.listingTypeId))throw Error('User Product com operação pendente ou condição já executada');
+        }
         const limits=readAssistedLimits(i.accountId);
         const guard=evaluateGuard({action:action==='CREATE_VARIATION'||action==='CREATE_UP_OFFER'?'create_variation':'edit_variation',actorRole:auth.role,
           marketplace:{id:'mercado_livre',enabled:Boolean(db.row("SELECT id FROM marketplaces WHERE id='mercado_livre' AND enabled=1"))},
