@@ -25,3 +25,5 @@ O painel cruza termos de pesquisa com até três anúncios da mesma conta por si
 
 ## Fusão da etapa 06
 Conexão única no painel, armazenada no SecretStore criptografado existente. Google Ads (até 20 termos) integrado à mesma pesquisa, histórico e trava de consultas; o IPC anterior permanece compatível. Desconectar desativa todos os monitores, remove credenciais locais e impede fallback de ambiente até nova configuração. O opt-in de agendamentos pode ser configurado no painel. A configuração não faz teste tarifado. Consultas externas nunca substituem indicadores internos.
+
+Versão candidata integrada: 3.15.0. A configuração pela interface é o caminho principal; variáveis de ambiente permanecem como compatibilidade quando não existe configuração local nem desconexão explícita.

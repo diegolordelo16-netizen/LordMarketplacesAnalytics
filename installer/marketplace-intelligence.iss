@@ -9,10 +9,10 @@
 ; Depois de instalar, registra o host nativo no HKCU (Chrome e Edge) apontando
 ; para o manifesto que autoriza a origem da extensão.
 ;
-; Compilar: ISCC.exe installer/marketplace-intelligence.iss /DAppVersion=3.14.0
+; Compilar: ISCC.exe installer/marketplace-intelligence.iss /DAppVersion=3.15.0
 
 #ifndef AppVersion
-  #define AppVersion "3.14.0"
+  #define AppVersion "3.15.0"
 #endif
 #ifndef ExtensionId
   ; ID de desenvolvimento: o instalador grava o ID informado no build.
