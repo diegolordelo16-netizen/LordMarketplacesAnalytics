@@ -202,6 +202,29 @@ function table(headers, rows, empty = 'Nenhum registro.') {
     <tbody>${rows.join('')}</tbody></table></div>`;
 }
 
+function compareTableCells(left, right, direction = 1) {
+  const a = String(left ?? '').trim(), b = String(right ?? '').trim();
+  const missing = v => !v || /^(?:—|–|não informado|não comprovada|indisponível)$/i.test(v);
+  if (missing(a) || missing(b)) return missing(a) === missing(b) ? 0 : missing(a) ? 1 : -1;
+  const numeric = v => {
+    const match = v.match(/^(R\$\s*)?(-?\d+(?:\.\d{3})*(?:,\d+)?)(?:\s*(%|d))?$/);
+    if (!match) return null;
+    const value = Number(match[2].replaceAll('.', '').replace(',', '.'));
+    return Number.isFinite(value) ? { value, unit: match[1] ? 'BRL' : match[3] || '' } : null;
+  };
+  const date = v => {
+    const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (!m) return null;
+    const value = Date.UTC(+m[3], +m[2]-1, +m[1], +(m[4]||0), +(m[5]||0), +(m[6]||0));
+    const parsed = new Date(value);
+    return parsed.getUTCDate() === +m[1] && parsed.getUTCMonth() === +m[2]-1 && parsed.getUTCFullYear() === +m[3] ? value : null;
+  };
+  const an=numeric(a), bn=numeric(b), ad=date(a), bd=date(b);
+  if (an && bn && an.unit === bn.unit) return Math.sign(an.value-bn.value)*direction;
+  if (ad !== null && bd !== null) return Math.sign(ad-bd)*direction;
+  return a.localeCompare(b, 'pt-BR', {numeric:true,sensitivity:'base'})*direction;
+}
+
 function updateTableView(wrapper) {
   if (!wrapper) return;
   const body = wrapper.querySelector('tbody');
@@ -210,7 +233,7 @@ function updateTableView(wrapper) {
   const column = Number(wrapper.dataset.sortColumn ?? -1);
   const direction = wrapper.dataset.sortDirection === 'desc' ? -1 : 1;
   if (column >= 0) {
-    rows.sort((a, b) => (a.cells[column]?.textContent || '').trim().localeCompare((b.cells[column]?.textContent || '').trim(), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction);
+    rows.sort((a, b) => compareTableCells(a.cells[column]?.textContent, b.cells[column]?.textContent, direction));
     for (const row of rows) body.appendChild(row);
   }
   const filtered = rows.filter((row) => !query || row.textContent.toLocaleLowerCase('pt-BR').includes(query));
@@ -249,14 +272,15 @@ async function viewExec() {
   const scope={...(selectedAccount?{accountId:selectedAccount}:{}),...(filters.marketplace?{marketplace:filters.marketplace}:{}),days:filters.days,...(filters.listingId?{listingId:filters.listingId}:{}),...(filters.skuId?{skuId:filters.skuId}:{})};
   const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('7');
   const diagnosticScope={accountId:scope.accountId,marketplace:scope.marketplace,listingId:scope.listingId,skuId:scope.skuId,primaryFrom,primaryTo,comparisonFrom,comparisonTo,groupBy:'listing'};
-  const [kpis, missions, alerts, history, realized, diagnostic, profitRows] = await Promise.all([
+  const [kpis, missions, alerts, history, realized, diagnostic, profitRows, session] = await Promise.all([
     api('kpi.dashboard', scope).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
-    api('alerts.list', {}).catch((e) => ({ error: e.message })),
+    api('alerts.list', selectedAccount?{accountId:selectedAccount,includeGlobal:true,limit:200}:{limit:200}).catch((e) => ({ error: e.message })),
     api('kpi.history', scope).catch((e) => ({ error: e.message })),
     selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
     api('kpi.compare.detail',diagnosticScope).catch(e=>({error:e.message})),
     selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.list',{accountId:selectedAccount,limit:100}).catch(e=>({error:e.message})):Promise.resolve(null),
+    state.token?api('auth.session',{token:state.token}).catch(()=>null):Promise.resolve(null),
   ]);
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   if (generation === viewRenderSequence) state.historyPoints = historyPoints;
@@ -277,22 +301,22 @@ async function viewExec() {
     ['ACoS', k ? pct(k.acosPct) : '—', 'acos'],
     ['ROAS', k ? num(k.roas, 2) : '—', 'roas'],
     ['Devoluções', k ? pct(k.returnRatePct) : '—', 'returnRate'],
-    ['Cobertura de estoque', k ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
+    ['Cobertura de estoque', k && typeof k.stockCoverageDays === 'number' && Number.isFinite(k.stockCoverageDays) ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
   ];
 
   const signals=(diagnostic?.rows||[]).flatMap(row=>(row.diagnostics||[]).map(d=>({label:row.label,...d})));
-  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history], ['Diagnósticos',diagnostic], ['Registros de lucro',profitRows] ].filter(([, value]) => value?.error);
+  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history], ['Diagnósticos',diagnostic], ['Registros de lucro',profitRows], ['Resumo do lucro realizado',realized] ].filter(([, value]) => value?.error);
   return `
     ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
     ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
-    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas mantêm o escopo próprio.</p>`)}
+    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas seguem a loja selecionada; alertas globais são identificados separadamente, sem inferir filtro por anúncio ou período.</p>`)}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
     ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
     ${card('Diagnósticos automáticos — 7 dias completos', '<p class="muted small">'+esc(diagnostic?.diagnosticPolicy||'Comparação de snapshots; não comprova causalidade.')+' · '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+' (UTC).</p>'+table(['Anúncio','Indicador','Atual','Anterior','Sinal observado'],signals.slice(0,100).map(d=>'<tr><td>'+esc(d.label)+'</td><td>'+esc(d.metric)+'</td><td>'+num(d.current,2)+'</td><td>'+num(d.previous,2)+'</td><td>'+esc(d.note)+'</td></tr>'),diagnostic?.error?'Falha ao consultar diagnósticos.':'Nenhum sinal com evidência suficiente.')+table(['Campanha','Investimento','Receita atribuída'],(diagnostic?.campaigns||[]).slice(0,100).map(d=>'<tr><td>'+esc(d.label||d.campaignId)+'</td><td>'+brl(d.spend*100)+'</td><td>'+brl(d.attributedRevenue*100)+'</td></tr>'),'Nenhuma campanha com evidência suficiente para revisão.')+'<button class="btn" data-act="nav" data-view="compare">Abrir comparações detalhadas</button>')}
     ${card('Histórico do lucro registrado',table(['Período inicial','Período final','Escopo','Lucro registrado','Origem'],(Array.isArray(profitRows)?profitRows:[]).map(r=>'<tr><td>'+dt(r.period_start)+'</td><td>'+dt(r.period_end)+'</td><td>'+esc(r.listing_id||'Loja')+'</td><td>'+brl(r.realizedProfitCents)+'</td><td>'+esc(r.source_class)+'</td></tr>'),profitRows?.error?'Falha ao carregar registros.':'Selecione uma loja com registros de lucro.')+'<p class="muted small">Registros individuais; períodos sobrepostos não são somados.</p>')}
-    ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
+    ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Cobertura de estoque: estoque disponível ÷ média diária de vendas, quando ambas as entradas estão disponíveis. Lucro de contribuição e margem de contribuição não são calculados pelo agregado de snapshots sem custos conciliados. Lucro realizado exige registros financeiros conciliados e não equivale ao lucro estimado. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
     ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric">${Object.entries(historyMetricConfig()).map(([key,m])=>`<option value="${esc(key)}">${esc(m.label)}</option>`).join('')}</select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
@@ -304,11 +328,14 @@ async function viewExec() {
         </div>`).join('')
       : missions?.error ? '<div class="empty bad-text">Missões indisponíveis.</div>' : '<div class="empty">Nenhuma missão calculada. Rode a captura de dados primeiro.</div>')}
 
-    ${card('Alertas', table(['Severidade', 'Regra', 'Mensagem', 'Quando'],
-      (Array.isArray(alerts) ? alerts : []).slice(0, 20).map((a) => `<tr>
-        <td>${badge(a.severity || '—', a.severity === 'CRITICO' ? 'bad' : 'warn')}</td>
-        <td>${esc(a.rule || a.type || '—')}</td><td>${esc(a.message || '')}</td><td>${dt(a.created_at)}</td></tr>`),
-      alerts?.error ? 'Falha ao consultar alertas.' : 'Nenhum alerta ativo.'))}
+    ${card('Alertas', '<p class="muted small">Últimos 200 registros do escopo; globais identificados separadamente. Reconhecer um alerta não altera o marketplace.</p>'+table(['Escopo','Severidade','Regra','Mensagem','Quando','Estado','Ações'],
+      (Array.isArray(alerts) ? alerts : []).map((a) => `<tr>
+        <td>${esc(a.account_id||'Global')}</td>
+        <td>${badge(a.severity || '—', ['CRITICO','CRITICAL'].includes(a.severity) ? 'bad' : a.severity==='INFO'?'info':'warn')}</td>
+        <td>${esc(a.rule || a.kind || '—')}</td><td>${esc(a.title || a.message || '—')}${a.recommendation?'<div class="muted small">'+esc(a.recommendation)+'</div>':''}</td><td>${dt(a.created_at)}</td>
+        <td>${a.acknowledged_at?(a.false_positive?'Falso positivo':'Reconhecido'):'Pendente'}</td>
+        <td>${!a.acknowledged_at&&session?.ok&&session.role==='super_admin'?`<button type="button" class="btn tiny" data-act="alert-ack" data-id="${esc(a.id)}" data-account="${esc(a.account_id||'')}">Reconhecer</button> <button type="button" class="btn tiny ghost" data-act="alert-ack" data-id="${esc(a.id)}" data-account="${esc(a.account_id||'')}" data-false="true">Falso positivo</button>`:'—'}</td></tr>`),
+      alerts?.error ? 'Falha ao consultar alertas.' : 'Nenhum alerta registrado no escopo.'))}
     ${card('Previsão de tendência local', `
       <div class="form-row">
         <label>Métrica <select id="fcst-metric"><option value="gmv">GMV</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="units">Unidades</option><option value="adSpend">Investimento em Ads</option><option value="adAttributedRevenue">Receita atribuída a Ads</option><option value="stockAvailable">Estoque disponível</option></select></label>
@@ -1540,6 +1567,13 @@ function createXlsxReport(report) {
 
 let compareRequestSequence=0;
 const ACTIONS = {
+  'alert-ack': async d => {
+    const generation=viewRenderSequence,selectedAccount=state.accountId,accountId=d.account||null,falsePositive=d.false==='true';
+    if(selectedAccount&&accountId&&selectedAccount!==accountId)throw Error('Alerta de outra conta.');
+    if(!confirm(falsePositive?'Classificar este alerta como falso positivo?':'Reconhecer este alerta?'))return;
+    await api('alerts.ack',{alertId:d.id,accountId,falsePositive});
+    if(generation===viewRenderSequence&&selectedAccount===state.accountId){toast('Alerta registrado.');await renderView();}
+  },
   'browser-operation-save': async () => {
     await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
     await renderView();
@@ -1972,21 +2006,20 @@ const ACTIONS = {
   'exec-filter': async()=>{state.execFilters={marketplace:$('#exec-market').value,days:Number($('#exec-days').value),listingId:$('#exec-listing').value.trim(),skuId:$('#exec-sku').value.trim()};await renderView();},
   'kpi-drilldown': async (d) => {
     const metric = d.metric;
+    const generation=viewRenderSequence, accountId=state.accountId, host=$('#kpi-drilldown-out');
+    if(!host)return;
     const supported = new Set(['gmv','netRevenue','orders','visits','cvr','aov','acos','roas','returnRate']);
     if (!supported.has(metric)) throw new Error('Detalhamento ainda não disponível para este indicador.');
-    const today = new Date();
-    const day = (offset) => { const value = new Date(today); value.setDate(value.getDate() + offset); return value.toISOString().slice(0, 10); };
+    const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('7');
     const result = await run(() => api('kpi.compare.detail', {
-      primaryFrom: day(-6), primaryTo: day(0),
-      comparisonFrom: day(-13), comparisonTo: day(-7),
+      primaryFrom, primaryTo, comparisonFrom, comparisonTo,
       groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),...(state.execFilters.marketplace?{marketplace:state.execFilters.marketplace}:{}),...(state.execFilters.listingId?{listingId:state.execFilters.listingId}:{}),...(state.execFilters.skuId?{skuId:state.execFilters.skuId}:{}),
     }));
     const metricLabel = { gmv:'GMV', netRevenue:'Receita líquida', orders:'Pedidos', visits:'Visitas', cvr:'CVR', aov:'Ticket médio', acos:'ACoS', roas:'ROAS', returnRate:'Taxa de devolução' }[metric] || metric;
     const format = (value) => value == null ? '—' : ['gmv','netRevenue','aov'].includes(metric) ? brl(Math.round(value * 100)) : ['cvr','acos','returnRate'].includes(metric) ? pct(value) : metric === 'roas' ? num(value, 2) : num(value);
     const rows = (result.rows || []).filter((row) => row.current?.metrics?.[metric] != null || row.previous?.metrics?.[metric] != null).slice(0, 100);
-    const host = $('#kpi-drilldown-out');
-    if (!host) return;
-    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação observada','Variação com filtros compatíveis'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td><td>${row.verifiedDeltaPct?.[metric] == null ? 'Não comprovada' : `${num(row.verifiedDeltaPct[metric],1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#kpi-drilldown-out'))return;
+    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias completos UTC (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação observada','Variação com filtros compatíveis'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td><td>${row.verifiedDeltaPct?.[metric] == null ? 'Não comprovada' : `${num(row.verifiedDeltaPct[metric],1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
     initializeTables(host);
     host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
@@ -1994,9 +2027,10 @@ const ACTIONS = {
   'kpi-listing': async () => {
     const id = $('#kpi-listing-id').value.trim();
     if (!id) { toast('Informe o ID do anúncio.', 'bad'); return; }
-    const result = await api('kpi.listing', { listingId: id, accountId: state.accountId || undefined });
-    const target = $('#kpi-listing-out');
-    if (!target) return;
+    const generation=viewRenderSequence,accountId=state.accountId,target=$('#kpi-listing-out');
+    if(!target)return;
+    const result = await api('kpi.listing', { listingId: id, accountId: accountId || undefined });
+    if(generation!==viewRenderSequence||accountId!==state.accountId||target!==$('#kpi-listing-out')||id!==$('#kpi-listing-id')?.value.trim())return;
     if (!result) { target.textContent = 'Nenhum snapshot disponível para este anúncio.'; return; }
     const { conversion_cro: visits, revenue_profit: revenue, operational_health: stock, acquisition_ads: ads } = result.pillars;
     const money = (value) => brl(value == null ? null : Math.round(value * 100));
@@ -2690,7 +2724,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save','schedule-run-download'].includes(el.dataset.act);
+  const protectedAction = ['alert-ack','browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save','schedule-run-download'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
@@ -2701,10 +2735,20 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+function selectAccount(id) {
+  if (id === state.accountId) return;
+  state.accountId = id;
+  state.ownProductId = '';
+  state.execFilters = {...state.execFilters,marketplace:'',listingId:'',skuId:''};
+  activeImportJobId = '';
+  activeImportAccountId = '';
+  reportPaging = null;
+}
+
 async function bootAccountSelector() {
   const accounts = await api('account.list', {});
   const active = (accounts || []).filter(a => a.is_active !== 0);
-  if (!state.accountId || !active.some(a => a.id === state.accountId)) { state.accountId = active[0]?.id || ''; state.ownProductId = ''; }
+  if (!state.accountId || !active.some(a => a.id === state.accountId)) { selectAccount(active[0]?.id || ''); }
   const sel = $('#account');
   sel.innerHTML = active.length ? active.map(a => `<option value="${esc(a.id)}" ${a.id === state.accountId ? 'selected' : ''}>${esc(a.display_name || a.id)} · ${esc(a.marketplace)}</option>`).join('') : '<option value="">nenhuma conta ativa</option>';
 }
@@ -2732,7 +2776,7 @@ async function boot() {
   } catch { /* primeiro uso */ }
 
   await bootAccountSelector();
-  $('#account').addEventListener('change', () => { state.accountId = $('#account').value; state.ownProductId = ''; renderView(); });
+  $('#account').addEventListener('change', () => { selectAccount($('#account').value); renderView(); });
 
   await renderView();
   setInterval(async () => {

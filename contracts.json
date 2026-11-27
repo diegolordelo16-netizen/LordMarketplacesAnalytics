@@ -693,5 +693,17 @@
   },
   "gemini.clearKey": {
     "confirmed": true
-  }
+  },
+  "alerts.list": {
+    "accountId": "optional string",
+    "includeGlobal": "boolean, default false",
+    "includeAcknowledged": "boolean, default true",
+    "limit": "integer 1..200"
+  },
+  "alerts.ack": {
+    "alertId": "string",
+    "accountId": "optional expected account id or null for global",
+    "falsePositive": "boolean"
+  },
+  "competitor.alerts": "optional accountId; legacy alerts feed, exact account scope when provided"
 }

@@ -45,6 +45,13 @@ for (const [name, command] of Object.entries(pkg.scripts ?? {})) {
   }
 }
 
+check(installerIss.split('\n').some(line => line.includes('Name: "autostart"') && line.includes('Flags: unchecked')), 'inicialização automática exige opção explícita no instalador');
+check(installerIss.split('\n').some(line => line.includes('ValueName: "MarketplaceIntelligence"') && line.includes('Tasks: autostart') && line.includes('uninsdeletevalue')), 'registro de inicialização condicionado à opção autorizada');
+check(installerIss.split('\n').some(line => line.includes('ValueName: "MarketplaceIntelligence"') && line.includes('Tasks: not autostart') && line.includes('Flags: deletevalue')), 'desmarcar inicialização remove registro antigo em upgrade');
+check(installerIss.split('\n').some(line => line.includes('Parameters: "--background"') && line.includes('Tasks: autostart')), 'início automático pós-instalação condicionado à opção');
+check(appJs.includes("typeof k.stockCoverageDays === 'number'") && appJs.includes('Number.isFinite(k.stockCoverageDays)'), 'cobertura de estoque indisponível não recebe unidade enganosa');
+check(appJs.includes("['Resumo do lucro realizado',realized]"), 'falha de resumo financeiro aparece nos avisos do painel');
+
 const referenced = [
   manifest.background?.service_worker,
   manifest.side_panel?.default_path,
@@ -221,6 +228,13 @@ inspectJson('.');
 check(jsonCount > 0, 'arquivos JSON encontrados para validação');
 check(serviceTs.includes("i.type==='AUDITORIA'&&auth?.role!=='super_admin'") && serviceTs.includes("report_type<>'AUDITORIA'"), 'auditoria global e agendamentos protegidos');
 check(serviceTs.includes('renderReportPdf(report)') && appJs.includes('atob(r.pdfBase64)'), 'PDF real gerado localmente e baixado pelo painel');
+const finalMatrix = readFileSync(join(root,'docs/MATRIZ-FINAL-365-REQUISITOS.md'),'utf8');
+const originalMatrix = readFileSync(join(root,'docs/AUDITORIA-RECURSIVA-365-REQUISITOS.md'),'utf8');
+const extractMatrixIds = text => [...text.matchAll(/^\|\s*(\d+)\s*\|/gm)].map(m=>Number(m[1]));
+const originalIds = extractMatrixIds(originalMatrix), finalIds = extractMatrixIds(finalMatrix);
+check(originalIds.length===365&&finalIds.length===365&&finalIds.every((id,index)=>id===index+1&&id===originalIds[index]),'matriz final preserva 365 IDs únicos na ordem original');
+check(finalMatrix.includes('Homologação real dispensada; não executada')&&finalMatrix.includes('Não promover para 4.0.0'),'matriz final distingue validação real dispensada de aprovação integral');
+
 const failed = checks.filter((item) => !item.ok);
 console.log(`Auditoria estática: ${checks.length - failed.length}/${checks.length} verificações aprovadas.`);
 for (const item of failed) console.error(`FALHOU: ${item.label}`);

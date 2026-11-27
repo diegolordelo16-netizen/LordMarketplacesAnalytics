@@ -9,10 +9,10 @@
 ; Depois de instalar, registra o host nativo no HKCU (Chrome e Edge) apontando
 ; para o manifesto que autoriza a origem da extensão.
 ;
-; Compilar: ISCC.exe installer/marketplace-intelligence.iss /DAppVersion=3.18.0
+; Compilar: ISCC.exe installer/marketplace-intelligence.iss /DAppVersion=3.19.0
 
 #ifndef AppVersion
-  #define AppVersion "3.18.0"
+  #define AppVersion "3.19.0"
 #endif
 #ifndef ExtensionId
   ; ID de desenvolvimento: o instalador grava o ID informado no build.
@@ -53,6 +53,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 [Tasks]
 ; Marcado por padrão: o usuário pediu atalho na Área de Trabalho.
 Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDescription: "Atalhos:"
+Name: "autostart"; Description: "Iniciar o serviço local ao entrar no Windows"; GroupDescription: "Inicialização:"; Flags: unchecked
 
 [Files]
 ; Runtime
@@ -65,6 +66,7 @@ Source: "{#SourceRoot}\dist\local-agent\third-party\open-seo\LICENSE"; DestDir: 
 Source: "{#SourceRoot}\dist\local-agent\migrations\*.sql"; DestDir: "{app}\local-agent\migrations"; Flags: ignoreversion
 ; Host nativo
 Source: "{#SourceRoot}\dist\native-host\native-host.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
+Source: "{#SourceRoot}\dist\native-host\native-host.bat"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\register.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\package.json"; DestDir: "{app}\native-host"; Flags: ignoreversion
 ; Extensão (para carregar no navegador)
@@ -74,6 +76,7 @@ Source: "{#SourceRoot}\packages\local-agent\panel\src\*"; DestDir: "{app}\local-
 ; Utilitários
 Source: "{#SourceRoot}\installer\scripts\update-manager.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\start-panel.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceRoot}\installer\scripts\start-panel.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\install-extension.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\abrir-extensoes.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\abrir-navegador.cmd"; DestDir: "{app}"; Flags: ignoreversion
@@ -85,7 +88,8 @@ Name: "{localappdata}\MarketplaceIntelligence\logs"; Permissions: users-full
 
 [Registry]
 ; Início automático no logon do usuário atual (HKCU, não exige administrador).
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MarketplaceIntelligence"; ValueData: """{app}\start-panel.cmd"" --background"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MarketplaceIntelligence"; ValueData: """{app}\start-panel.cmd"" --background"; Flags: uninsdeletevalue; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "MarketplaceIntelligence"; Flags: deletevalue; Tasks: not autostart
 
 [Icons]
 Name: "{group}\{#AppName} — Painel local"; Filename: "{app}\start-panel.cmd"; IconFilename: "{app}\node.exe"; WorkingDir: "{app}"
@@ -101,7 +105,7 @@ Filename: "{app}\node.exe"; Parameters: """{app}\native-host\register.js"" --ext
 Filename: "{app}\start-panel.cmd"; Description: "Abrir o painel local agora (Pré-Start e diagnóstico)"; Flags: postinstall nowait skipifsilent
 ; Início automático com o Windows, sem janela: o serviço sobe em segundo plano e
 ; o atalho do Menu Iniciar só abre a tela no navegador.
-Filename: "{app}\start-panel.cmd"; Parameters: "--background"; Flags: runhidden nowait
+Filename: "{app}\start-panel.cmd"; Parameters: "--background"; Flags: runhidden nowait; Tasks: autostart
 
 [UninstallRun]
 Filename: "{app}\node.exe"; Parameters: """{app}\native-host\register.js"" --unregister"; Flags: runhidden waituntilterminated

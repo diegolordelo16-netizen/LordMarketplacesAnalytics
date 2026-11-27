@@ -145,7 +145,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     knowledge,
     autoUpgrade,
     capture,
-    version: options.version ?? process.env.MI_VERSION ?? '3.18.0',
+    version: options.version ?? process.env.MI_VERSION ?? '3.19.0',
   });
 
   // Token de sessão do painel: gerado a cada início, nunca persistido em disco.
@@ -155,7 +155,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     db,
     service,
     gemini,
-    version: options.version ?? process.env.MI_VERSION ?? '3.18.0',
+    version: options.version ?? process.env.MI_VERSION ?? '3.19.0',
     token,
     dataDir,
     close: async () => {
@@ -298,7 +298,7 @@ export async function start(options: BootstrapOptions = {}): Promise<StartedApp>
       app.token = fresh;
       try {
         const port = panel.port || Number(readFileSync(join(app.dataDir, 'port.txt'), 'utf8').trim());
-        writeFileSync(join(app.dataDir, 'panel-url.txt'), `http://127.0.0.1:${port}/?token=${fresh}`, {
+        writeFileSync(join(app.dataDir, 'panel-url.txt'), `http://127.0.0.1:${port}/`, {
           encoding: 'utf8',
           mode: 0o600,
         });
@@ -472,8 +472,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const app = await start(options);
   const logger = createFileLogger(join(app.dataDir, 'logs'), 'service.log');
-  // Token de sessão entra na URL apenas em 127.0.0.1 (nunca é persistido em disco).
-  const panelUrl = `${app.url}?token=${app.token}`;
+  // O navegador recupera a sessão pela rota same-origin; a URL do launcher não contém token.
+  const panelUrl = app.url ?? '';
   // O token de sessão nunca vai para arquivo de log.
   logger.info(`painel local em ${app.url} (modo ${mode}) · pid ${process.pid}`);
   logger.info(`protocolo 1 · pasta de dados ${app.dataDir}`);

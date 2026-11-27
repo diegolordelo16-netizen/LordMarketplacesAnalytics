@@ -8,8 +8,8 @@
  *   node register.js --extension-id=XXXX  define o ID autorizado
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { appDataDir } from './host';
 import { HOST_NAME, buildRegFile, planRegistration, writeManifest } from './register';
 
@@ -46,11 +46,19 @@ function main(): void {
     process.exit(2);
   }
 
-  // O host roda a partir da pasta do instalador; o manifesto guarda o caminho absoluto.
-  const hostDir = dirname(process.argv[1] ?? '.');
-  const hostScript = join(hostDir, 'native-host.js');
+  if (!/^[a-p]{32}$/.test(extensionId)) {
+    process.stderr.write('ID da extensão inválido: esperado 32 letras de a a p\n');
+    process.exit(2);
+  }
+
+  // Chromium interpreta path como caminho de arquivo, não uma linha de comando.
+  const hostDir = dirname(resolve(process.argv[1] ?? '.'));
+  const hostPath = join(hostDir, 'native-host.bat');
   const nodeExe = join(dirname(hostDir), 'node.exe');
-  const hostPath = existsSync(nodeExe) ? `${nodeExe} "${hostScript}"` : hostScript;
+  if (!existsSync(hostPath) || !existsSync(nodeExe) || !existsSync(join(hostDir, 'native-host.js'))) {
+    process.stderr.write('Host nativo ou runtime ausente: reinstale o pacote Windows completo\n');
+    process.exit(2);
+  }
 
   const plan = planRegistration({ appDataDir: dataDir, hostExePath: hostPath, extensionId });
   writeManifest(plan);
@@ -66,7 +74,6 @@ function main(): void {
   if (failures.length > 0) {
     const regPath = join(dirname(plan.manifestPath), 'register.reg');
     try {
-      const { writeFileSync } = require('node:fs') as typeof import('node:fs');
       writeFileSync(regPath, buildRegFile(plan), 'utf8');
     } catch {
       /* .reg é apenas um plano B */
