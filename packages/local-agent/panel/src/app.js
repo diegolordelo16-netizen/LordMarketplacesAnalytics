@@ -57,8 +57,8 @@ function pct(v) {
   return v == null ? '—' : `${num(v, 1)}%`;
 }
 
-function renderHistoryChart(points, metric = 'gmvCents') {
-  const config = {
+function historyMetricConfig(){
+  return {
     gmvCents: { label: 'GMV', format: (v) => brl(v), color: '#5b8def' },
     netRevenueCents: { label: 'Receita líquida', format: (v) => brl(v), color: '#16a085' },
     orders: { label: 'Pedidos', format: (v) => num(v), color: '#a66dd4' },
@@ -67,7 +67,38 @@ function renderHistoryChart(points, metric = 'gmvCents') {
     adAttributedRevenueCents: { label: 'Receita atribuída Ads', format: (v) => brl(v), color: '#2696a6' },
     commissionCents: { label: 'Comissões observadas', format: (v) => brl(v), color: '#9b7bd3' },
     fixedFeeCents: { label: 'Tarifas fixas observadas', format: (v) => brl(v), color: '#be8b51' },
+    units: { label: "Unidades", format: (v) => num(v,2), color: '#5b8def' },
+    stockAvailable: { label: "Estoque disponível", format: (v) => num(v,2), color: '#5b8def' },
+    returnsCount: { label: "Devoluções", format: (v) => num(v,2), color: '#5b8def' },
+    cancellations: { label: "Cancelamentos", format: (v) => num(v,2), color: '#5b8def' },
+    adClicks: { label: "Cliques Ads", format: (v) => num(v,2), color: '#5b8def' },
+    adAttributedOrders: { label: "Pedidos atribuídos Ads", format: (v) => num(v,2), color: '#5b8def' },
+    paidImpressions: { label: "Impressões pagas", format: (v) => num(v,2), color: '#5b8def' },
+    organicImpressions: { label: "Impressões orgânicas", format: (v) => num(v,2), color: '#5b8def' },
+    questionsPending: { label: "Perguntas pendentes", format: (v) => num(v,2), color: '#5b8def' },
+    questionsAnswered: { label: "Perguntas respondidas", format: (v) => num(v,2), color: '#5b8def' },
+    reviewCount: { label: "Avaliações", format: (v) => num(v,2), color: '#5b8def' },
+    reviewRating: { label: "Nota observada", format: (v) => num(v,2), color: '#5b8def' },
+    organicClicks: { label: "Cliques orgânicos", format: (v) => num(v,2), color: '#5b8def' },
+    favorites: { label: "Favoritos", format: (v) => num(v,2), color: '#5b8def' },
+    addToCart: { label: "Adições ao carrinho", format: (v) => num(v,2), color: '#5b8def' },
+    newCustomers: { label: "Novos clientes", format: (v) => num(v,2), color: '#5b8def' },
+    returningCustomers: { label: "Clientes recorrentes", format: (v) => num(v,2), color: '#5b8def' },
+    shippingFeeCents: { label: "Frete", format: (v) => brl(v), color: '#5b8def' },
+    taxCents: { label: "Tributos", format: (v) => brl(v), color: '#5b8def' },
+    marketplaceFeeCents: { label: "Tarifas marketplace", format: (v) => brl(v), color: '#5b8def' },
+    returnsValue: { label: "Valor das devoluções", format: (v) => brl(v*100), color: '#5b8def' },
+    cancellationValue: { label: "Valor dos cancelamentos", format: (v) => brl(v*100), color: '#5b8def' },
+    discounts: { label: "Descontos observados", format: (v) => brl(v*100), color: '#5b8def' },
+    cvr: { label: "Conversão observada", format: (v) => pct(v), color: '#5b8def' },
+    aovCents: { label: "Ticket médio observado", format: (v) => brl(v), color: '#5b8def' },
+    acosPct: { label: "ACoS observado", format: (v) => pct(v), color: '#5b8def' },
+    roas: { label: "ROAS observado", format: (v) => num(v,2), color: '#5b8def' },
+    returnRatePct: { label: "Taxa de devolução observada", format: (v) => pct(v), color: '#5b8def' },
   };
+}
+function renderHistoryChart(points, metric = 'gmvCents') {
+  const config=historyMetricConfig();
   const selected = config[metric] ? metric : 'gmvCents';
   const meta = config[selected];
   const valid = (Array.isArray(points) ? points : []).filter((p) => typeof p[selected] === 'number' && Number.isFinite(p[selected]));
@@ -254,7 +285,7 @@ async function viewExec() {
     ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
     ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
-    ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
+    ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric">${Object.entries(historyMetricConfig()).map(([key,m])=>`<option value="${esc(key)}">${esc(m.label)}</option>`).join('')}</select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
     ${card('Missões do dia', Array.isArray(missions) && missions.length
       ? missions.map((m) => `<div class="mission">
@@ -875,7 +906,7 @@ async function viewCompare() {
         <label>Janela de captura (UTC)<select id="cmp-preset"><option value="30">30 dias completos vs anteriores</option><option value="7">7 dias completos vs anteriores</option><option value="today">Hoje vs ontem (hoje parcial)</option><option value="month">Mês até ontem vs dias equivalentes</option><option value="custom">Personalizada</option></select></label>
         <label>Marketplace<select id="cmp-marketplace"><option value="">Todos</option><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label>
         <label>ID interno do anúncio (opcional)<input id="cmp-listing-id" maxlength="200"></label><label>ID interno do SKU (opcional)<input id="cmp-sku-id" maxlength="200"></label>
-        <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option></select></label>
+        <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option><option value="marketplace">Marketplace</option></select></label>
         <label>Período atual — início<input id="cmp-primary-from" type="date" value="${primaryFrom}"></label>
         <label>Período atual — fim<input id="cmp-primary-to" type="date" value="${primaryTo}"></label>
         <label>Período anterior — início<input id="cmp-previous-from" type="date" value="${comparisonFrom}"></label>
