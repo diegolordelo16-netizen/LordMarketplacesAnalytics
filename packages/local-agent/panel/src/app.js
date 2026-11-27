@@ -1670,7 +1670,7 @@ const ACTIONS = {
   },
   'product-review': async d=>{
     const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;
-    const p=d.kind==='VARIATION'?{id:d.id,decision:d.decision,reason}:{accountId:state.accountId,id:d.id,decision:d.decision,reason};
+    const p=d.kind==='VARIATION'?{accountId:state.accountId,id:d.id,decision:d.decision,reason}:{accountId:state.accountId,id:d.id,decision:d.decision,reason};
     await run(()=>api(d.kind==='VARIATION'?'offer.variation.review':'listing.change.review',p),'Revisão registrada.');await renderView();
   },
   'variation-save': async()=>{
@@ -1711,7 +1711,7 @@ const ACTIONS = {
     const obj=id=>{const v=JSON.parse($('#'+id).value);if(!v||Array.isArray(v)||typeof v!=='object')throw Error('Informe um objeto JSON.');return v;};
     await run(()=>api('campaign.change.prepare',{accountId:state.accountId,marketplace:$('#campaign-market').value,campaignRef:$('#campaign-ref').value.trim(),baseline:obj('campaign-baseline'),changes:obj('campaign-changes'),reason:$('#campaign-reason').value.trim()}),'Proposta local salva. Nenhuma alteração remota.');await renderView();
   },
-  'campaign-review': async d=>{const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;await run(()=>api('campaign.change.review',{proposalId:d.id,decision:d.decision,reason}),'Revisão registrada; execução remota bloqueada.');await renderView();},
+  'campaign-review': async d=>{const reason=prompt('Motivo da decisão (não executa alteração remota):');if(!reason)return;await run(()=>api('campaign.change.review',{accountId:state.accountId,proposalId:d.id,decision:d.decision,reason}),'Revisão registrada; execução remota bloqueada.');await renderView();},
   'finance-realized-save': async()=>{
     const accountId=state.accountId,generation=viewRenderSequence,host=$('#rp-out');
     const payload=realizedPayload(id=>$('#'+id).value,accountId);
