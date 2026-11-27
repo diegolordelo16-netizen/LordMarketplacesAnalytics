@@ -2273,8 +2273,8 @@ export class LocalService {
     });
 
     this.register('competitor.alerts', (payload) => {
-      const i = z.object({ accountId: z.string().optional() }).parse(payload ?? {});
-      return db.rows<Record<string, unknown>>('SELECT * FROM alerts ORDER BY created_at DESC LIMIT 200');
+      const i = z.object({ accountId: z.string().min(1).optional() }).parse(payload ?? {});
+      return db.rows<Record<string, unknown>>('SELECT * FROM alerts WHERE (? IS NULL OR account_id=?) ORDER BY created_at DESC,id DESC LIMIT 200',i.accountId??null,i.accountId??null);
     });
 
     // ------------------------------- inteligência competitiva assistida (§22)
@@ -4674,13 +4674,28 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       this.audit(auth,'FORECAST_RUN','forecast',runId,'OK',`${i.metric}; ${observations.length} semanas`);
       return { ok: true, runId, account, metric: i.metric, method: 'weekly_linear_trend', horizonDays: i.horizonDays, observations, trendPerWeek: slope, rmse, mape, interval: 'heurístico aproximado de 80%; não representa garantia nem causalidade', points };
     });
-    this.register('alerts.list', () => db.rows<Record<string, unknown>>('SELECT * FROM alerts ORDER BY created_at DESC LIMIT 200'));
-    this.register('alerts.ack', (payload, auth) => {
-      const i = z.object({ alertId: z.string(), falsePositive: z.boolean().default(false) }).parse(payload);
-      db.db.prepare('UPDATE alerts SET acknowledged_at = ?, false_positive = ? WHERE id = ?').run(new Date().toISOString(), i.falsePositive ? 1 : 0, i.alertId);
-      this.audit(auth, 'ALERT_ACK', 'alert', i.alertId, 'OK', i.falsePositive ? 'falso positivo' : undefined);
-      return { ok: true };
+    this.register('alerts.list', payload => {
+      const i=z.object({accountId:z.string().min(1).optional(),includeGlobal:z.boolean().default(false),includeAcknowledged:z.boolean().default(true),limit:z.number().int().min(1).max(200).default(200)}).strict().parse(payload??{});
+      return db.rows<Record<string, unknown>>(`SELECT * FROM alerts
+        WHERE (? IS NULL OR account_id=? OR (?=1 AND account_id IS NULL))
+          AND (?=1 OR acknowledged_at IS NULL)
+        ORDER BY created_at DESC,id DESC LIMIT ?`,i.accountId??null,i.accountId??null,i.includeGlobal?1:0,i.includeAcknowledged?1:0,i.limit);
     });
+    this.register('alerts.ack', (payload, auth) => db.transaction(() => {
+      const i = z.object({ alertId: z.string().min(1).max(200), accountId:z.string().min(1).nullable().optional(), falsePositive: z.boolean().default(false) }).strict().parse(payload);
+      const before=db.row<{account_id:string|null;acknowledged_at:string|null;false_positive:number}>('SELECT account_id,acknowledged_at,false_positive FROM alerts WHERE id=?',i.alertId);
+      if(!before)throw Error('alerta não encontrado');
+      if(i.accountId!==undefined&&before.account_id!==i.accountId)throw Error('alerta não pertence ao escopo informado');
+      if(before.acknowledged_at){
+        if(Boolean(before.false_positive)!==i.falsePositive)throw Error('alerta já reconhecido com outra classificação');
+        return {ok:true,alreadyAcknowledged:true,acknowledgedAt:before.acknowledged_at};
+      }
+      const at=nowIso();
+      const changed=db.db.prepare('UPDATE alerts SET acknowledged_at = ?, false_positive = ? WHERE id = ? AND acknowledged_at IS NULL').run(at, i.falsePositive ? 1 : 0, i.alertId);
+      if(Number(changed.changes)!==1)throw Error('alerta alterado durante a confirmação');
+      this.audit(auth, 'ALERT_ACK', 'alert', i.alertId, 'OK', i.falsePositive ? 'falso positivo' : undefined,{accountId:before.account_id,before:{acknowledgedAt:null,falsePositive:Boolean(before.false_positive)},after:{acknowledgedAt:at,falsePositive:i.falsePositive}});
+      return { ok: true, alreadyAcknowledged:false,acknowledgedAt:at };
+    }));
 
     /**
      * Exportação real: devolve as linhas do relatório pedido, com o formato

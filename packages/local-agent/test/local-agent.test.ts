@@ -2899,3 +2899,33 @@ describe('Migração 052 — preservação do histórico',()=>{
     }finally{legacy.close();}
   });
 });
+
+describe('Alertas da etapa 10',()=>{
+  it('isola escopo e globais; reconhece uma única vez e não aceita alerta inexistente ou classificação divergente',async()=>{
+    seedImportAccount('alert-a');seedImportAccount('alert-b');
+    const stmt=db.db.prepare("INSERT INTO alerts(id,account_id,kind,severity,title,rule,created_at) VALUES(?,?,?,'WARN',?,?,?)");
+    const at=new Date().toISOString();
+    stmt.run('alert-a1','alert-a','TEST','Alerta A','TEST',at);
+    stmt.run('alert-b1','alert-b','TEST','Alerta B','TEST',at);
+    stmt.run('alert-global',null,'TEST','Global','TEST',at);
+    expect((await call('alerts.list',{accountId:'alert-a'})).result).toMatchObject([{id:'alert-a1'}]);
+    const withGlobal=(await call('alerts.list',{accountId:'alert-a',includeGlobal:true})).result as {id:string}[];
+    expect(withGlobal.map(x=>x.id).sort()).toEqual(['alert-a1','alert-global']);
+    expect((await call('competitor.alerts',{accountId:'alert-a'})).result).toMatchObject([{id:'alert-a1'}]);
+    expect((await call('alerts.ack',{alertId:'absent',accountId:'alert-a'})).ok).toBe(false);
+    expect((await call('alerts.ack',{alertId:'alert-b1',accountId:'alert-a'})).ok).toBe(false);
+    const first=await call('alerts.ack',{alertId:'alert-a1',accountId:'alert-a',falsePositive:true});
+    expect(first.result).toMatchObject({ok:true,alreadyAcknowledged:false});
+    expect((await call('alerts.ack',{alertId:'alert-a1',accountId:'alert-a',falsePositive:true})).result).toMatchObject({ok:true,alreadyAcknowledged:true});
+    expect((await call('alerts.ack',{alertId:'alert-a1',accountId:'alert-a',falsePositive:false})).ok).toBe(false);
+    expect((await call('alerts.list',{accountId:'alert-a',includeAcknowledged:false})).result).toEqual([]);
+    expect(db.row("SELECT COUNT(*) n FROM audit_log WHERE action='ALERT_ACK' AND entity_id='alert-a1'")).toMatchObject({n:1});
+    expect(db.row("SELECT acknowledged_at FROM alerts WHERE id='alert-b1'")).toMatchObject({acknowledged_at:null});
+    await call('user.upsert',{email:'alert-operator@local.test',displayName:'Operador',role:'operador',password:'senha-alerta-op-123'});
+    const login=await call('auth.login',{email:'alert-operator@local.test',password:'senha-alerta-op-123'},false);
+    const operator=(login.result as {token:string}).token;
+    const denied=await service.handle({id:'denied',protocolVersion:1,method:'alerts.ack',payload:{alertId:'alert-global',accountId:null},token:operator});
+    expect(denied.ok).toBe(false);
+    expect(db.row("SELECT acknowledged_at FROM alerts WHERE id='alert-global'")).toMatchObject({acknowledged_at:null});
+  });
+});

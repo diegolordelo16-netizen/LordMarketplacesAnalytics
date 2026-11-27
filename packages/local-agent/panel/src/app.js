@@ -272,14 +272,15 @@ async function viewExec() {
   const scope={...(selectedAccount?{accountId:selectedAccount}:{}),...(filters.marketplace?{marketplace:filters.marketplace}:{}),days:filters.days,...(filters.listingId?{listingId:filters.listingId}:{}),...(filters.skuId?{skuId:filters.skuId}:{})};
   const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('7');
   const diagnosticScope={accountId:scope.accountId,marketplace:scope.marketplace,listingId:scope.listingId,skuId:scope.skuId,primaryFrom,primaryTo,comparisonFrom,comparisonTo,groupBy:'listing'};
-  const [kpis, missions, alerts, history, realized, diagnostic, profitRows] = await Promise.all([
+  const [kpis, missions, alerts, history, realized, diagnostic, profitRows, session] = await Promise.all([
     api('kpi.dashboard', scope).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
-    api('alerts.list', {}).catch((e) => ({ error: e.message })),
+    api('alerts.list', selectedAccount?{accountId:selectedAccount,includeGlobal:true,limit:200}:{limit:200}).catch((e) => ({ error: e.message })),
     api('kpi.history', scope).catch((e) => ({ error: e.message })),
     selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
     api('kpi.compare.detail',diagnosticScope).catch(e=>({error:e.message})),
     selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.list',{accountId:selectedAccount,limit:100}).catch(e=>({error:e.message})):Promise.resolve(null),
+    state.token?api('auth.session',{token:state.token}).catch(()=>null):Promise.resolve(null),
   ]);
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   if (generation === viewRenderSequence) state.historyPoints = historyPoints;
@@ -309,7 +310,7 @@ async function viewExec() {
     ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
     ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
-    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas mantêm o escopo próprio.</p>`)}
+    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas seguem a loja selecionada; alertas globais são identificados separadamente, sem inferir filtro por anúncio ou período.</p>`)}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
     ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
@@ -327,11 +328,14 @@ async function viewExec() {
         </div>`).join('')
       : missions?.error ? '<div class="empty bad-text">Missões indisponíveis.</div>' : '<div class="empty">Nenhuma missão calculada. Rode a captura de dados primeiro.</div>')}
 
-    ${card('Alertas', table(['Severidade', 'Regra', 'Mensagem', 'Quando'],
-      (Array.isArray(alerts) ? alerts : []).slice(0, 20).map((a) => `<tr>
-        <td>${badge(a.severity || '—', a.severity === 'CRITICO' ? 'bad' : 'warn')}</td>
-        <td>${esc(a.rule || a.type || '—')}</td><td>${esc(a.message || '')}</td><td>${dt(a.created_at)}</td></tr>`),
-      alerts?.error ? 'Falha ao consultar alertas.' : 'Nenhum alerta ativo.'))}
+    ${card('Alertas', '<p class="muted small">Últimos 200 registros do escopo; globais identificados separadamente. Reconhecer um alerta não altera o marketplace.</p>'+table(['Escopo','Severidade','Regra','Mensagem','Quando','Estado','Ações'],
+      (Array.isArray(alerts) ? alerts : []).map((a) => `<tr>
+        <td>${esc(a.account_id||'Global')}</td>
+        <td>${badge(a.severity || '—', ['CRITICO','CRITICAL'].includes(a.severity) ? 'bad' : a.severity==='INFO'?'info':'warn')}</td>
+        <td>${esc(a.rule || a.kind || '—')}</td><td>${esc(a.title || a.message || '—')}${a.recommendation?'<div class="muted small">'+esc(a.recommendation)+'</div>':''}</td><td>${dt(a.created_at)}</td>
+        <td>${a.acknowledged_at?(a.false_positive?'Falso positivo':'Reconhecido'):'Pendente'}</td>
+        <td>${!a.acknowledged_at&&session?.ok&&session.role==='super_admin'?`<button type="button" class="btn tiny" data-act="alert-ack" data-id="${esc(a.id)}" data-account="${esc(a.account_id||'')}">Reconhecer</button> <button type="button" class="btn tiny ghost" data-act="alert-ack" data-id="${esc(a.id)}" data-account="${esc(a.account_id||'')}" data-false="true">Falso positivo</button>`:'—'}</td></tr>`),
+      alerts?.error ? 'Falha ao consultar alertas.' : 'Nenhum alerta registrado no escopo.'))}
     ${card('Previsão de tendência local', `
       <div class="form-row">
         <label>Métrica <select id="fcst-metric"><option value="gmv">GMV</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="units">Unidades</option><option value="adSpend">Investimento em Ads</option><option value="adAttributedRevenue">Receita atribuída a Ads</option><option value="stockAvailable">Estoque disponível</option></select></label>
@@ -1563,6 +1567,13 @@ function createXlsxReport(report) {
 
 let compareRequestSequence=0;
 const ACTIONS = {
+  'alert-ack': async d => {
+    const generation=viewRenderSequence,selectedAccount=state.accountId,accountId=d.account||null,falsePositive=d.false==='true';
+    if(selectedAccount&&accountId&&selectedAccount!==accountId)throw Error('Alerta de outra conta.');
+    if(!confirm(falsePositive?'Classificar este alerta como falso positivo?':'Reconhecer este alerta?'))return;
+    await api('alerts.ack',{alertId:d.id,accountId,falsePositive});
+    if(generation===viewRenderSequence&&selectedAccount===state.accountId){toast('Alerta registrado.');await renderView();}
+  },
   'browser-operation-save': async () => {
     await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
     await renderView();
@@ -2713,7 +2724,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save','schedule-run-download'].includes(el.dataset.act);
+  const protectedAction = ['alert-ack','browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save','schedule-run-download'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
