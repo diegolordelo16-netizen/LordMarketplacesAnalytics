@@ -358,15 +358,35 @@ export class LocalService {
         try {
           const handler = this.handlers.get('analysis.run');
           if (!handler) throw new Error('handler analysis.run indisponível');
-          const result = await handler({ mode: schedule.mode, accountId: schedule.account_id ?? undefined, days: schedule.days }, null);
-          const serialized = JSON.stringify(result ?? null);
-          const resultJson = serialized.length <= 250_000 ? serialized : JSON.stringify({ truncated: true, reason: 'resultado acima de 250 KB' });
-          const nextAt = nextOccurrence(schedule.next_run_at, schedule.cadence, schedule.interval_minutes, new Date());
-          db.db.prepare(`INSERT INTO analysis_schedule_runs (id,schedule_id,started_at,finished_at,status,result_json,duration_ms)
-                         VALUES (?,?,?,?, 'COMPLETED',?,?)`)
-            .run(runId, schedule.id, new Date(started).toISOString(), nowIso(), resultJson, Date.now() - started);
-          db.db.prepare('UPDATE analysis_schedules SET last_run_at=?,last_status=?,last_error=NULL,next_run_at=?,consecutive_failures=0,updated_at=? WHERE id=?')
-            .run(nowIso(), 'COMPLETED', nextAt, nowIso(), schedule.id);
+          const completed=db.transaction(()=>{
+            if(!db.row('SELECT id FROM analysis_schedules WHERE id=? AND enabled=1 AND next_run_at=?',schedule.id,schedule.next_run_at))return false;
+            let offset=0,total=0,count=0,recommendations=0,pages=0;
+            const samples:unknown[]=[];
+            do{
+              const result=handler({mode:schedule.mode,accountId:schedule.account_id??undefined,days:schedule.days,offset},null);
+              if(result instanceof Promise)throw Error('análise agendada deve usar handler local síncrono');
+              const page=result as {ok?:boolean;listingCount?:number;totalMatched?:number;nextOffset?:number|null;analyses?:Array<{recommendationCount?:number}>};
+              if(!page?.ok||!Number.isInteger(page.totalMatched)||!Number.isInteger(page.listingCount))throw Error('resultado de análise inválido');
+              if(pages===0)total=page.totalMatched!;
+              if(total>3000)throw Error('escopo acima de 3000 anúncios; divida em agendamentos por loja');
+              if(page.totalMatched!==total)throw Error('escopo mudou durante a análise');
+              count+=page.listingCount!;pages++;
+              recommendations+=(page.analyses??[]).reduce((sum,x)=>sum+(x.recommendationCount??0),0);
+              if(samples.length<10)samples.push(...(page.analyses??[]).slice(0,10-samples.length));
+              if(page.nextOffset==null){if(count!==total)throw Error('cobertura incompleta');break;}
+              if(!Number.isInteger(page.nextOffset)||page.nextOffset<=offset||page.nextOffset!==count)throw Error('paginação não avançou');
+              offset=page.nextOffset;
+            }while(pages<=3000);
+            if(count!==total)throw Error('análise não concluiu todas as páginas');
+            const summary={ok:true,mode:schedule.mode,accountId:schedule.account_id,listingCount:count,totalMatched:total,pages,recommendationCount:recommendations,analyses:samples,detailsStoredInAgentRuns:true};
+            const serialized=JSON.stringify(summary);
+            const resultJson=serialized.length<=250000?serialized:JSON.stringify({...summary,analyses:[],sampleOmitted:true});
+            const nextAt=nextOccurrence(schedule.next_run_at,schedule.cadence,schedule.interval_minutes,new Date());
+            db.db.prepare("INSERT INTO analysis_schedule_runs (id,schedule_id,started_at,finished_at,status,result_json,duration_ms) VALUES (?,?,?,?,'COMPLETED',?,?)").run(runId,schedule.id,new Date(started).toISOString(),nowIso(),resultJson,Date.now()-started);
+            db.db.prepare('UPDATE analysis_schedules SET last_run_at=?,last_status=?,last_error=NULL,next_run_at=?,consecutive_failures=0,updated_at=? WHERE id=?').run(nowIso(),'COMPLETED',nextAt,nowIso(),schedule.id);
+            return true;
+          });
+          if(!completed)continue;
           analyses += 1;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -389,7 +409,7 @@ export class LocalService {
         cadence: ScheduleCadence; next_run_at: string; interval_minutes: number | null; consecutive_failures: number;
       }>(
         `SELECT id,account_id,report_type,format,cadence,next_run_at,interval_minutes,consecutive_failures
-           FROM report_schedules WHERE enabled=1 AND next_run_at<=? ORDER BY next_run_at LIMIT ?`, now, Math.max(0, 5 - analyses),
+           FROM report_schedules WHERE enabled=1 AND next_run_at<=? ORDER BY next_run_at LIMIT ?`, now, Math.max(0, 5 - dueAnalyses.length),
       );
       for (const schedule of dueReports) {
         const runId = randomUUID();
@@ -428,7 +448,7 @@ export class LocalService {
         `SELECT s.id,s.scope,s.account_id,s.cadence,s.interval_minutes,s.next_run_at
            FROM sync_schedules s WHERE s.enabled=1 AND s.next_run_at<=?
              AND NOT EXISTS (SELECT 1 FROM sync_schedule_runs r WHERE r.schedule_id=s.id AND r.status IN ('QUEUED','RUNNING'))
-           ORDER BY s.next_run_at LIMIT ?`, now, Math.max(0, 5 - analyses - reports),
+           ORDER BY s.next_run_at LIMIT ?`, now, Math.max(0, 5 - dueAnalyses.length - dueReports.length),
       );
       for (const schedule of dueSyncSchedules) {
         const runId = randomUUID();
