@@ -98,6 +98,8 @@ function estimateTokens(text: string): number {
 }
 
 export class GeminiClient {
+  private busy=false;
+  private pausedUntil=0;
   constructor(
     private readonly db: LocalDatabase,
     private readonly secrets: SecretStore,
@@ -106,6 +108,7 @@ export class GeminiClient {
 
   setKey(key: string): void {
     this.secrets.set(GEMINI_KEY_NAME, key);
+    this.pausedUntil=0;
   }
 
   hasKey(): boolean {
@@ -130,6 +133,13 @@ export class GeminiClient {
 
   /** Chamada com orçamento, registro de consumo e tratamento honesto de falhas. */
   async call(input: GeminiCallInput): Promise<GeminiCallResult> {
+    if(this.busy)return {ok:false,errorCode:'RATE_LIMIT',message:'Já existe chamada externa em andamento; aguarde sua conclusão.',pauseExternal:false};
+    if(Date.now()<this.pausedUntil)return {ok:false,errorCode:'RATE_LIMIT',message:'Chamadas externas temporariamente pausadas após limite do provedor.',pauseExternal:true};
+    this.busy=true;
+    try{return await this.callOnce(input);}finally{this.busy=false;}
+  }
+
+  private async callOnce(input:GeminiCallInput):Promise<GeminiCallResult>{
     const started = Date.now();
     const budget = { ...DEFAULT_BUDGET, ...input.budget };
 
@@ -156,7 +166,7 @@ export class GeminiClient {
     const price = PRICE_TABLE[input.model] ?? PRICE_TABLE['gemini-2.5-flash']!;
     const estimatedCost =
       (estimatedIn / 1_000_000) * price.input + (budget.maxOutputTokens / 1_000_000) * price.output;
-    if (this.spentTodayUsd(input.accountId) + estimatedCost > budget.dailyCostLimitUsd) {
+    if (!Number.isFinite(budget.dailyCostLimitUsd)||budget.dailyCostLimitUsd<=0||this.spentTodayUsd() + estimatedCost > budget.dailyCostLimitUsd||this.spentTodayUsd(input.accountId)+estimatedCost>budget.dailyCostLimitUsd) {
       return {
         ok: false,
         errorCode: 'BUDGET_EXCEEDED',
@@ -181,7 +191,7 @@ export class GeminiClient {
       return {
         ok: false,
         errorCode: 'NETWORK',
-        message: `falha de rede ao chamar o Gemini: ${(err as Error).message}`,
+        message: 'Falha de rede ao chamar o Gemini; custo real não confirmado.',
         pauseExternal: false,
       };
     }
@@ -197,6 +207,8 @@ export class GeminiClient {
 
     if (!res.ok) {
       const status = res.status;
+      if(status===429)this.pausedUntil=Date.now()+15*60_000;
+      if(status===401||status===403)this.pausedUntil=Date.now()+5*60_000;
       const errorCode: 'RATE_LIMIT' | 'NO_KEY' | 'HTTP_ERROR' =
         status === 429 ? 'RATE_LIMIT' : status === 403 || status === 401 ? 'NO_KEY' : 'HTTP_ERROR';
       record(estimatedIn, 0, (estimatedIn / 1_000_000) * price.input, 'ERROR', `HTTP ${status}`);
@@ -224,8 +236,9 @@ export class GeminiClient {
       return { ok: false, errorCode: 'EMPTY_RESPONSE', message: 'Gemini devolveu resposta vazia', pauseExternal: false };
     }
 
-    const tokensIn = parsed?.usageMetadata?.promptTokenCount ?? estimatedIn;
-    const tokensOut = parsed?.usageMetadata?.candidatesTokenCount ?? estimateTokens(text);
+    const validTokens=(v:unknown,fallback:number)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0?v:fallback;
+    const tokensIn = validTokens(parsed?.usageMetadata?.promptTokenCount,estimatedIn);
+    const tokensOut = validTokens(parsed?.usageMetadata?.candidatesTokenCount,estimateTokens(text));
     const cost = (tokensIn / 1_000_000) * price.input + (tokensOut / 1_000_000) * price.output;
     record(tokensIn, tokensOut, cost, 'OK');
 
