@@ -13,6 +13,7 @@ import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/extern
 import { customerInsights, compareCatalogText } from './competitive/customer-insights';
 import { recordContent, contentComparison } from './competitive/content-evidence';
 import { createHash, randomUUID } from 'node:crypto';
+import { renderReportPdf } from './reports/pdf';
 import { z } from 'zod';
 import {
   captureIngestSchema,
@@ -86,6 +87,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'settings.set': 'manage_financial_limits',
   'gemini.setKey': 'manage_gemini_key',
   'gemini.testKey': 'manage_gemini_key',
+  'gemini.clearKey': 'manage_gemini_key',
   'account.upsert': 'manage_accounts',
   'account.list': 'view_reports',
   'account.setActive': 'manage_accounts',
@@ -138,6 +140,9 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'guard.evaluate': 'execute_task',
   'audit.list': 'manage_backups',
   'audit.rollback': 'manage_backups',
+  'audit.changes': 'manage_backups',
+  'operation.limits.history': 'manage_financial_limits',
+  'operation.limits.restore': 'manage_financial_limits',
   'adapter.diagnostics': 'view_reports',
   'keyword.upsert': 'manage_market_intelligence',
   'seo.external.research': 'manage_connectors',
@@ -413,10 +418,10 @@ export class LocalService {
       }
 
       const dueReports = db.rows<{
-        id: string; account_id: string | null; report_type: string; format: string;
+        id: string; account_id: string | null; report_type: string; format: string; created_by:string|null;
         cadence: ScheduleCadence; next_run_at: string; interval_minutes: number | null; consecutive_failures: number;
       }>(
-        `SELECT id,account_id,report_type,format,cadence,next_run_at,interval_minutes,consecutive_failures
+        `SELECT id,account_id,report_type,format,created_by,cadence,next_run_at,interval_minutes,consecutive_failures
            FROM report_schedules WHERE enabled=1 AND next_run_at<=? ORDER BY next_run_at LIMIT ?`, now, Math.max(0, 5 - dueAnalyses.length),
       );
       for (const schedule of dueReports) {
@@ -425,15 +430,32 @@ export class LocalService {
         try {
           const handler = this.handlers.get('report.export');
           if (!handler) throw new Error('handler report.export indisponível');
-          const result = await handler({ type: schedule.report_type, format: schedule.format, accountId: schedule.account_id ?? undefined }, null);
-          const serialized = JSON.stringify(result);
-          const reportJson = serialized.length <= 1_000_000 ? serialized : JSON.stringify({ truncated: true, reason: 'relatório acima de 1 MB; execute exportação manual para baixar o arquivo completo' });
-          const rowCount = Number((result as { rowCount?: number } | null)?.rowCount ?? 0);
-          db.db.prepare('INSERT INTO report_schedule_runs (id,schedule_id,generated_at,status,report_json,row_count) VALUES (?,?,?,?,?,?)')
-            .run(runId, schedule.id, nowIso(), 'COMPLETED', reportJson, rowCount);
-          const nextAt = nextOccurrence(schedule.next_run_at, schedule.cadence, schedule.interval_minutes, new Date());
-          db.db.prepare('UPDATE report_schedules SET last_run_at=?,last_status=?,last_error=NULL,next_run_at=?,consecutive_failures=0,updated_at=? WHERE id=?')
-            .run(nowIso(), 'COMPLETED', nextAt, nowIso(), schedule.id);
+          const owner=db.row<{role:AccessRole}>('SELECT role FROM users WHERE id=? AND is_active=1',schedule.created_by??'');
+          if(!owner||!roleHasPermission(owner.role,'view_reports')||(schedule.report_type==='AUDITORIA'&&owner.role!=='super_admin')){db.db.prepare("UPDATE report_schedules SET enabled=0,last_status='FAILED',last_error='permissão do responsável revogada',updated_at=? WHERE id=?").run(nowIso(),schedule.id);continue;}
+          db.transaction(()=>{
+            const pages:string[]=[];let rowCount=0,offset=0,totalBytes=0,partial=false,auditThroughId:number|undefined;
+            const auth={userId:schedule.created_by!,role:owner.role};
+            // Synchronous local query and one transaction keep all pages on a consistent DB snapshot.
+            for(let index=0;index<100;index++){
+              const result=handler({type:schedule.report_type,format:'json',accountId:schedule.account_id??undefined,offset,limit:500,auditThroughId},auth);
+              if(result instanceof Promise)throw Error('relatório agendado deve usar consulta local síncrona');
+              const report=result as {rowCount:number;nextOffset:number|null;auditThroughId:number|null};
+              if(!Number.isInteger(report.rowCount)||report.rowCount<0)throw Error('resultado inválido');
+              if(report.auditThroughId!==null)auditThroughId=report.auditThroughId;
+              const serialized=JSON.stringify(result),bytes=Buffer.byteLength(serialized,'utf8');
+              if(bytes>1_000_000||totalBytes+bytes>20_000_000){if(!pages.length)throw Error('primeira página acima do limite de armazenamento');partial=true;break;}
+              pages.push(serialized);rowCount+=report.rowCount;totalBytes+=bytes;
+              if(report.nextOffset===null){partial=false;break;}
+              if(report.nextOffset<=offset)throw Error('paginação não avançou');
+              offset=report.nextOffset;partial=true;
+            }
+            const generatedAt=nowIso(),meta={paged:true,pageCount:pages.length,rowCount,partial,nextOffset:partial?offset:null,note:partial?'Limite de 100 partes/20 MB atingido. O histórico armazenado é parcial.':'Todas as partes foram armazenadas.'};
+            db.db.prepare('INSERT INTO report_schedule_runs(id,schedule_id,generated_at,status,report_json,row_count) VALUES(?,?,?,?,?,?)').run(runId,schedule.id,generatedAt,'COMPLETED',JSON.stringify(meta),rowCount);
+            const insert=db.db.prepare('INSERT INTO report_schedule_pages(run_id,page_index,report_json) VALUES(?,?,?)');
+            pages.forEach((page,index)=>insert.run(runId,index,page));
+            const nextAt=nextOccurrence(schedule.next_run_at,schedule.cadence,schedule.interval_minutes,new Date());
+            db.db.prepare('UPDATE report_schedules SET last_run_at=?,last_status=?,last_error=NULL,next_run_at=?,consecutive_failures=0,updated_at=? WHERE id=?').run(generatedAt,'COMPLETED',nextAt,generatedAt,schedule.id);
+          });
           reports += 1;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -638,6 +660,7 @@ export class LocalService {
       return { ok: true, hint: gemini.keyHint() };
     });
 
+    this.register('gemini.clearKey',(payload,auth)=>{z.object({confirmed:z.literal(true)}).strict().parse(payload);gemini.clearKey();this.audit(auth,'GEMINI_KEY_CLEAR','secrets','gemini.apiKey','OK','chave local removida');return {ok:true};});
     this.register('gemini.testKey', async () => {
       const res = await gemini.testKey();
       return res.ok ? { ok: true, model: res.model, latencyMs: res.latencyMs } : { ok: false, error: res.message };
@@ -1779,6 +1802,8 @@ export class LocalService {
         );
         const originalValue = task.kind === 'edit_title' ? baseline?.before_title : baseline?.before_description;
         const capturedAt = baseline?.baseline_captured_at ? Date.parse(baseline.baseline_captured_at) : Number.NaN;
+        const rollback=db.row<{before_text:string;after_text:string;rolled_back_at:string|null;account_id:string;listing_id:string}>('SELECT c.before_text,c.after_text,c.rolled_back_at,c.account_id,c.listing_id FROM report_rollback_links r JOIN change_sets c ON c.id=r.change_set_id WHERE r.task_id=?',i.taskId);
+        if(rollback&&(rollback.rolled_back_at||rollback.account_id!==item.account_id||rollback.listing_id!==item.listing_id||baseline?.before_title!==rollback.after_text||item.title!==rollback.before_text||db.row('SELECT newer.id FROM report_rollback_links r JOIN change_sets original ON original.id=r.change_set_id JOIN change_sets newer ON newer.account_id=original.account_id AND newer.listing_id=original.listing_id AND newer.field=original.field AND newer.id<>original.id AND newer.applied_at>=original.applied_at WHERE r.task_id=?',i.taskId)))throw Error('estado atual diverge da mudança original; reversão bloqueada');
         if (!baseline?.baseline_source_url || originalValue === null || originalValue === undefined || !Number.isFinite(capturedAt) || Date.now() - capturedAt > 30 * 60_000) {
           throw new Error(`item ${item.id} sem snapshot original recente e verificável; reabra o anúncio e gere novamente o rascunho`);
         }
@@ -1840,6 +1865,7 @@ export class LocalService {
           JOIN accounts ac ON ac.id=a.account_id AND ac.marketplace=a.marketplace AND ac.is_active=1 AND ac.verified_by_user=1
           WHERE a.status='APPROVED' AND a.expires_at>? AND a.marketplace=? AND a.account_id=? AND a.external_listing_id=?
             AND i.status='APPROVED_TO_PUBLISH' AND l.status<>'CLOSED'
+            AND NOT EXISTS(SELECT 1 FROM report_rollback_links r JOIN change_sets original ON original.id=r.change_set_id JOIN change_sets newer ON newer.account_id=original.account_id AND newer.listing_id=original.listing_id AND newer.field=original.field AND newer.id<>original.id AND newer.applied_at>=original.applied_at WHERE r.task_id=t.id)
             AND NOT EXISTS (SELECT 1 FROM listing_api_executions remote WHERE remote.account_id=i.account_id AND remote.listing_id=i.listing_id AND remote.status<>'REMOTE_VERIFIED')
             AND NOT EXISTS (SELECT 1 FROM listing_browser_executions browser WHERE browser.account_id=i.account_id AND browser.listing_id=i.listing_id AND browser.status IN ('CLAIMED','NEEDS_VERIFICATION'))
             AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.id<>i.id AND busy.status IN ('PROCESSING','PUBLISHING','UNCERTAIN'))
@@ -1897,6 +1923,13 @@ export class LocalService {
           const beforeText = field === 'title' ? approval.before_title : approval.before_description;
           const afterText = field === 'title' ? i.after.title : i.after.description;
           if (beforeText === null || afterText === null || beforeText === afterText) throw new Error('não há mudança verificável para registrar');
+          const rollback=db.row<{id:string;account_id:string;listing_id:string;before_text:string;after_text:string;rolled_back_at:string|null}>('SELECT c.* FROM report_rollback_links r JOIN change_sets c ON c.id=r.change_set_id WHERE r.task_id=?',approval.task_id);
+          if(rollback){
+            if(rollback.rolled_back_at||rollback.account_id!==approval.account_id||rollback.listing_id!==approval.listing_id||field!=='title'||beforeText!==rollback.after_text||afterText!==rollback.before_text)throw Error('evidência de reversão incompatível');
+            const verifiedAt=nowIso();db.db.prepare('UPDATE change_sets SET rolled_back_at=? WHERE id=? AND rolled_back_at IS NULL').run(verifiedAt,rollback.id);
+            db.db.prepare('UPDATE report_rollback_links SET verified_at=? WHERE change_set_id=? AND verified_at IS NULL').run(verifiedAt,rollback.id);
+            this.audit(auth,'ROLLBACK_VERIFIED','change_set',rollback.id,'OK','título original restaurado em publicação verificada');
+          }
           db.db.prepare(`INSERT INTO change_sets (id,account_id,listing_id,field,before_text,after_text,diff_json,preservation_ok,verified_after_save,applied_at,actor_user_id,task_id)
             VALUES (?,?,?,?,?,?,?,1,1,?,?,?)`)
             .run(randomUUID(), approval.account_id, approval.listing_id, field, beforeText, afterText, JSON.stringify({source:'human_confirmed_marketplace_save',successText:i.successText}), nowIso(), auth.userId, approval.task_id);
@@ -1906,24 +1939,25 @@ export class LocalService {
       return { ok: true, status: terminal, itemStatus, manualVerificationRequired: i.outcome === 'UNCERTAIN' };
     });
 
-    this.register('task.rollbackPrepare', (payload, auth) => {
-      const i = z.object({ approvalId: z.string().min(1) }).parse(payload ?? {});
-      const approval = db.row<Record<string, any>>(`SELECT a.*,i.listing_id FROM task_publish_approvals a JOIN task_items i ON i.id=a.item_id AND i.task_id=a.task_id WHERE a.id=? AND a.status='PUBLISHED'`, i.approvalId);
-      if (!approval) throw new Error('publicação verificada não encontrada');
-      const change = db.row<{ before_text: string; after_text: string; field: string }>(
-        `SELECT before_text,after_text,field FROM change_sets WHERE task_id=? AND listing_id=? AND field='title' ORDER BY applied_at DESC LIMIT 1`, approval.task_id, approval.listing_id,
-      );
-      if (!change) throw new Error('rollback assistido disponível somente para título; descrição exige revisão manual do texto original');
-      const listing = db.row<{ external_id: string; marketplace: string; title: string | null }>('SELECT external_id,marketplace,title FROM listings WHERE id=? AND account_id=?', approval.listing_id, approval.account_id);
-      if (!listing) throw new Error('anúncio original não está mais disponível na conta');
-      const created = tasks.create({
-        name: `Reverter título · ${listing.external_id}`, kind: 'edit_title', accountId: approval.account_id, mode: 'DRAFT', scheduleAt: null, recurrence: null,
-        typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 300, verifyAfterTyping: true },
-        options: { rollbackOfApproval: approval.id, sourceTaskId: approval.task_id }, createdBy: auth?.userId ?? 'system',
-        items: [{ listingId: listing.external_id, marketplace: listing.marketplace as 'mercado_livre' | 'shopee', accountId: approval.account_id, copies: 1, title: change.before_text }],
-      });
-      this.audit(auth, 'TASK_ROLLBACK_DRAFT_PREPARE', 'task', created.taskId, 'DRAFT_CREATED', `rascunho de reversão para aprovação ${approval.id}`);
-      return { ok: true, taskId: created.taskId, execution: 'DRAFT_ONLY', note: 'rascunho restaurador criado; precisa ser revisado, preenchido e autorizado separadamente. Nenhuma chamada remota foi feita.' };
+    const prepareRollback=(changeSetId:string,auth:AuthContext|null)=>db.transaction(()=>{
+      if(!auth||auth.role!=='super_admin')throw Error('somente super_admin prepara reversão');
+      const cs=db.row<{id:string;account_id:string;listing_id:string;field:string;before_text:string|null;after_text:string|null;verified_after_save:number;rolled_back_at:string|null;applied_at:string;task_id:string}>('SELECT * FROM change_sets WHERE id=?',changeSetId);
+      if(!cs||cs.verified_after_save!==1||cs.rolled_back_at||!cs.before_text||!cs.after_text||cs.before_text===cs.after_text)throw Error('mudança original não verificada ou já revertida');
+      if(cs.field!=='title')throw Error('reversão de descrição integral não possui executor seguro; restaure manualmente após revisar o texto original');
+      if(db.row('SELECT change_set_id FROM report_rollback_links WHERE change_set_id=?',cs.id))throw Error('já existe rascunho restaurador para esta mudança; revise a tarefa existente');
+      if(db.row('SELECT id FROM change_sets WHERE account_id=? AND listing_id=? AND field=? AND id<>? AND applied_at>=?',cs.account_id,cs.listing_id,cs.field,cs.id,cs.applied_at))throw Error('existem alterações posteriores ou simultâneas; não sobrescreva o estado atual');
+      const listing=db.row<{id:string;external_id:string;marketplace:string}>("SELECT l.id,l.external_id,l.marketplace FROM listings l JOIN accounts a ON a.id=l.account_id AND a.is_active=1 AND a.verified_by_user=1 AND a.marketplace=l.marketplace WHERE l.id=? AND l.account_id=? AND l.status<>'CLOSED'",cs.listing_id,cs.account_id);
+      if(!listing||!['mercado_livre','shopee'].includes(listing.marketplace))throw Error('anúncio original indisponível para reversão assistida');
+      const created=tasks.create({name:'Reverter título · '+listing.external_id,kind:'edit_title',accountId:cs.account_id,mode:'DRAFT',scheduleAt:null,recurrence:null,typing:{mode:'set_value',charDelayMs:0,settleDelayMs:300,verifyAfterTyping:true},options:{rollbackOfChangeSet:cs.id,sourceTaskId:cs.task_id},createdBy:auth.userId,items:[{listingId:listing.id,marketplace:listing.marketplace,accountId:cs.account_id,copies:1,title:cs.before_text}]});
+      db.db.prepare('INSERT INTO report_rollback_links(change_set_id,task_id,created_at) VALUES(?,?,?)').run(cs.id,created.taskId,nowIso());
+      this.audit(auth,'TASK_ROLLBACK_DRAFT_PREPARE','change_set',cs.id,'DRAFT_CREATED','rascunho '+created.taskId+'; nenhuma alteração remota');
+      return {ok:true,taskId:created.taskId,changeSetId:cs.id,execution:'DRAFT_ONLY',note:'Rascunho restaurador criado. A mudança só será marcada como revertida após nova publicação autorizada e verificada.'};
+    });
+    this.register('task.rollbackPrepare',(payload,auth)=>{
+      const i=z.object({approvalId:z.string().min(1)}).parse(payload??{});
+      const cs=db.row<{id:string}>("SELECT c.id FROM task_publish_approvals a JOIN task_items i ON i.id=a.item_id AND i.task_id=a.task_id JOIN change_sets c ON c.task_id=a.task_id AND c.listing_id=i.listing_id AND c.account_id=a.account_id WHERE a.id=? AND a.status='PUBLISHED' ORDER BY c.applied_at DESC LIMIT 1",i.approvalId);
+      if(!cs)throw Error('publicação verificada não encontrada');
+      return prepareRollback(cs.id,auth);
     });
 
     // ------------------------------------------------------------ guard
@@ -1970,16 +2004,14 @@ export class LocalService {
       return db.rows<Record<string, unknown>>('SELECT * FROM audit_log ORDER BY at DESC LIMIT ?', i.limit);
     });
 
-    this.register('audit.rollback', (payload, auth) => {
-      const i = z.object({ changeSetId: z.string() }).parse(payload);
-      const cs = db.row<{ id: string; listing_id: string; field: string; before_text: string | null; after_text: string | null }>(
-        'SELECT id, listing_id, field, before_text, after_text FROM change_sets WHERE id = ?',
-        i.changeSetId,
-      );
-      if (!cs) throw new Error('change set inexistente');
-      db.db.prepare('UPDATE change_sets SET rolled_back_at = ? WHERE id = ?').run(new Date().toISOString(), i.changeSetId);
-      this.audit(auth, 'ROLLBACK', 'change_set', i.changeSetId, 'OK', `campo ${cs.field}`);
-      return { ok: true, field: cs.field, restoreValue: cs.before_text, note: 'reaplicação no marketplace exige execução de tarefa aprovada' };
+    this.register('audit.changes',payload=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(50),offset:z.number().int().min(0).default(0)}).strict().parse(payload);
+      return db.rows("SELECT c.*,l.external_id,r.task_id rollback_task_id,r.verified_at rollback_verified_at FROM change_sets c JOIN listings l ON l.id=c.listing_id AND l.account_id=c.account_id LEFT JOIN report_rollback_links r ON r.change_set_id=c.id WHERE c.account_id=? ORDER BY c.applied_at DESC,c.id DESC LIMIT ? OFFSET ?",i.accountId,i.limit,i.offset);
+    });
+    this.register('audit.rollback',(payload,auth)=>{
+      const i=z.object({changeSetId:z.string().min(1),accountId:z.string().min(1),confirmed:z.literal(true)}).strict().parse(payload);
+      if(!db.row('SELECT id FROM change_sets WHERE id=? AND account_id=?',i.changeSetId,i.accountId))throw Error('mudança não pertence à conta');
+      return prepareRollback(i.changeSetId,auth);
     });
 
     this.register('adapter.diagnostics', (payload) => {
@@ -3082,10 +3114,31 @@ export class LocalService {
     this.register('operation.limits.set',(payload,auth)=>{
       const i=z.object({accountId:z.string().min(1),limits:assistedLimitsSchema,confirmed:z.literal(true)}).strict().parse(payload);operationAccount(i.accountId);
       if(auth?.role!=='super_admin')throw Error('super_admin necessário');
-      db.db.prepare('INSERT INTO settings(key,value_json,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by').run('assisted_limits:'+i.accountId,JSON.stringify(i.limits),nowIso(),auth.userId??null);
+      db.transaction(()=>{
+        const before=readAssistedLimits(i.accountId),at=nowIso();
+        db.db.prepare('INSERT INTO settings(key,value_json,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by').run('assisted_limits:'+i.accountId,JSON.stringify(i.limits),at,auth.userId);
+        db.db.prepare('INSERT INTO financial_limit_revisions(id,account_id,before_json,after_json,created_at,created_by) VALUES(?,?,?,?,?,?)').run(randomUUID(),i.accountId,before?JSON.stringify(before):null,JSON.stringify(i.limits),at,auth.userId);
+      });
       this.audit(auth,'ASSISTED_LIMITS_SET','account',i.accountId,'OK','limites de operação assistida confirmados');
       return {ok:true,limits:i.limits};
     });
+    this.register('operation.limits.history',payload=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(30)}).strict().parse(payload);operationAccount(i.accountId);
+      return db.rows('SELECT * FROM financial_limit_revisions WHERE account_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?',i.accountId,i.limit);
+    });
+    this.register('operation.limits.restore',(payload,auth)=>db.transaction(()=>{
+      const i=z.object({accountId:z.string().min(1),revisionId:z.string().min(1),confirmed:z.literal(true)}).strict().parse(payload);operationAccount(i.accountId);
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário');
+      const rev=db.row<{id:string;before_json:string|null;after_json:string}>('SELECT id,before_json,after_json FROM financial_limit_revisions WHERE account_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1',i.accountId);
+      const current=readAssistedLimits(i.accountId);
+      if(!rev||rev.id!==i.revisionId||canonicalJson(current)!==canonicalJson(JSON.parse(rev.after_json)))throw Error('limites atuais divergem da última revisão');
+      const decoded=rev.before_json?JSON.parse(rev.before_json):null;
+      const before=decoded===null?null:assistedLimitsSchema.parse(decoded),at=nowIso();
+      if(before)db.db.prepare('UPDATE settings SET value_json=?,updated_at=?,updated_by=? WHERE key=?').run(JSON.stringify(before),at,auth.userId,'assisted_limits:'+i.accountId);
+      else db.db.prepare('DELETE FROM settings WHERE key=?').run('assisted_limits:'+i.accountId);
+      db.db.prepare('INSERT INTO financial_limit_revisions(id,account_id,before_json,after_json,created_at,created_by,restored_from) VALUES(?,?,?,?,?,?,?)').run(randomUUID(),i.accountId,JSON.stringify(current),JSON.stringify(before),at,auth.userId,rev.id);
+      this.audit(auth,'ASSISTED_LIMITS_RESTORE','account',i.accountId,'OK','revisão restaurada '+rev.id);return {ok:true,limits:before};
+    }));
     const budgetContext=z.object({accountId:z.string().min(1),campaignRef:z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/),sourcePath:z.string().min(1).max(1000),documentNonce:z.string().uuid(),budgetCents:z.number().int().min(0).max(100000000),campaignStatus:z.enum(['ACTIVE','PAUSED']).optional(),roasTargetHundredths:z.number().int().min(100).max(3500).optional()});
     const budgetSource=(path:string)=>{
       const url=new URL(path);
@@ -3794,7 +3847,8 @@ export class LocalService {
     });
 
     this.register('report.schedule.create', (payload, auth) => {
-      const i=z.object({accountId:z.string().nullable().optional(),reportType:z.enum(['EXECUTIVO','KPIS','CONCORRENCIA','FINANCEIRO','EXPERIMENTOS','AUDITORIA']),format:z.literal('json').default('json'),cadence:z.enum(['1h','6h','daily','weekly','custom']),intervalMinutes:z.number().int().min(15).max(43200).optional()}).parse(payload ?? {});
+      const i=z.object({accountId:z.string().nullable().optional(),reportType:z.enum(['EXECUTIVO','KPIS','ANUNCIO','CONCORRENCIA','FINANCEIRO','EXPERIMENTOS','AUDITORIA']),format:z.literal('json').default('json'),cadence:z.enum(['1h','6h','daily','weekly','custom']),intervalMinutes:z.number().int().min(15).max(43200).optional()}).parse(payload ?? {});
+      if(i.reportType==='AUDITORIA'&&auth?.role!=='super_admin')throw Error('auditoria global exige super_admin');
       if(i.cadence==='custom' && i.intervalMinutes===undefined) throw new Error('informe o intervalo personalizado em minutos (15–43200)');
       if(i.cadence!=='custom' && i.intervalMinutes!==undefined) throw new Error('intervalo personalizado só é aceito com cadence=custom');
       if(i.accountId && !db.row('SELECT id FROM accounts WHERE id=?',i.accountId)) throw new Error('conta não encontrada');
@@ -3804,13 +3858,13 @@ export class LocalService {
       this.audit(auth,'REPORT_SCHEDULE_CREATE','report_schedule',id,'OK',`${i.reportType}/${i.cadence}${i.intervalMinutes ? `/${i.intervalMinutes}m` : ''}`);
       return {ok:true,id,nextRunAt:nextAt,cadence:i.cadence,intervalMinutes:i.intervalMinutes ?? null};
     });
-    this.register('report.schedule.list', (payload) => {
+    this.register('report.schedule.list', (payload,auth) => {
       const i=z.object({accountId:z.string().optional()}).parse(payload ?? {});
-      return db.rows(`SELECT *,CASE WHEN interval_minutes IS NULL THEN cadence ELSE 'custom' END AS cadence_label FROM report_schedules WHERE (? IS NULL OR account_id=?) ORDER BY next_run_at`,i.accountId ?? null,i.accountId ?? null);
+      return db.rows(`SELECT *,CASE WHEN interval_minutes IS NULL THEN cadence ELSE 'custom' END AS cadence_label FROM report_schedules WHERE (? IS NULL OR account_id=?) AND (?=1 OR (report_type<>'AUDITORIA' AND created_by=?)) ORDER BY next_run_at`,i.accountId ?? null,i.accountId ?? null,Number(auth?.role==='super_admin'),auth?.userId??'');
     });
     this.register('report.schedule.setEnabled', (payload, auth) => {
       const i=z.object({id:z.string(),enabled:z.boolean()}).parse(payload ?? {});
-      const schedule=db.row<{cadence:ScheduleCadence;interval_minutes:number|null}>('SELECT cadence,interval_minutes FROM report_schedules WHERE id=?',i.id);
+      const schedule=db.row<{cadence:ScheduleCadence;interval_minutes:number|null}>('SELECT cadence,interval_minutes FROM report_schedules WHERE id=? AND (?=1 OR (report_type<>\'AUDITORIA\' AND created_by=?))',i.id,Number(auth?.role==='super_admin'),auth?.userId??'');
       if(!schedule) throw new Error('agendamento não encontrado');
       const nextAt=i.enabled ? firstOccurrence(schedule.cadence,schedule.interval_minutes) : null;
       const r=db.db.prepare('UPDATE report_schedules SET enabled=?,next_run_at=COALESCE(?,next_run_at),consecutive_failures=CASE WHEN ?=1 THEN 0 ELSE consecutive_failures END,updated_at=? WHERE id=?')
@@ -3818,16 +3872,20 @@ export class LocalService {
       if(Number(r.changes)!==1)throw new Error('agendamento não encontrado');
       this.audit(auth,'REPORT_SCHEDULE_TOGGLE','report_schedule',i.id,'OK',String(i.enabled));return {ok:true,nextRunAt:nextAt};
     });
-    this.register('report.schedule.runs', (payload) => {
+    this.register('report.schedule.runs', (payload,auth) => {
       const i=z.object({scheduleId:z.string(),limit:z.number().int().min(1).max(200).default(50)}).parse(payload ?? {});
-      return db.rows('SELECT id,schedule_id,generated_at,status,error,row_count FROM report_schedule_runs WHERE schedule_id=? ORDER BY generated_at DESC LIMIT ?',i.scheduleId,i.limit);
+      return db.rows('SELECT id,schedule_id,generated_at,status,error,row_count FROM report_schedule_runs WHERE schedule_id=? AND EXISTS(SELECT 1 FROM report_schedules s WHERE s.id=schedule_id AND (?=1 OR (s.report_type<>\'AUDITORIA\' AND s.created_by=?))) ORDER BY generated_at DESC LIMIT ?',i.scheduleId,Number(auth?.role==='super_admin'),auth?.userId??'',i.limit);
     });
-    this.register('report.schedule.run.get', (payload) => {
-      const i=z.object({runId:z.string().min(1)}).parse(payload ?? {});
-      const row=db.row<{id:string;report_json:string|null;status:string}>('SELECT id,report_json,status FROM report_schedule_runs WHERE id=?',i.runId);
+    this.register('report.schedule.run.get', (payload,auth) => {
+      const i=z.object({runId:z.string().min(1),page:z.number().int().min(0).max(99).default(0)}).parse(payload ?? {});
+      const row=db.row<{id:string;report_json:string|null;status:string}>('SELECT id,report_json,status FROM report_schedule_runs WHERE id=? AND EXISTS(SELECT 1 FROM report_schedules s WHERE s.id=schedule_id AND (?=1 OR (s.report_type<>\'AUDITORIA\' AND s.created_by=?)))',i.runId,Number(auth?.role==='super_admin'),auth?.userId??'');
       if(!row) throw new Error('execução de relatório não encontrada');
       if(!row.report_json) throw new Error('esta execução não possui arquivo de relatório (falha ou payload não armazenado)');
-      return {id:row.id,status:row.status,reportJson:row.report_json};
+      const count=db.row<{n:number}>('SELECT COUNT(*) n FROM report_schedule_pages WHERE run_id=?',row.id)?.n??0;
+      if(!count){if(i.page!==0)throw Error('página inexistente');return {id:row.id,status:row.status,reportJson:row.report_json,page:0,pageCount:1,partial:parseJsonObject(row.report_json).truncated===true||parseJsonObject(row.report_json).partial===true};}
+      const page=db.row<{report_json:string}>('SELECT report_json FROM report_schedule_pages WHERE run_id=? AND page_index=?',row.id,i.page);
+      if(!page)throw Error('página inexistente');
+      return {id:row.id,status:row.status,reportJson:page.report_json,page:i.page,pageCount:count,partial:parseJsonObject(row.report_json).partial===true};
     });
 
     this.register('connector.configure', (payload, auth) => {
@@ -4630,59 +4688,77 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
      * relatório traz as linhas que existem hoje no banco.
      */
     this.register('report.export', (payload, auth) => {
-      const i = z.object({
-        type: z.enum(['EXECUTIVO','KPIS','CONCORRENCIA','FINANCEIRO','EXPERIMENTOS','AUDITORIA']),
-        format: z.enum(['csv','json','xlsx']).default('csv'),
-        accountId: z.string().optional(),
-      }).parse(payload ?? {});
-      if (i.accountId) {
-        const account = db.row<{ id: string }>('SELECT id FROM accounts WHERE id=?', i.accountId);
-        if (!account) throw new Error('conta não encontrada para o relatório');
+      const i=z.object({auditThroughId:z.number().int().min(0).optional(),type:z.enum(['EXECUTIVO','KPIS','ANUNCIO','CONCORRENCIA','FINANCEIRO','EXPERIMENTOS','AUDITORIA']),format:z.enum(['csv','json','xlsx','pdf']).default('csv'),accountId:z.string().optional(),marketplace:z.enum(['mercado_livre','shopee','amazon']).optional(),days:z.number().int().min(1).max(365).optional(),listingId:z.string().optional(),skuId:z.string().optional(),offset:z.number().int().min(0).max(1000000).default(0),limit:z.number().int().min(1).max(1000).default(500)}).strict().parse(payload??{});
+      if(i.type==='AUDITORIA'&&auth?.role!=='super_admin')throw Error('auditoria global exige super_admin');
+      if(i.type==='AUDITORIA'&&(i.listingId||i.skuId||i.marketplace))throw Error('auditoria global não suporta filtros de anúncio/SKU/marketplace');
+      if(i.accountId&&!db.row('SELECT id FROM accounts WHERE id=? AND (? IS NULL OR marketplace=?)',i.accountId,i.marketplace??null,i.marketplace??null))throw Error('conta não encontrada ou marketplace incompatível');
+      if((i.listingId||i.skuId)&&!i.accountId)throw Error('filtro de anúncio/SKU exige conta');
+      if(i.listingId&&!db.row('SELECT id FROM listings WHERE id=? AND account_id=? AND (? IS NULL OR sku_id=?)',i.listingId,i.accountId!,i.skuId??null,i.skuId??null))throw Error('anúncio não pertence ao escopo');
+      if(i.skuId&&!db.row('SELECT id FROM skus WHERE id=? AND account_id=?',i.skuId,i.accountId!))throw Error('SKU não pertence ao escopo');
+      if((i.listingId||i.skuId)&&['CONCORRENCIA','EXPERIMENTOS','FINANCEIRO'].includes(i.type))throw Error('filtro de anúncio/SKU não se aplica a este relatório; selecione a conta');
+      const at=nowIso(),cutoff=i.days?new Date(Date.parse(at)-i.days*86400000).toISOString():null;
+      const auditThroughId=i.type==='AUDITORIA'?(i.auditThroughId??db.row<{n:number}>('SELECT COALESCE(MAX(id),0) n FROM audit_log')?.n??0):null;
+      const filters={accountId:i.type==='AUDITORIA'?null:i.accountId??null,marketplace:i.marketplace??null,days:i.type==='EXECUTIVO'?i.days??30:i.days??null,listingId:i.listingId??null,skuId:i.skuId??null};
+      const account=i.accountId??null,market=i.marketplace??null,listing=i.listingId??null,sku=i.skuId??null;
+      let rows:Array<Record<string,unknown>>=[],summary:unknown=null,note='';
+      // Scope SQL is parameterized. Fetch one extra row to signal additional pages.
+      const page=(sql:string,...args:(string|number|null)[])=>db.rows<Record<string,unknown>>(sql+' LIMIT ? OFFSET ?',...args,i.limit+1,i.offset);
+      if(i.type==='EXECUTIVO'){
+        const dashboard=buildDashboard({accountId:i.accountId,marketplace:i.marketplace,days:i.days,listingId:i.listingId,skuId:i.skuId});
+        summary=dashboard.totals;
+        rows=dashboard.byAccount.map(a=>({accountId:a.id,marketplace:a.marketplace,account:a.display_name,...a.totals,...a.coverage})).slice(i.offset,i.offset+i.limit+1);
+        note='Resumo de observações recentes; métricas acumuladas não são somadas entre capturas. Cobertura e ausência de dados devem ser consideradas.';
+      }else if(i.type==='KPIS'){
+        rows=page(`SELECT * FROM (
+          SELECT s.id,s.account_id,l.marketplace,l.external_id,l.title,s.captured_at,s.reference_at,s.source_class,s.quality_score,s.metrics_json,s.evidence_json,'listing' entityType
+          FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id AND l.account_id=s.account_id
+          WHERE (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?) AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?) AND (? IS NULL OR s.captured_at>=?)
+          UNION ALL
+          SELECT id,account_id,marketplace,NULL,page_kind,captured_at,reference_at,source_class,quality_score,metrics_json,evidence_json,'account' entityType
+          FROM account_snapshots WHERE (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) AND ? IS NULL AND ? IS NULL AND (? IS NULL OR captured_at>=?)
+        ) ORDER BY captured_at DESC,id DESC`,account,account,market,market,listing,listing,sku,sku,cutoff,cutoff,account,account,market,market,listing,sku,cutoff,cutoff).map(r=>({...r,metrics:parseJsonObject(String(r.metrics_json??'{}')),evidence:parseJsonObject(String(r.evidence_json??'{}'))}));
+        note='Snapshots por entidade e captura, sem somar conta e anúncio nem inferir zero.';
+      }else if(i.type==='ANUNCIO'){
+        rows=page(`SELECT l.id,l.account_id,l.marketplace,l.external_id,l.title,l.status,l.sku_id,s.sku_code,
+          (SELECT MAX(x.captured_at) FROM listing_snapshots x WHERE x.listing_id=l.id AND x.account_id=l.account_id AND (? IS NULL OR x.captured_at>=?)) last_capture
+          FROM listings l LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=l.account_id
+          WHERE (? IS NULL OR l.account_id=?) AND (? IS NULL OR l.marketplace=?) AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?) ORDER BY l.account_id,l.id`,cutoff,cutoff,account,account,market,market,listing,listing,sku,sku).map(r=>({...r,kpis:r.last_capture?capture.kpisForListing(String(r.id),30,cutoff??undefined)??null:null,kpiWindowStatus:'CAPTURE_WINDOW_NOT_VERIFIED'}));
+        note='Um registro por anúncio, com SKU e KPIs observados. Sem captura no período não significa ausência de vendas.';
+      }else if(i.type==='CONCORRENCIA'){
+        rows=page(`SELECT r.*,o.account_id,o.title AS own_product_title,c.marketplace,c.external_id,c.title AS competitor_title,c.price_cents
+          FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id JOIN competitor_candidates c ON c.id=r.candidate_id
+          WHERE (? IS NULL OR o.account_id=?) AND (? IS NULL OR c.marketplace=?) AND (? IS NULL OR r.suggested_at>=?) ORDER BY r.suggested_at DESC,r.id`,account,account,market,market,cutoff,cutoff);
+        note='Relações sugeridas e revisadas; preço observado não representa vendas. Período aplica-se à data da sugestão.';
+      }else if(i.type==='FINANCEIRO'){
+        rows=page(`SELECT * FROM (
+          SELECT r.id,r.account_id,a.marketplace,'RESULTADO_REALIZADO' recordType,r.period_end reference_at,r.listing_id,l.external_id,l.title,NULL sku_code,
+          r.net_revenue_cents,r.product_cost_cents,r.packaging_cents,r.shipping_cents,r.marketplace_fees_cents,r.taxes_cents,r.ad_spend_cents,r.refunds_cents,r.return_logistics_cents,r.cancellation_loss_cents,r.other_costs_cents,r.source_class,r.period_start,r.period_end,r.evidence_json,NULL cost_version,NULL unit_cost_cents,NULL min_margin_pct
+          FROM realized_profit_snapshots r JOIN accounts a ON a.id=r.account_id LEFT JOIN listings l ON l.id=r.listing_id AND l.account_id=r.account_id
+          WHERE (? IS NULL OR r.account_id=?) AND (? IS NULL OR a.marketplace=?) AND (? IS NULL OR r.period_start>=?)
+          UNION ALL
+          SELECT c.id,s.account_id,a.marketplace,'CUSTO_CADASTRADO',c.valid_from,NULL,NULL,NULL,s.sku_code,NULL,NULL,c.packaging_cents,c.shipping_cents,NULL,NULL,NULL,NULL,NULL,NULL,c.other_variable_cents,'F_USER_INPUT',c.valid_from,c.valid_to,NULL,c.version,c.unit_cost_cents,c.min_margin_pct
+          FROM sku_costs c JOIN skus s ON s.id=c.sku_id JOIN accounts a ON a.id=s.account_id
+          WHERE (? IS NULL OR s.account_id=?) AND (? IS NULL OR a.marketplace=?) AND (? IS NULL OR c.valid_to IS NULL OR c.valid_to>=?)
+        ) ORDER BY reference_at DESC,id DESC`,account,account,market,market,cutoff,cutoff,account,account,market,market,cutoff,cutoff);
+        const fields=['net_revenue_cents','product_cost_cents','packaging_cents','shipping_cents','marketplace_fees_cents','taxes_cents','ad_spend_cents','refunds_cents','return_logistics_cents','cancellation_loss_cents','other_costs_cents'];
+        rows=rows.map(row=>{const valid=row.recordType==='RESULTADO_REALIZADO'&&fields.every(key=>typeof row[key]==='number'&&Number.isFinite(row[key])&&Number(row[key])>=0)&&parseJsonObject(String(row.evidence_json??'')).costFieldsConfirmed===true;const net=valid?Number(row.net_revenue_cents):null,profit=net===null?null:net-fields.slice(1).reduce((total,key)=>total+Number(row[key]),0);return {...row,realizedProfitCents:profit,realizedMarginPct:profit!==null&&net!==null&&net>0?profit/net*100:null};});
+        if(account){const fn=this.handlers.get('finance.realized.summary');if(fn)summary=fn({accountId:account,periodStart:cutoff??undefined},auth);}
+        note='Custos cadastrados e resultados realizados em linhas distintas. Não somar as duas categorias. Totais realizados exigem registros não conflitantes; não constituem auditoria contábil.';
+      }else if(i.type==='EXPERIMENTOS'){
+        rows=page('SELECT e.* FROM experiments e JOIN accounts a ON a.id=e.account_id WHERE (? IS NULL OR e.account_id=?) AND (? IS NULL OR a.marketplace=?) AND (? IS NULL OR e.started_at>=?) ORDER BY e.started_at DESC,e.id',account,account,market,market,cutoff,cutoff);
+        note='Experimentos registrados; não extrapolar causalidade sem evidência.';
+      }else{
+        rows=page('SELECT id,at,actor_user_id,actor_role,action,entity,entity_id,account_id,result,reason,correlation_id FROM audit_log WHERE id<=? AND (? IS NULL OR at>=?) ORDER BY at DESC,id DESC',auditThroughId,cutoff,cutoff);
+        note='Auditoria global restrita a administradores; payloads antes/depois omitidos da exportação.';
       }
-      let rows: Array<Record<string, unknown>>;
-      let summary: unknown = null;
-      if (i.type === 'EXECUTIVO') {
-        const dashboard = buildDashboard({ accountId: i.accountId });
-        summary = dashboard.totals;
-        rows = dashboard.byAccount.map((a) => ({ accountId: a.id, marketplace: a.marketplace, account: a.display_name, ...a.totals, ...a.coverage }));
-      } else if (i.type === 'KPIS') {
-        const listingRows = db.rows<{ captured_at: string; metrics_json: string; evidence_json: string }>(
-          `SELECT s.id,s.account_id,l.marketplace,l.external_id,l.title,s.captured_at,s.reference_at,s.source_class,s.quality_score,s.metrics_json,s.evidence_json
-             FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id
-            WHERE (? IS NULL OR s.account_id=?) ORDER BY s.captured_at DESC LIMIT 20000`,
-          i.accountId ?? null, i.accountId ?? null,
-        ).map((r) => ({ ...r, entityType: 'listing', metrics: JSON.parse(String(r.metrics_json || '{}')), evidence: JSON.parse(String(r.evidence_json || '{}')) }));
-        const accountRows = db.rows<{ captured_at: string; metrics_json: string; evidence_json: string }>(
-          `SELECT id,account_id,marketplace,page_kind AS title,captured_at,reference_at,source_class,quality_score,metrics_json,evidence_json
-             FROM account_snapshots WHERE (? IS NULL OR account_id=?) ORDER BY captured_at DESC LIMIT 20000`,
-          i.accountId ?? null, i.accountId ?? null,
-        ).map((r) => ({ ...r, entityType: 'account', external_id: null, metrics: JSON.parse(String(r.metrics_json || '{}')), evidence: JSON.parse(String(r.evidence_json || '{}')) }));
-        rows = [...listingRows,...accountRows].sort((a,b)=>String(b.captured_at).localeCompare(String(a.captured_at))).slice(0,20000);
-      } else if (i.type === 'CONCORRENCIA') {
-        rows = db.rows<Record<string, unknown>>(
-          `SELECT r.*,o.account_id,o.title AS own_product_title,c.marketplace,c.external_id,c.title AS competitor_title,c.price_cents
-             FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id
-             JOIN competitor_candidates c ON c.id=r.candidate_id
-            WHERE (? IS NULL OR o.account_id=?) ORDER BY r.suggested_at DESC LIMIT 10000`,
-          i.accountId ?? null, i.accountId ?? null,
-        );
-      } else if (i.type === 'FINANCEIRO') {
-        rows = db.rows<Record<string, unknown>>(
-          `SELECT c.*,s.account_id,s.sku_code,s.ean,s.gtin,s.upc FROM sku_costs c JOIN skus s ON s.id=c.sku_id
-            WHERE (? IS NULL OR s.account_id=?) ORDER BY c.valid_from DESC LIMIT 10000`,
-          i.accountId ?? null, i.accountId ?? null,
-        );
-      } else if (i.type === 'EXPERIMENTOS') {
-        rows = db.rows<Record<string, unknown>>(
-          'SELECT * FROM experiments WHERE (? IS NULL OR account_id=?) ORDER BY started_at DESC LIMIT 5000',
-          i.accountId ?? null, i.accountId ?? null,
-        );
-      } else {
-        // A auditoria é global por desenho: seus registros não possuem account_id consistente.
-        rows = db.rows<Record<string, unknown>>('SELECT * FROM audit_log ORDER BY at DESC LIMIT 10000');
-      }
-      this.audit(auth, 'REPORT_EXPORT', 'report', i.type, 'OK', `${rows.length} linhas em ${i.format}`);
-      return { ok: true, type: i.type, format: i.format, generatedAt: nowIso(), rowCount: rows.length, summary, rows, scope: i.type === 'AUDITORIA' ? 'global' : (i.accountId ?? 'all_accounts') };
+      let hasNext=rows.length>i.limit;rows=rows.slice(0,i.limit);
+      // Bound response bytes, not just number of rows; never silently omit.
+      while(rows.length>1&&Buffer.byteLength(JSON.stringify(rows),'utf8')>900000){rows.pop();hasNext=true;}
+      if(Buffer.byteLength(JSON.stringify(rows),'utf8')>900000)throw Error('registro excede o limite de exportação IPC');
+      const report={ok:true,type:i.type,format:i.format,generatedAt:at,rowCount:rows.length,summary,rows,scope:i.type==='AUDITORIA'?'global':i.accountId??'all_accounts',filters,note,auditThroughId,offset:i.offset,nextOffset:hasNext?i.offset+rows.length:null,partial:hasNext||i.offset>0};
+      const pdf=i.format==='pdf'?renderReportPdf(report):null;
+      this.audit(auth,'REPORT_EXPORT','report',i.type,'OK',rows.length+' linhas em '+i.format+(hasNext?' (página parcial)':''));
+      return {...report,...(pdf?{pdfBase64:pdf.toString('base64'),mimeType:'application/pdf'}:{})};
     });
 
     this.register('backup.create', (payload, auth) => {

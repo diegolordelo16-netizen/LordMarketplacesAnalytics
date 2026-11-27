@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, statSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, chmodSync, statSync, symlinkSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1889,6 +1889,21 @@ describe('tarefas e guard', () => {
     const rollbackItem = db.row<{ title: string; status: string }>('SELECT title,status FROM task_items WHERE task_id=?', rollbackTask);
     expect(rollbackItem?.title).toBe('Título original');
     expect(rollbackItem?.status).toBe('PENDING');
+    const original=db.row<{id:string;rolled_back_at:string|null}>('SELECT id,rolled_back_at FROM change_sets WHERE task_id=?',created.taskId)!;
+    expect(original.rolled_back_at).toBeNull();
+    expect((await call('task.rollbackPrepare',{approvalId:publish.approvalId})).ok).toBe(false);
+    expect((await call('audit.rollback',{changeSetId:original.id,accountId:'wrong',confirmed:true})).ok).toBe(false);
+    expect((await call('task.runNow',{taskId:rollbackTask})).ok).toBe(true);
+    const restoredDraft=(await call('task.claimNext',{marketplace:'mercado_livre',accountId:'ml:publish',externalListingId:'MLBPUBLISH1'})).result as {item:{id:string};claimToken:string};
+    expect(restoredDraft.item.id).toBeTruthy();
+    expect((await call('task.itemResult',{itemId:restoredDraft.item.id,claimToken:restoredDraft.claimToken,ok:true,accountId:'ml:publish',externalListingId:'MLBPUBLISH1',baseline:{title:'Título revisado',description:'Descrição original'},sourceUrl:'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLBPUBLISH1'})).ok).toBe(true);
+    expect((await call('task.approvePublish',{taskId:rollbackTask,confirmation:'PUBLICAR 1',reason:'reverter alteração revisada'})).ok).toBe(true);
+    const restoredClaim=(await call('task.claimNextPublish',{marketplace:'mercado_livre',accountId:'ml:publish',externalListingId:'MLBPUBLISH1'})).result as {approvalId:string};
+    expect(restoredClaim.approvalId).toBeTruthy();
+    expect(db.row('SELECT rolled_back_at FROM change_sets WHERE id=?',original.id)).toMatchObject({rolled_back_at:null});
+    expect((await call('task.publishResult',{approvalId:restoredClaim.approvalId,externalListingId:'MLBPUBLISH1',outcome:'PUBLISHED',after:{title:'Título original',description:'Descrição original'},sourceUrl:'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLBPUBLISH1',successText:'Alterações salvas com sucesso',saveButtonLabel:'Salvar'})).ok).toBe(true);
+    expect(db.row('SELECT rolled_back_at FROM change_sets WHERE id=?',original.id)).toMatchObject({rolled_back_at:expect.any(String)});
+    expect(db.row('SELECT verified_at FROM report_rollback_links WHERE change_set_id=?',original.id)).toMatchObject({verified_at:expect.any(String)});
   });
 
   it('não permite que operador reivindique publicação nem registre resultado administrativo', async () => {
@@ -2767,5 +2782,120 @@ describe('Etapa 08 — regressões de conectores e importações',()=>{
     expect((await call('connector.external.import',{...ext,confirmedSource:false})).ok).toBe(false);
     expect((await call('connector.sync.get',{accountId:other,runId})).ok).toBe(false);
     expect(db.row('SELECT COUNT(*) n FROM listing_snapshots WHERE account_id=?',accountId)).toMatchObject({n:0});
+  });
+});
+
+describe('Etapa 09 — relatórios e administração',()=>{
+  it('gera relatório por anúncio isolado e PDF real, paginado com metadados',async()=>{
+    const accountId='report-stage9-a',other='report-stage9-b';seedImportAccount(accountId);seedImportAccount(other);
+    const at=new Date().toISOString();
+    const insert=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    insert.run('report-a-1',accountId,'mercado_livre','MLB123','Capacete São Paulo','ACTIVE',at,at);
+    insert.run('report-a-2',accountId,'mercado_livre','MLB124','Luva','ACTIVE',at,at);
+    insert.run('report-b-1',other,'mercado_livre','MLB999','Outra loja','ACTIVE',at,at);
+    const first=await call('report.export',{type:'ANUNCIO',format:'pdf',accountId,limit:1});
+    expect(first.ok).toBe(true);
+    const result=first.result as {pdfBase64:string;rows:Array<Record<string,unknown>>;nextOffset:number};
+    expect(result.rows).toMatchObject([{id:'report-a-1',kpis:null}]);expect(result.nextOffset).toBe(1);
+    const pdf=Buffer.from(result.pdfBase64,'base64').toString('ascii');
+    expect(pdf.startsWith('%PDF-1.4')).toBe(true);expect(pdf).toContain('xref');expect(pdf).toContain('MLB123');expect(pdf).not.toContain('MLB999');
+    expect(pdf).toContain('Escopo');
+    expect((await call('report.export',{type:'ANUNCIO',format:'json',accountId,limit:1,offset:1})).result).toMatchObject({rows:[{id:'report-a-2'}],nextOffset:null});
+    expect((await call('report.export',{type:'ANUNCIO',accountId,listingId:'report-b-1'})).ok).toBe(false);
+    expect((await call('report.export',{type:'ANUNCIO',accountId,marketplace:'amazon'})).ok).toBe(false);
+  });
+  it('exporta lucro realizado distinto de cadastro de custo, sem somar lojas',async()=>{
+    const accountId='finance-report-a',other='finance-report-b';seedImportAccount(accountId);seedImportAccount(other);
+    const input={accountId,periodStart:'2025-01-01T00:00:00.000Z',periodEnd:'2025-01-31T23:59:59.000Z',netRevenueCents:10000,productCostCents:2000,packagingCents:100,shippingCents:100,marketplaceFeesCents:1000,taxesCents:500,adSpendCents:300,refundsCents:0,returnLogisticsCents:0,cancellationLossCents:0,otherCostsCents:0,sourceClass:'F_USER_INPUT',evidence:{source:'fixture'}};
+    expect((await call('finance.realized.upsert',input)).ok).toBe(true);
+    expect((await call('finance.realized.upsert',{...input,accountId:other})).ok).toBe(true);
+    const report=await call('report.export',{type:'FINANCEIRO',format:'json',accountId});
+    expect(report.ok).toBe(true);
+    expect(report.result).toMatchObject({summary:{records:1,realizedProfitCents:6000},rows:[{recordType:'RESULTADO_REALIZADO',account_id:accountId,net_revenue_cents:10000,realizedProfitCents:6000}]});
+  });
+  it('restringe auditoria global e agendamentos a seu responsável ou admin',async()=>{
+    const schedule=await call('report.schedule.create',{reportType:'AUDITORIA',format:'json',cadence:'daily'});
+    expect(schedule.ok).toBe(true);const id=(schedule.result as {id:string}).id;
+    const created=await call('user.upsert',{email:'stage9viewer@local.test',displayName:'Viewer',role:'visualizador',password:'senha-stage9-viewer'});
+    expect(created.ok).toBe(true);
+    const login=await call('auth.login',{email:'stage9viewer@local.test',password:'senha-stage9-viewer'},false);
+    const userToken=(login.result as {token:string}).token;
+    const viewer=(method:string,payload:unknown)=>service.handle({id:'viewer',protocolVersion:1,method,payload,token:userToken});
+    expect((await viewer('report.export',{type:'AUDITORIA'})).ok).toBe(false);
+    expect((await viewer('report.schedule.create',{reportType:'AUDITORIA',cadence:'daily'})).ok).toBe(false);
+    expect((await viewer('report.schedule.list',{})).result).toEqual([]);
+    expect((await viewer('report.schedule.setEnabled',{id,enabled:false})).ok).toBe(false);
+    db.db.prepare("UPDATE report_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(id);
+    expect((await service.processScheduledWork()).reports).toBe(1);
+    const runs=(await call('report.schedule.runs',{scheduleId:id})).result as Array<{id:string}>;
+    expect(runs).toHaveLength(1);
+    expect((await viewer('report.schedule.run.get',{runId:runs[0]!.id})).ok).toBe(false);
+    expect((await viewer('report.schedule.runs',{scheduleId:id})).result).toEqual([]);
+    expect((await call('report.schedule.run.get',{runId:runs[0]!.id})).ok).toBe(true);
+  });
+  it('restaura última revisão financeira por conta, sem alterar outra loja',async()=>{
+    const accountId='limit-stage9-a',other='limit-stage9-b';seedImportAccount(accountId);seedImportAccount(other);
+    const limits={maxCampaignDailyBudgetCents:1000,minVariationPriceCents:100,maxVariationPriceCents:5000,maxVariationStock:5,maxVariationPriceChangePct:10};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,limits:{...limits,maxCampaignDailyBudgetCents:1200},confirmed:true})).ok).toBe(true);
+    const history=(await call('operation.limits.history',{accountId})).result as Array<{id:string}>;
+    expect(history).toHaveLength(2);
+    expect((await call('operation.limits.restore',{accountId,revisionId:history[1]!.id,confirmed:true})).ok).toBe(false);
+    expect((await call('operation.limits.restore',{accountId:other,revisionId:history[0]!.id,confirmed:true})).ok).toBe(false);
+    expect((await call('operation.limits.restore',{accountId,revisionId:history[0]!.id,confirmed:true})).result).toMatchObject({limits});
+    expect((await call('operation.limits.restore',{accountId,revisionId:history[0]!.id,confirmed:true})).ok).toBe(false);
+    expect((await call('operation.limits.get',{accountId:other})).result).toMatchObject({limits:null});
+    expect((await call('operation.limits.history',{accountId})).result).toHaveLength(3);
+  });
+  it('remove chave Gemini local somente mediante confirmação',async()=>{
+    expect((await call('gemini.setKey',{apiKey:'fixture-api-key-stage9-123456'})).ok).toBe(true);
+    expect((await call('gemini.clearKey',{confirmed:false})).ok).toBe(false);
+    expect((await call('agent.budget')).result).toMatchObject({geminiConfigured:true});
+    expect((await call('gemini.clearKey',{confirmed:true})).ok).toBe(true);
+    expect((await call('agent.budget')).result).toMatchObject({geminiConfigured:false});
+  });
+});
+
+describe('Relatórios agendados paginados',()=>{
+  it('armazena todas as partes e aplica a permissão por execução',async()=>{
+    const accountId='schedule-paged';seedImportAccount(accountId);
+    const at=new Date().toISOString(),stmt=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    for(let i=0;i<501;i++)stmt.run('paged-'+String(i).padStart(4,'0'),accountId,'mercado_livre','MLB'+(1000+i),'Anúncio '+i,'ACTIVE',at,at);
+    const created=await call('report.schedule.create',{accountId,reportType:'ANUNCIO',format:'json',cadence:'daily'});expect(created.ok).toBe(true);
+    const id=(created.result as {id:string}).id;
+    db.db.prepare("UPDATE report_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(id);
+    expect((await service.processScheduledWork()).reports).toBe(1);
+    const runs=(await call('report.schedule.runs',{scheduleId:id})).result as Array<{id:string;row_count:number}>;
+    expect(runs[0]?.row_count).toBe(501);
+    const runId=runs[0]!.id;
+    const first=(await call('report.schedule.run.get',{runId,page:0})).result as {reportJson:string;pageCount:number;partial:boolean};
+    expect(first.pageCount).toBe(2);expect(first.partial).toBe(false);expect(JSON.parse(first.reportJson).rowCount).toBe(500);
+    const last=(await call('report.schedule.run.get',{runId,page:1})).result as {reportJson:string};
+    expect(JSON.parse(last.reportJson).rows).toMatchObject([{id:'paged-0500'}]);
+    expect((await call('report.schedule.run.get',{runId,page:2})).ok).toBe(false);
+  });
+});
+
+describe('Migração 052 — preservação do histórico',()=>{
+  it('preserva agendamentos, execuções e páginas de uma base anterior',()=>{
+    const migrationDir=join(dir,'legacy-migrations');mkdirSync(migrationDir);
+    const originalDir=new URL('../migrations/',import.meta.url);
+    const names=readdirSync(originalDir).filter(name=>/^\d+_.*\.sql$/.test(name));
+    for(const name of names.filter(name=>Number(name.split('_')[0])<=51))copyFileSync(new URL(name,originalDir),join(migrationDir,name));
+    const legacy=new LocalDatabase({file:join(dir,'legacy.db'),migrationsDir:migrationDir});
+    try{
+      legacy.migrate();const at=new Date().toISOString();
+      legacy.db.prepare("INSERT INTO report_schedules(id,report_type,format,cadence,enabled,next_run_at,created_at,updated_at,interval_minutes,consecutive_failures) VALUES(?,?,?,?,?,?,?,?,?,?)").run('legacy-schedule','KPIS','json','1h',1,at,at,at,45,2);
+      legacy.db.prepare("INSERT INTO report_schedule_runs(id,schedule_id,generated_at,status,report_json,row_count) VALUES(?,?,?,?,?,?)").run('legacy-run','legacy-schedule',at,'COMPLETED','{}',1);
+      legacy.db.prepare("INSERT INTO report_schedule_pages(run_id,page_index,report_json) VALUES(?,?,?)").run('legacy-run',0,'{"rows":[{"id":"legacy-row"}]}');
+      for(const name of names.filter(name=>Number(name.split('_')[0])===52))copyFileSync(new URL(name,originalDir),join(migrationDir,name));
+      expect(legacy.migrate().applied).toEqual([52]);
+      expect(legacy.row('SELECT report_type,interval_minutes,consecutive_failures FROM report_schedules WHERE id=?','legacy-schedule')).toMatchObject({report_type:'KPIS',interval_minutes:45,consecutive_failures:2});
+      expect(legacy.row('SELECT row_count FROM report_schedule_runs WHERE id=?','legacy-run')).toMatchObject({row_count:1});
+      expect(legacy.row('SELECT report_json FROM report_schedule_pages WHERE run_id=?','legacy-run')).toMatchObject({report_json:'{"rows":[{"id":"legacy-row"}]}'});
+      legacy.db.prepare('UPDATE report_schedules SET report_type=? WHERE id=?').run('ANUNCIO','legacy-schedule');
+      expect(legacy.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(legacy.migrate().applied).toEqual([]);
+    }finally{legacy.close();}
   });
 });

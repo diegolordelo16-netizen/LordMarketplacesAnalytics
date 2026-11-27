@@ -111,6 +111,11 @@ export class GeminiClient {
     this.pausedUntil=0;
   }
 
+  clearKey(): void {
+    if(this.busy)throw Error('aguarde o término da chamada Gemini em andamento');
+    this.secrets.delete(GEMINI_KEY_NAME);this.pausedUntil=0;
+  }
+
   hasKey(): boolean {
     return this.secrets.has(GEMINI_KEY_NAME);
   }

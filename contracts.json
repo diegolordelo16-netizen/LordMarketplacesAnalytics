@@ -21,7 +21,19 @@
   "competitor.relations": "ownProductId | accountId | status",
   "voc.ingest": "accountId | listingId | kind | text | rating",
   "experiment.create": "accountId | title | design | variable | primaryMetric | guardrailMetrics | baselineRate | mde | plannedDays",
-  "report.export": "type | format | accountId?",
+  "report.export": {
+    "type": "EXECUTIVO|KPIS|ANUNCIO|CONCORRENCIA|FINANCEIRO|EXPERIMENTOS|AUDITORIA",
+    "format": "csv|xlsx|json|pdf",
+    "accountId": "optional",
+    "marketplace": "optional",
+    "days": "optional 1..365",
+    "listingId": "optional scoped",
+    "skuId": "optional scoped",
+    "offset": "0..1000000",
+    "limit": "1..1000",
+    "audit": "super_admin",
+    "auditThroughId": "optional audit high-water mark from first page"
+  },
   "settings.get": "(sem parâmetros)",
   "gemini.testKey": "(sem parâmetros — usa a chave gravada)",
   "account.list": "(sem parâmetros)",
@@ -145,10 +157,8 @@
     "result": "histórico de execuções, status, duração, resultado limitado e erro"
   },
   "report.schedule.run.get": {
-    "description": "Obter JSON de uma execução de relatório agendado",
-    "payload": {
-      "runId": "string"
-    }
+    "runId": "string",
+    "page": "optional 0..99"
   },
   "analysis.schedule.create": {
     "payload": {
@@ -661,5 +671,27 @@
     "base64": "optional XLSX content",
     "referenceDate": "optional YYYY-MM-DD",
     "confirmedSource": true
+  },
+  "audit.changes": {
+    "accountId": "string",
+    "limit": "1..100",
+    "offset": "optional"
+  },
+  "audit.rollback": {
+    "accountId": "string",
+    "changeSetId": "string",
+    "confirmed": true
+  },
+  "operation.limits.history": {
+    "accountId": "string",
+    "limit": "optional 1..100"
+  },
+  "operation.limits.restore": {
+    "accountId": "string",
+    "revisionId": "latest revision",
+    "confirmed": true
+  },
+  "gemini.clearKey": {
+    "confirmed": true
   }
 }

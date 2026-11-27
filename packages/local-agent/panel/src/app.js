@@ -8,6 +8,7 @@
 // ------------------------------------------------------------------ estado
 let activeImportJobId = '';
 let activeImportAccountId = '';
+let reportPaging = null;
 
 const state = {
   token: new URLSearchParams(location.search).get('token') || sessionStorage.getItem('mi.token') || '',
@@ -1052,21 +1053,27 @@ async function viewUsers() {
 
 // ------------------------------------------------------------------ ADMINISTRAÇÃO
 async function viewAdmin() {
-  const [audit, backups, settings, upgrades, analysisSchedules, reportSchedules] = await Promise.all([
+  const [audit, backups, settings, upgrades, analysisSchedules, reportSchedules, budget, changes, limitsResult, limitHistory] = await Promise.all([
     api('audit.list', {}).catch(() => []),
     api('backup.list', {}).catch(() => []),
     api('settings.get', {}).catch(() => ({})),
     api('autoupgrade.list', {}).catch(() => []),
     api('analysis.schedule.list', { accountId: state.accountId || undefined }).catch(() => []),
     api('report.schedule.list', { accountId: state.accountId || undefined }).catch(() => []),
+    api('agent.budget',{accountId:state.accountId||undefined}).catch(e=>({error:e.message})),
+    state.accountId?api('audit.changes',{accountId:state.accountId}).catch(e=>({error:e.message})):Promise.resolve([]),
+    state.accountId?api('operation.limits.get',{accountId:state.accountId}).catch(()=>({limits:null})):Promise.resolve({limits:null}),
+    state.accountId?api('operation.limits.history',{accountId:state.accountId}).catch(e=>({error:e.message})):Promise.resolve([]),
   ]);
   return card('Chave da API Gemini', `
     <div class="form-row">
       <label class="grow">Chave <input id="gk" type="password" placeholder="AIza..."></label>
       <button class="btn primary" data-act="gemini-key">Salvar (cifrada)</button>
-      <button class="btn" data-act="gemini-test">Testar</button>
+      <button class="btn" data-act="gemini-test">Testar</button><button class="btn danger" data-act="gemini-clear">Remover chave</button>
     </div>
     <p class="muted small">A chave fica cifrada no serviço local e nunca é enviada ao frontend.</p>`)
+  + card('Consumo da IA — últimas 24 horas',`<p>${budget.error?esc(budget.error):'Chamadas: '+num(budget.callsToday)+' · Tokens de entrada: '+num(budget.tokensIn)+' · Tokens de saída: '+num(budget.tokensOut)+' · Custo estimado local (USD): '+num(budget.costUsd,4)+' · Limite diário (USD): '+num(budget.dailyCostLimitUsd,2)}</p><p class="muted small">Estimativas registradas localmente; confira a cobrança no provedor.</p>`)
+  + (state.accountId?card('Limites financeiros e histórico por loja',`<p class="muted small">Centavos (100 = R$ 1). Limites por campanha e variação, não um teto global verificado.</p><div class="form-grid">${[['maxCampaignDailyBudgetCents','Teto diário por campanha (centavos)'],['minVariationPriceCents','Preço mínimo (centavos)'],['maxVariationPriceCents','Preço máximo (centavos)'],['maxVariationStock','Estoque máximo'],['maxVariationPriceChangePct','Variação máxima de preço (%)']].map(([key,label])=>`<label>${esc(label)}<input id="assisted-${key}" type="number" min="0" step="${key.endsWith('Pct')?'0.1':'1'}" value="${esc(limitsResult.limits?.[key]??'')}"></label>`).join('')}</div><button class="btn" data-act="assisted-limits-save">Confirmar limites</button>`+(Array.isArray(limitHistory)?table(['Quando','Limites anteriores','Novos limites','Ação'],limitHistory.map((row,i)=>`<tr><td>${dt(row.created_at)}</td><td>${esc(row.before_json??'Sem configuração')}</td><td>${esc(row.after_json)}</td><td>${i===0?`<button class="btn tiny" data-act="limits-restore" data-id="${esc(row.id)}">Restaurar anterior</button>`:'—'}</td></tr>`),'Nenhuma revisão.'):esc(limitHistory.error))):'')
   + card('Configurações', `<pre class="json">${esc(JSON.stringify(settings, null, 2))}</pre>`)
   + card('Backups', `
     <div class="actions"><button class="btn primary" data-act="backup-create">Criar backup agora</button></div>
@@ -1085,10 +1092,11 @@ async function viewAdmin() {
         <td><button class="btn tiny" data-act="au-inspect" data-id="${esc(u.id)}">Revisar diff</button></td></tr>`),
       'Nenhuma proposta de upgrade.')}`)
   + card('Trilha de auditoria', table(['Quando', 'Ação', 'Ator', 'Alvo', 'Resultado'],
-    (audit || []).slice(0, 100).map((a) => `<tr><td>${dt(a.created_at)}</td><td>${esc(a.action)}</td>
-      <td>${esc(a.actor_id || a.actor || '—')}</td><td>${esc(a.target_id || '—')}</td>
+    (audit || []).slice(0, 100).map((a) => `<tr><td>${dt(a.at)}</td><td>${esc(a.action)}</td>
+      <td>${esc(a.actor_user_id || a.actor_role || '—')}</td><td>${esc(a.entity || '—')} · ${esc(a.entity_id || '—')}</td>
       <td>${badge(a.result || '—', a.result === 'OK' ? 'ok' : 'bad')}</td></tr>`),
-    'Sem registros.'))
+    'Sem registros ou sem permissão.'))
+  + (state.accountId?card('Alterações verificadas e reversões',Array.isArray(changes)?table(['Quando','Anúncio','Campo','Antes','Depois','Estado','Ação'],changes.map(c=>`<tr><td>${dt(c.applied_at)}</td><td>${esc(c.external_id)}</td><td>${esc(c.field)}</td><td>${esc(c.before_text)}</td><td>${esc(c.after_text)}</td><td>${c.rolled_back_at?badge('Revertido','ok'):c.rollback_task_id?badge('Rascunho restaurador','warn'):badge('Alteração registrada','neutral')}</td><td>${c.verified_after_save&&c.field==='title'&&!c.rolled_back_at&&!c.rollback_task_id?`<button class="btn tiny" data-act="audit-rollback" data-id="${esc(c.id)}">Preparar reversão</button>`:'—'}</td></tr>`),'Nenhuma alteração verificada nesta loja.'):esc(changes.error)):'')
   + card('Agendamento de análises e relatórios', `
     <div class="form-grid">
       <label>Tipo de rotina<select id="sc-kind"><option value="analysis">Análise da loja</option><option value="report">Relatório automático</option></select></label>
@@ -1096,7 +1104,7 @@ async function viewAdmin() {
       <label id="sc-interval-wrap" hidden>Intervalo personalizado (minutos)<input id="sc-interval" type="number" min="15" max="43200" step="1" value="60"></label>
       <label id="sc-mode-wrap">Profundidade da análise<select id="sc-mode"><option value="RAPIDA">Rápida</option><option value="PADRAO" selected>Padrão</option><option value="FORENSE">Forense</option><option value="360">360° da conta</option></select></label>
       <label id="sc-days-wrap">Janela da análise (dias)<input id="sc-days" type="number" min="1" max="365" value="30"></label>
-      <label id="sc-report-wrap" hidden>Tipo de relatório<select id="sc-report-type"><option value="EXECUTIVO">Executivo</option><option value="KPIS">KPIs</option><option value="CONCORRENCIA">Concorrência</option><option value="FINANCEIRO">Financeiro</option><option value="EXPERIMENTOS">Experimentos</option><option value="AUDITORIA">Auditoria global</option></select></label>
+      <label id="sc-report-wrap" hidden>Tipo de relatório<select id="sc-report-type"><option value="EXECUTIVO">Executivo</option><option value="KPIS">KPIs</option><option value="ANUNCIO">Anúncios</option><option value="CONCORRENCIA">Concorrência</option><option value="FINANCEIRO">Financeiro</option><option value="EXPERIMENTOS">Experimentos</option><option value="AUDITORIA">Auditoria global</option></select></label>
       <div class="wide muted small">As rotinas só leem dados locais. Análises e relatórios agendados não publicam anúncios nem alteram campanhas. Intervalos personalizados aceitam 15 a 43.200 minutos.</div>
     </div>
     <div class="actions"><button class="btn primary" data-act="schedule-create">Criar agendamento</button></div>
@@ -1111,15 +1119,16 @@ async function viewAdmin() {
   + card('Relatório e exportação', `
     <div class="form-row">
       <label>Tipo <select id="rp-type"><option value="EXECUTIVO">Resumo executivo</option>
-        <option value="KPIS">KPIs por anúncio</option><option value="CONCORRENCIA">Inteligência competitiva</option>
+        <option value="KPIS">Histórico de KPIs</option><option value="ANUNCIO">Por anúncio</option><option value="CONCORRENCIA">Inteligência competitiva</option>
         <option value="FINANCEIRO">Financeiro/margem</option><option value="EXPERIMENTOS">Testes A/B</option>
         <option value="AUDITORIA">Auditoria</option></select></label>
-      <label>Formato <select id="rp-fmt"><option value="csv">CSV</option><option value="xlsx">Excel XLSX</option><option value="json">JSON</option><option value="pdf">PDF (imprimir/salvar)</option></select></label>
+      <label>Formato <select id="rp-fmt"><option value="csv">CSV</option><option value="xlsx">Excel XLSX</option><option value="json">JSON</option><option value="pdf">PDF (arquivo local)</option></select></label>
+      <label>Escopo <select id="rp-scope"><option value="account">Loja selecionada</option><option value="all">Todas as lojas</option></select></label><label>Marketplace<select id="rp-market"><option value="">Todos</option><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label><label>Últimos dias (vazio = histórico; executivo 30)<input id="rp-days" type="number" min="1" max="365"></label><label>ID interno do anúncio (opcional)<input id="rp-listing"></label><label>ID interno do SKU (opcional)<input id="rp-sku"></label><label>Registros por parte<input id="rp-limit" type="number" min="1" max="1000" value="100"></label>
       <button class="btn primary" data-act="report">Gerar</button>
-    </div>
+    </div><p class="muted small">Auditoria é global e exclusiva de administrador. Filtros de anúncio/SKU aplicam-se a executivo, KPIs e anúncios; período se refere à captura/registro, não garante cobertura comercial.</p>
     <div id="report-out" class="out"></div>`)
   + card('Diagnóstico de adapters', `
-    <div class="actions"><button class="btn" data-act="adapter-diag">Rodar diagnóstico</button></div>
+    <div class="form-row"><label>Marketplace <select id="diag-market"><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label><button class="btn" data-act="adapter-diag">Rodar diagnóstico</button></div>
     <div id="adapter-out" class="out"></div>`);
 }
 
@@ -1509,7 +1518,7 @@ function createXlsxReport(report) {
   const keys = Array.from(rows.reduce((set, row) => { Object.keys(row || {}).forEach((key) => set.add(key)); return set; }, new Set()));
   const dataHeaders = keys.length ? keys : ['Informação'];
   const dataRows = keys.length ? rows : [{ Informação: 'Nenhum registro no período selecionado.' }];
-  const sheets = [];
+  const sheets = [{name:'Escopo',xml:makeSheetXml(Object.entries({tipo:report.type,escopo:report.scope,gerado:report.generatedAt,filtros:report.filters,parte:report.offset,proxima:report.nextOffset,nota:report.note}).map(([Indicador,Valor])=>({Indicador,Valor})),['Indicador','Valor'])}];
   const summary = report.summary && typeof report.summary === 'object' ? report.summary : null;
   if (summary) {
     const summaryRows = Object.entries(summary).map(([Indicador, Valor]) => ({ Indicador, Valor }));
@@ -2497,6 +2506,9 @@ const ACTIONS = {
     await run(() => api('gemini.setKey', { apiKey: key }), 'Chave salva cifrada.');
     $('#gk').value = '';
   },
+  'gemini-clear':async()=>{if(!confirm('Remover a chave Gemini armazenada localmente?'))return;await api('gemini.clearKey',{confirmed:true});toast('Chave removida; dados locais preservados.');await renderView();},
+  'limits-restore':async({id})=>{const accountId=state.accountId;if(!confirm('Restaurar limites anteriores desta loja?'))return;await api('operation.limits.restore',{accountId,revisionId:id,confirmed:true});toast('Limites restaurados.');await renderView();},
+  'audit-rollback':async({id})=>{const accountId=state.accountId;if(!confirm('Criar rascunho para reverter a mudança? Nenhuma alteração remota será feita agora.'))return;const r=await api('audit.rollback',{accountId,changeSetId:id,confirmed:true});toast('Rascunho '+r.taskId+' criado. Revise em Tarefas.');await renderView();},
   'gemini-test': async () => {
     const r = await run(() => api('gemini.testKey', {}));
     toast(r && r.ok ? 'Chave válida.' : `Falha: ${JSON.stringify(r)}`, r && r.ok ? 'ok' : 'bad');
@@ -2569,69 +2581,52 @@ const ACTIONS = {
   },
   'schedule-run-download': async (d) => {
     const result = await api('report.schedule.run.get', { runId: d.id });
-    const blob = new Blob([result.reportJson], { type: 'application/json;charset=utf-8' });
+    const pages=[JSON.parse(result.reportJson)];
+    for(let page=1;page<result.pageCount;page++){const part=await api('report.schedule.run.get',{runId:d.id,page});pages.push(JSON.parse(part.reportJson));}
+    const output=result.pageCount===1?{...pages[0],storedPartial:result.partial}:{runId:d.id,partial:result.partial,pageCount:pages.length,rowCount:pages.reduce((n,p)=>n+(p.rowCount||0),0),pages};
+    const blob = new Blob([JSON.stringify(output,null,2)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `relatorio-agendado-${d.id}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
-  report: async () => {
-    const type = $('#rp-type').value;
-    const fmt = $('#rp-fmt').value;
-    const r = await run(() => api('report.export', { type, format: fmt === 'pdf' ? 'json' : fmt, accountId: state.accountId || undefined }), 'Relatório gerado.');
-    if (!r) return;
-    if (fmt === 'pdf') {
-      const rowsHtml = (r.rows || []).map(row => `<tr>${Object.values(row).map(v => `<td>${esc(v ?? '')}</td>`).join('')}</tr>`).join('');
-      const cols = Object.keys((r.rows || [])[0] || {});
-      const w = window.open('', '_blank');
-      if (!w) throw new Error('O navegador bloqueou a janela de impressão. Permita pop-ups para o painel local.');
-      w.document.write(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Relatório ${esc(type)}</title><style>body{font:12px Arial;padding:24px;color:#222}h1{font-size:20px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:5px;text-align:left;word-break:break-word}</style><h1>Marketplace Intelligence — ${esc(type)}</h1><p>Gerado em ${new Date().toLocaleString('pt-BR')} · ${r.rowCount} registros</p><table><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table></html>`);
-      w.document.close(); w.focus(); w.print(); return;
-    }
-    const rows = r.rows || [];
-    const name = `relatorio-${type.toLowerCase()}-${Date.now()}.${fmt}`;
-    if (fmt === 'xlsx') {
-      const blob = createXlsxReport(r);
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = name;
-      link.textContent = `baixar ${name}`;
-      link.className = 'link';
-      $('#report-out').innerHTML = '';
-      $('#report-out').appendChild(link);
-      $('#report-out').insertAdjacentHTML('beforeend', `<p class="muted small">${rows.length} linha(s) exportadas em uma planilha XLSX local.</p>`);
-      return;
-    }
-    let content = '';
-    let mime = 'application/json';
-    if (fmt === 'csv') {
-      const cols = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
-      const escCsv = (v) => {
-        let t = v === null || v === undefined ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
-        // Evita CSV/Formula Injection ao abrir exportações em Excel/LibreOffice.
-        if (/^[\s]*[=+\-@\t\r]/.test(t)) t = `'${t}`;
-        return /[",\n;]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-      };
-      content = [cols.join(';'), ...rows.map((row) => cols.map((c) => escCsv(row[c])).join(';'))].join('\n');
-      mime = 'text/csv';
-    } else {
-      content = JSON.stringify(r, null, 2);
-    }
-    const blob = new Blob([content], { type: mime });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = name;
-    link.textContent = `baixar ${name}`;
-    link.className = 'link';
-    $('#report-out').innerHTML = '';
-    $('#report-out').appendChild(link);
-    $('#report-out').insertAdjacentHTML('beforeend',
-      `<p class="muted small">${rows.length} linha(s) — dados vindos do seu banco local.</p>`);
+  report: async (d={}) => {
+    const generation=viewRenderSequence,selectedAccount=state.accountId,host=$('#report-out');
+    const type=$('#rp-type').value,fmt=$('#rp-fmt').value;
+    const accountId=type==='AUDITORIA'||$('#rp-scope').value==='all'?undefined:selectedAccount||undefined;
+    if(type!=='AUDITORIA'&&$('#rp-scope').value==='account'&&!accountId)throw Error('Selecione uma loja.');
+    const input={type,format:fmt,accountId,marketplace:type==='AUDITORIA'?undefined:$('#rp-market').value||undefined,days:$('#rp-days').value?Number($('#rp-days').value):undefined,listingId:$('#rp-listing').value.trim()||undefined,skuId:$('#rp-sku').value.trim()||undefined,limit:Number($('#rp-limit').value),offset:Number(d.offset||0)};
+    const previous=reportPaging;
+    const baseInput={...input,offset:0};
+    if(input.offset&&(!previous||previous.generation!==generation||JSON.stringify(previous.baseInput)!==JSON.stringify(baseInput)))throw Error('Filtros alterados; gere o relatório novamente desde a primeira parte.');
+    if(input.offset&&previous.auditThroughId!==null)input.auditThroughId=previous.auditThroughId;
+    const r=await api('report.export',input);
+    const offsets=input.offset&&previous?[...previous.offsets.filter(x=>x<input.offset),input.offset]:[0];
+    reportPaging={generation,baseInput,auditThroughId:r.auditThroughId,offsets};
+    if(generation!==viewRenderSequence||selectedAccount!==state.accountId||host!==$('#report-out'))return;
+    const rows=r.rows||[],name='relatorio-'+type.toLowerCase()+'-'+Date.now()+'-parte-'+r.offset+'.'+fmt;
+    let blob;
+    if(fmt==='pdf'){const bytes=Uint8Array.from(atob(r.pdfBase64),ch=>ch.charCodeAt(0));blob=new Blob([bytes],{type:'application/pdf'});}
+    else if(fmt==='xlsx'){blob=createXlsxReport(r);}
+    else if(fmt==='csv'){
+      const escCsv=(v)=>{let t=v==null?'':typeof v==='object'?JSON.stringify(v):String(v);if(/^[\s]*[=+\-@\t\r]/.test(t)&&typeof v!=='number')t="'"+t;return /[",\n\r;]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;};
+      const metadata={_tipo:r.type,_escopo:r.scope,_gerado:r.generatedAt,_filtros:r.filters,_parte:r.offset,_proxima:r.nextOffset,_nota:r.note};
+      const records=[{...metadata,_registro:'RESUMO',_resumo:r.summary},...rows.map(row=>({...metadata,_registro:'DADO',...row}))];
+      const cols=[...new Set(records.flatMap(Object.keys))];
+      blob=new Blob(['\uFEFF'+[cols.map(escCsv).join(';'),...records.map(row=>cols.map(c=>escCsv(row[c])).join(';'))].join('\n')],{type:'text/csv;charset=utf-8'});
+    }else{blob=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});}
+    if(host.dataset.objectUrl)URL.revokeObjectURL(host.dataset.objectUrl);
+    const link=document.createElement('a');link.href=URL.createObjectURL(blob);host.dataset.objectUrl=link.href;link.download=name;link.textContent='Baixar '+name;link.className='link';
+    const note=document.createElement('p');note.className='muted small';note.textContent=rows.length+' registros nesta parte. '+(r.partial?'Relatório paginado; confira todas as partes. ':'')+r.note;
+    host.replaceChildren(link,note);
+    for(const [label,offset] of [['Parte anterior',offsets.length>1?offsets.at(-2):null],['Próxima parte',r.nextOffset]]){if(offset===null)continue;const button=document.createElement('button');button.className='btn tiny';button.dataset.act='report';button.dataset.offset=String(offset);button.textContent=label;host.append(button);}
+    if(r.summary!==null){const pre=document.createElement('pre');pre.className='json';pre.textContent=JSON.stringify(r.summary,null,2);host.append(pre);}
+    toast('Relatório gerado.');
   },
   'prestart-refresh': async () => {
     if (await renderView()) toast('Ambiente verificado.', 'ok');
   },
   'adapter-diag': async () => {
-    const r = await run(() => api('adapter.diagnostics', { marketplace: 'mercado_livre', observed: {} }));
+    const r = await run(() => api('adapter.diagnostics', { marketplace: $('#diag-market').value, observed: {} }));
     $('#adapter-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
   },
 };
@@ -2695,7 +2690,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit','report','limits-restore','audit-rollback','gemini-clear','assisted-limits-save','schedule-run-download'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
