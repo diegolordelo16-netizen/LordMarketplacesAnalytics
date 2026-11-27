@@ -445,6 +445,7 @@
     "documentNonce": "uuid",
     "budgetCents": "integer",
     "campaignStatus": "ACTIVE|PAUSED, optional",
+    "roasTargetHundredths": "integer 100..3500, optional",
     "confirmed": true
   },
   "campaign.budget.result": {
@@ -460,7 +461,8 @@
     "sourcePath": "string",
     "documentNonce": "new uuid",
     "budgetCents": "integer",
-    "campaignStatus": "ACTIVE|PAUSED, optional"
+    "campaignStatus": "ACTIVE|PAUSED, optional",
+    "roasTargetHundredths": "integer 100..3500, optional"
   },
   "campaign.budget.list": {
     "accountId": "string"
@@ -482,7 +484,8 @@
     "id": "uuid",
     "token": "uuid",
     "outcome": "CANCELLED|FAILED|NEEDS_VERIFICATION",
-    "message": "string"
+    "message": "string",
+    "duplicateReceipt": "optional explicit marketplace confirmation containing original and new IDs"
   },
   "listing.browser.verify": {
     "accountId": "string",
@@ -570,5 +573,17 @@
     "id": "uuid",
     "periodStart": "ISO datetime",
     "periodEnd": "ISO datetime"
+  },
+  "variation.api.editStock": {
+    "accountId": "string",
+    "proposalId": "approved legacy stock-only edit proposal with beforePriceCents and beforeStock",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
+  "variation.api.createUpOffer": {
+    "accountId": "string",
+    "proposalId": "approved User Product offer proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
   }
 }

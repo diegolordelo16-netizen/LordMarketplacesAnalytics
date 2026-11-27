@@ -372,7 +372,16 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   const statusField=new StatusSelect();
   const statusButton={...button,get form(){return statusForm;}};
   const statusForm={...form,elements:[statusField],querySelectorAll:()=>[statusButton]};
-  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:selector=>selector==='select'?[statusField]:[field],contains:el=>el===form||el===statusForm};
+  class RoasInput extends Input {
+    constructor(){super();this.raw='5.00';}
+    getAttribute(n){return n==='aria-label'?'ROAS objetivo (x)':null;}
+    closest(selector){return selector==='[data-campaign-id]'?row:roasForm;}
+    get form(){return roasForm;}
+  }
+  const roasField=new RoasInput();
+  const roasButton={...button,get form(){return roasForm;}};
+  const roasForm={...form,elements:[roasField],querySelectorAll:()=>[roasButton]};
+  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:selector=>selector==='select'?[statusField]:[field,roasField],contains:el=>el===form||el===statusForm||el===roasForm};
   const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:()=>ambiguous?[row,row]:[row]};
   const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(form.action),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=> 'seller_ads',visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,HTMLSelectElement:StatusSelect,Event:class{},setTimeout:fn=>fn()});
   vm.runInContext(snippet,ctx);
@@ -391,13 +400,16 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   ctx.grant={...grant('pause'),beforeCents:1200,targetCents:1200,beforeStatus:'ACTIVE',targetStatus:'PAUSED'};
   assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
   assert.equal(statusField.value,'paused');assert.equal(field.value,'12.00');assert.equal(clicks,2);
+  ctx.grant={...grant('roas'),beforeCents:1200,targetCents:1200,beforeRoas:500,targetRoas:650};
+  assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
+  assert.equal(roasField.value,'6.50');assert.equal(field.value,'12.00');assert.equal(clicks,3);
 });
 
 test('variação simples e duplicação assistidas recusam ambiguidade e repetição',async()=>{
   const src=readFileSync(new URL('../packages/extension/content/mercado-livre.js',import.meta.url),'utf8');
   const snippet=src.slice(src.indexOf('let budgetDocumentNonce='),src.indexOf('async function publishApprovedChange'));
   const listing='MLB1234567',editUrl='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+listing,listUrl='https://vendedores.mercadolivre.com.br/vendas/anuncios';
-  let clicks=0,consent=true,ambiguous=false,kind='seller_listing_edit',accountId='store-a',challenge=false,nestedOther=false;
+  let clicks=0,consent=true,ambiguous=false,kind='seller_listing_edit',accountId='store-a',challenge=false,nestedOther=false,duplicateAlert='';
   class Input{
     constructor(label,type,value=''){this.label=label;this.type=type;this.raw=value;this.tagName='INPUT';}
     get value(){return this.raw;}set value(v){this.raw=v;}
@@ -409,9 +421,9 @@ test('variação simples e duplicação assistidas recusam ambiguidade e repeti�
   const form={action:editUrl,elements:fields,getAttribute:()=>null,querySelectorAll:()=>[save],querySelector:()=>null};
   fields.forEach(f=>f.form=form);
   save.form=form;
-  const dup={textContent:'Duplicar anúncio',disabled:false,getAttribute:()=>null,closest:selector=>selector==='form'?null:nestedOther?{}:row,click:()=>clicks++};
+  const dup={textContent:'Duplicar anúncio',disabled:false,getAttribute:()=>null,closest:selector=>selector==='form'?null:nestedOther?{}:row,click:()=>{clicks++;duplicateAlert='Anúncio MLB1234567 duplicado com sucesso. Novo anúncio: MLB9876543';}};
   const row={getAttribute:k=>k==='data-item-id'?listing:null,querySelectorAll:()=>[dup]};
-  const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:s=>s==='form'?(ambiguous?[form,form]:[form]):s==='[data-item-id],[data-listing-id]'?(ambiguous?[row,row]:[row]):[]};
+  const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:s=>s==='form'?(ambiguous?[form,form]:[form]):s==='[data-item-id],[data-listing-id]'?(ambiguous?[row,row]:[row]):s.startsWith('[role="alert"]')&&duplicateAlert?[{textContent:duplicateAlert}]:[]};
   const ctx=vm.createContext({URL,Date,MAX_LISTINGS:100,captureListingList:()=>({accountId,listings:[{listingId:listing,title:'Teste'}]}),crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(editUrl),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge,collectionFilterState:()=>({signature:'',warnings:[]})},confirm:()=>consent},currentPageKind:()=>kind,currentExternalListingId:()=>listing,visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
   vm.runInContext(snippet,ctx);
   const apply=(id,action,url,plan)=>{ctx.grant={id,context:{accountId:'store-a',externalListingId:listing,sourcePath:url,documentNonce:'doc-1',action},plan,expiresAt:new Date(Date.now()+60000).toISOString()};return vm.runInContext('applyListingOperation(grant)',ctx);};
@@ -428,7 +440,7 @@ test('variação simples e duplicação assistidas recusam ambiguidade e repeti�
   nestedOther=true;assert.equal((await apply('nested','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');nestedOther=false;
   const duplicate=await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'});
   assert.equal(duplicate.outcome,'NEEDS_VERIFICATION');
-  assert.equal(duplicate.clicked,true);assert.equal(duplicate.baseline.listingIds[0],listing);assert.equal(clicks,2);
+  assert.equal(duplicate.clicked,true);assert.equal(duplicate.baseline.listingIds[0],listing);assert.equal(duplicate.duplicateReceipt.newId,'MLB9876543');assert.equal(clicks,2);
   assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');assert.equal(clicks,2);
 });
 

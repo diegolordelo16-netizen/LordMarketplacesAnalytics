@@ -1,6 +1,6 @@
 # Etapa 05 — Auditoria dos requisitos
 
-Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa-05. Metadados de distribuição ainda 3.13.0.
+Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa-05. Metadados da candidata sincronizados em 3.14.0; integração depende da CI e do escopo concluído.
 
 | ID | Requisito | Evidência de implementação e limite |
 |---|---|---|
@@ -16,13 +16,13 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 | 173 | Anúncios para mais investimento | Sinal de revisão com receita atribuída superior ao gasto, pedidos atribuídos, estoque positivo e lucro registrado positivo; não ordem de aumento. |
 | 174 | Orçamento sem resultado | Gasto positivo e receita atribuída explicitamente zero em janela reconhecida; dado ausente não é zero. |
 | 178 | Preparar alterações de campanha | Rascunho local com baseline, alterações, motivo e revisão por super_admin. |
-| 179 | Executar alterações autorizadas | **PARCIAL**: execução assistida de orçamento diário, pausa e reativação no Mercado Livre com autorização única, confirmação na aba e conferência automática em uma nova aba da mesma campanha, com conferência manual disponível se o valor ainda não estiver visível. Outros tipos de alteração e comprovação independente ainda pendentes. |
-| 182 | Gestão de variações | **PARCIAL**: edição assistida de preço e estoque de variação simples no Mercado Livre, com captura inicial vinculada à tentativa e conferência automática em novo documento da mesma loja. Os demais campos, remoção e outros marketplaces dependem de adaptadores. |
+| 179 | Executar alterações autorizadas | **PARCIAL**: orçamento diário, pausa, reativação e ROAS objetivo assistidos no Mercado Livre, com autorização única, limites por loja e nova leitura independente da aba. Outros tipos de alteração e adaptadores de escrita dos demais marketplaces não concluídos. |
+| 182 | Gestão de variações | **PARCIAL**: edição assistida de preço e estoque; API legada de criação, estoque e remoção restrita; verificações de titularidade, baseline e releitura. Edição de atributos de famílias User Products e outros marketplaces ainda não concluída. |
 | 185 | Sugestões de imagens | Prévia de arquivo local decodificado, resolução, enquadramento, texto alternativo e checklist de revisão; não certifica adequação às regras do marketplace. |
 | 187 | Preparar troca de capa | Rascunho vinculado a anúncio, snapshot inicial e hash da imagem da mesma conta; prévia e aprovação. Upload remoto não implementado. |
-| 194 | Duplicar anúncios quando permitido | **PARCIAL**: acionamento assistido quando há controle dedicado reconhecido no Mercado Livre. A captura identifica um novo anúncio compatível; a origem da duplicação depende de evidência do marketplace. |
-| 195 | Criar variações de ofertas | **PARCIAL**: envio assistido de formulário dedicado para uma opção simples e criação pela API oficial de variação em anúncio legado do Mercado Livre. A API confirma o ID retornado com leitura separada do estado. User Products, demais marketplaces e vinculação inequívoca na execução pelo navegador continuam pendentes. |
-| 196 | Medir resultados | operation.measure: antes/depois após relato manual ou conferência de orçamento e edição assistida de variação. Usa janelas encerradas de mesma duração e filtros, fora de todo o intervalo entre a autorização e a conferência. A edição mostra preço e estoque da própria variação pela dupla exata de capturas, além das métricas do anúncio inteiro quando há janelas comparáveis. Duplicação e criação ainda precisam de identificação confirmada da nova entidade; impacto causal ainda não é medido. |
+| 194 | Duplicar anúncios quando permitido | **PARCIAL**: executor de clique único do Mercado Livre; alerta novo explícito com ambos os IDs mais nova captura pode vincular a cópia. Sem ambos os IDs, permanece candidato. Cobertura de outros fluxos e marketplaces pendente. |
+| 195 | Criar variações de ofertas | **PARCIAL**: criação assistida, criação legada pela API oficial e nova condição de venda para User Product existente (mesmo estoque compartilhado). Validação de conta, categoria, lista completa de ofertas, ID novo e releitura. Criação de novo produto físico na família e adaptadores adicionais pendentes. |
+| 196 | Medir resultados | **IMPLEMENTADO no escopo de operações com evidência**: janelas encerradas equivalentes; variação legada, campanhas, cópia vinculada e oferta UP confirmada, com escopos explícitos; candidatos sem prova não viram operações confirmadas. Não atribui causalidade. |
 | 197 | Monitorar estoque | inventory.dashboard, recência, histórico e armazéns; sem somar SKU compartilhado. |
 | 198 | Risco de ruptura | Estoque zero ou cobertura observada <=7 dias, somente com janela de vendas explícita para calcular cobertura. |
 | 203 | Cruzar estoque e Ads | Sinal de estoque zero e gasto positivo no mesmo snapshot, sem afirmar simultaneidade. |
@@ -51,3 +51,14 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - A migração 036 registra o estado inicial e o estado aprovado. Pausa e reativação exigem formulário dedicado, orçamento constante dentro do teto configurado e conferência do status e do orçamento em nova aba. A migração 035 já está reservada no PR da etapa 06.
 - A migração 037 registra a criação pela API oficial de variações legadas. A proposta aprovada informa atributos e IDs das imagens. O executor compara o apelido autenticado e a titularidade do anúncio, aplica os limites da loja, reserva a operação antes do POST e guarda o ID retornado. O GET separado confirma preço, estoque, atributos e imagens. Se a resposta se perder, a operação fica pendente e não repete a escrita.
 - A migração 038 registra a remoção de variação legada pela API oficial. A execução exige uma proposta específica, preço correspondente, estoque zero, nenhuma venda e outra variação no anúncio. A confirmação depende de uma nova leitura da lista do anúncio e a remoção nunca é reenviada automaticamente.
+
+- Migration 039: edição de estoque por API em variação legada ativa, com preço mantido, baseline aprovado, lista completa de IDs, reserva única e dupla releitura. Adicionada proteção de conflito entre publicação de tarefas e tentativas assistidas pendentes. Homologação real dispensada; CI do novo SHA deve ser verificada.
+
+- Medição de operações confirmadas pela API: mantém o estado exato da variação e compara métricas do anúncio inteiro em janelas compatíveis, fora do intervalo de execução. Teste com janela ausente e janela válida. Não atribui causalidade.
+
+- Migration 040: alteração assistida do ROAS objetivo, em centésimos de multiplicador (100–3500), com orçamento mantido, autorização de uso único, formulário dedicado, leitura em documento novo e regressão simulada. Não testada em conta real.
+
+- Duplicação: confirmação explícita fresca com os dois IDs, vinculada à tentativa por token e conferida por nova captura da mesma loja. Sem confirmação inequívoca, permanece candidato. Quando vinculada, compara original antes e cópia depois em janelas equivalentes; não demonstra causalidade. Testes simulados incluem recusa de ID divergente.
+
+- CI 207 e 208 aprovadas: versão 3.14.0, ROAS objetivo, duplicação vinculada e comparação da cópia. CI 203 encontrou erros TS2532 corrigidos; CI 205 detectou teste com versão antiga fixa, substituído por comparação com o package.json.
+- Migração 041: oferta adicional de UP existente, com condição de venda diferente, estoque compartilhado inalterado, titularidade do vendedor, consulta completa limitada a 50 ofertas, aprovação e reserva transacional, ID de resposta e leitura independente. Bloqueio de repetição por UP/tipo de publicação, incluindo propostas distintas. Sem homologação real. Referência oficial: https://developers.mercadolivre.com.br/pt_br/preco-variacao .

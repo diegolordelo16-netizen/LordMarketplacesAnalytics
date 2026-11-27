@@ -512,9 +512,9 @@ async function verifyCampaignInFreshTab(tab, grant, proposalId) {
     verificationTab = await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
     if (!Number.isInteger(verificationTab.id)) return null;
     await waitForTabComplete(verificationTab.id,tab.url,8000);
-    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef,changeKind:grant.targetStatus?'STATUS':'BUDGET'});
+    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef,changeKind:grant.targetStatus?'STATUS':grant.targetRoas!==undefined?'ROAS':'BUDGET'});
     if (!info?.ok || info.accountId!==grant.accountId || info.campaignRef!==grant.campaignRef ||
-        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents || info.campaignStatus!==grant.targetStatus) return null;
+        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents || info.campaignStatus!==grant.targetStatus || info.roasTargetHundredths!==grant.targetRoas) return null;
     const {ok,...context}=info;
     const verified=await callService('campaign.budget.verify',{...context,proposalId});
     return verified?.ok && verified.result?.status==='UI_READBACK_MATCHED' ? verified : null;
@@ -572,7 +572,7 @@ async function verifyVariationInFreshTab(tab, grant, proposalId) {
   }
 }
 
-async function observeDuplicateInFreshTab(tab, grant, proposalId, baseline) {
+async function observeDuplicateInFreshTab(tab, grant, proposalId, baseline, duplicateReceipt) {
   const {accountId,sourcePath,externalListingId}=grant.context;
   const {originalTitle}=grant.plan;
   if(!baseline?.listingIds?.includes(externalListingId)||typeof baseline.filterSignature!=='string'||!originalTitle)return null;
@@ -588,7 +588,7 @@ async function observeDuplicateInFreshTab(tab, grant, proposalId, baseline) {
         snapshot.url!==tab.url||snapshot.pageKind!=='seller_listings'||snapshot.coverageWarnings?.length||
         snapshot.filterSignature!==baseline.filterSignature||snapshot.spaPage!==baseline.spaPage||
         !Array.isArray(snapshot.listings)||!snapshot.listings.some(row=>row.listingId===externalListingId&&row.title===originalTitle))return null;
-    const candidates=snapshot.listings.filter(row=>/^MLB-?\d{5,}$/i.test(row.listingId)&&!before.has(row.listingId)&&row.title===originalTitle);
+    const candidates=snapshot.listings.filter(row=>/^MLB-?\d{5,}$/i.test(row.listingId)&&!before.has(row.listingId)&&row.title===originalTitle&&(!duplicateReceipt||row.listingId.replace('-','').toUpperCase()===duplicateReceipt.newId));
     if(candidates.length!==1)return null;
     const listing=candidates[0],now=new Date().toISOString();
     const capture=await callService('capture.ingest',{
@@ -597,7 +597,7 @@ async function observeDuplicateInFreshTab(tab, grant, proposalId, baseline) {
     });
     if(!captureAccepted(capture)||capture.result?.listingsIngested!==1)return null;
     const candidate=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:listing.listingId});
-    return candidate?.ok&&candidate.result?.status==='CANDIDATE_OBSERVED'?candidate:null;
+    return candidate?.ok&&['CANDIDATE_OBSERVED','UI_READBACK_MATCHED'].includes(candidate.result?.status)?candidate:null;
   }catch{
     return null;
   }finally{
@@ -1362,10 +1362,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           result=await chrome.tabs.sendMessage(tab.id,{type:'MI_LISTING_OPERATION_APPLY',grant});
         }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
         const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
-        const recorded=await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
+        const recorded=await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000),...(result?.duplicateReceipt?.message?{duplicateReceipt:result.duplicateReceipt.message}:{})});
         const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true
           ? input.action==='DUPLICATE'
-            ? await observeDuplicateInFreshTab(tab,grant,input.proposalId,result.baseline)
+            ? await observeDuplicateInFreshTab(tab,grant,input.proposalId,result.baseline,result.duplicateReceipt)
             : await verifyVariationInFreshTab(tab,grant,input.proposalId)
           : null;
         sendResponse(verified??recorded);return;

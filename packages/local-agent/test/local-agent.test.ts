@@ -603,6 +603,25 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED'})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false});
   });
 
+  it('autoriza meta ROAS com orçamento constante e exige releitura correspondente',async()=>{
+    const accountId='campaign-roas-shop',campaignRef='C-ROAS';seedImportAccount(accountId);
+    const base={dailyBudgetCents:1000,roasTargetHundredths:500};
+    const proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,baseline:base,changes:{...base,roasTargetHundredths:650},reason:'Alteração de ROAS aprovada'})).result as {id:string};
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{maxCampaignDailyBudgetCents:1200,minVariationPriceCents:100,maxVariationPriceCents:10000,maxVariationStock:50,maxVariationPriceChangePct:20}})).ok).toBe(true);
+    const ctx={accountId,campaignRef,proposalId:proposal.id,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',
+      documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,roasTargetHundredths:500,confirmed:true};
+    expect((await call('campaign.budget.claim',{...ctx,roasTargetHundredths:501})).ok).toBe(false);
+    const grant=(await call('campaign.budget.claim',ctx)).result as {id:string;token:string};
+    expect(grant).toMatchObject({beforeRoas:500,targetRoas:650,beforeCents:1000,targetCents:1000});
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Clique autorizado'})).ok).toBe(true);
+    const {confirmed,...verified}=ctx;
+    expect((await call('campaign.budget.verify',{...verified,roasTargetHundredths:650})).ok).toBe(false);
+    const fresh={...verified,documentNonce:'22222222-2222-4222-8222-222222222222',roasTargetHundredths:650};
+    expect((await call('campaign.budget.verify',{...fresh,budgetCents:1001})).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',fresh)).result).toMatchObject({status:'UI_READBACK_MATCHED'});
+  });
+
   it('cria variação legada pela API com loja validada, ID retornado e conferência independente',async()=>{
     const accountId='api-variant-shop',itemId='MLB1234567',listingId='api-item',at='2025-01-01T00:00:00.000Z';
     seedImportAccount(accountId);
@@ -615,14 +634,20 @@ describe('capacidades adicionais 3.10.3', () => {
       maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20,
     }})).ok).toBe(true);
     const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
-    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0;
+    let nickname='outra loja',created=false,postCount=0,failReadback=true,deleted=false,sold=0,deleteCount=0,hideCreated=false,sellerId=23,remoteStock=0,putCount=0;
     const mock=vi.fn(async (url:URL,init:RequestInit)=>{
       expect(url.origin).toBe('https://api.mercadolibre.com');
       expect(init.redirect).toBe('error');
       if(url.pathname==='/users/me')return Response.json({id:23,nickname,site_id:'MLB',tags:[]});
-      if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',status:'active',
+      if(url.pathname==='/items/'+itemId&&init.method==='PUT'){
+        putCount++;
+        const body=JSON.parse(String(init.body));
+        expect(body.variations).toEqual([{id:'41'},{id:'42',available_quantity:3}]);
+        remoteStock=3;return Response.json({id:itemId});
+      }
+      if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:sellerId,site_id:'MLB',currency_id:'BRL',status:'active',
         user_product_id:null,pictures:[{id:'PIC1'}],variations:[{id:41,attribute_combinations:[{id:'COLOR',value_id:'1'}]},
-          ...(created&&!deleted?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:sold}]:[])]});
+          ...(created&&!deleted&&!hideCreated?[{id:42,attribute_combinations:option.attributeCombinations,price:12,available_quantity:remoteStock,sold_quantity:sold}]:[])]});
       if(url.pathname==='/items/'+itemId+'/variations'&&init.method==='POST'){
         postCount++;
         expect(JSON.parse(String(init.body))).toEqual({attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:0,picture_ids:['PIC1']});
@@ -631,7 +656,7 @@ describe('capacidades adicionais 3.10.3', () => {
       if(url.pathname==='/items/'+itemId+'/variations/42'){
         if(init.method==='DELETE'){deleteCount++;deleted=true;return new Response(null,{status:204});}
         if(failReadback)throw Error('timeout simulado');
-        return Response.json({id:42,price:12,available_quantity:0,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
+        return Response.json({id:42,price:12,available_quantity:remoteStock,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
       }
       throw Error('rota inesperada');
     });
@@ -646,6 +671,12 @@ describe('capacidades adicionais 3.10.3', () => {
       expect(postCount).toBe(1);
       failReadback=false;
       const {confirmed,...verify}=request;
+      hideCreated=true;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:'42',remoteVerified:false});
+      hideCreated=false;
+      sellerId=24;
+      expect((await call('variation.api.verify',verify)).ok).toBe(false);
+      sellerId=23;
       expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:'42',remoteVerified:true});
       expect(postCount).toBe(1);
       const list=await call('variation.api.list',{accountId});
@@ -655,6 +686,27 @@ describe('capacidades adicionais 3.10.3', () => {
         createdVariation:{externalId:'42',priceCents:1200,stock:0},
       });
       expect(JSON.stringify(list.result)).not.toContain(request.accessToken);
+      const edit=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Editar estoque Azul',
+        options:[{editVariationId:'42',beforePriceCents:1200,beforeStock:0}],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:edit.id,decision:'APPROVED',reason:'Edição autorizada'})).ok).toBe(true);
+      const editRequest={...request,proposalId:edit.id};
+      remoteStock=1;
+      expect((await call('variation.api.editStock',editRequest)).ok).toBe(false);
+      expect(putCount).toBe(0);
+      remoteStock=0;
+      expect((await call('variation.api.editStock',editRequest)).result).toMatchObject({status:'REMOTE_VERIFIED',action:'EDIT_VARIATION',variationId:'42'});
+      expect((await call('variation.api.editStock',editRequest)).ok).toBe(false);
+      expect(putCount).toBe(1);
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_STOCK_CONFIRMED',editedVariation:{externalId:'42',beforeStock:0,stock:3,priceCents:1200},
+      });
+      db.db.prepare("UPDATE listing_api_executions SET started_at=?,updated_at=? WHERE proposal_id=?").run('2025-01-08T12:00:00.000Z','2025-01-08T13:00:00.000Z',edit.id);
+      const insertMetric=db.db.prepare('INSERT INTO listing_snapshots(id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES(?,?,?,?,?,?,?,?)');
+      insertMetric.run('api-before',listingId,accountId,'2025-01-07T23:59:59.999Z','2025-01-07T23:59:59.999Z',JSON.stringify({orders:10}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}));
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({measurementStatus:'INSUFFICIENT_COMPATIBLE_WINDOWS',remoteVerified:true,metrics:null});
+      insertMetric.run('api-after',listingId,accountId,'2025-01-16T12:00:00.000Z','2025-01-16T12:00:00.000Z',JSON.stringify({orders:12}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_VARIATION_STOCK_CONFIRMED',measurementStatus:'OBSERVED_CHANGE',measurementScope:'LISTING',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:true,causalityVerified:false});
+      remoteStock=0;
       const removal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Remover Azul',
         options:[{removeVariationId:'42'}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
       expect((await call('offer.variation.review',{accountId,id:removal.id,decision:'APPROVED',reason:'Remoção autorizada'})).ok).toBe(true);
@@ -673,6 +725,47 @@ describe('capacidades adicionais 3.10.3', () => {
     }finally{
       vi.unstubAllGlobals();
     }
+  });
+
+  it('cria condição de venda User Products sem duplicar estoque ou aceitar oferta de outra loja',async()=>{
+    const accountId='api-up-shop',itemId='MLB1234567',newId='MLB1234568',listingId='api-up-item',upId='MLBU1234567',at='2025-01-01T00:00:00.000Z';
+    seedImportAccount(accountId);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre',itemId,'Anúncio UP','ACTIVE',at,at);
+    const option={userProductId:upId,categoryId:'MLB1234',listingTypeId:'gold_pro',beforePriceCents:1000,beforeStock:3};
+    const draft=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Oferta premium',options:[option],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:draft.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20}})).ok).toBe(true);
+    let owner=24,created=false,posts=0,readback=false,total=1;
+    const source={id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',user_product_id:upId,category_id:'MLB1234',listing_type_id:'gold_special',buying_mode:'buy_it_now',condition:'new',catalog_listing:false,price:10,available_quantity:3,status:'active',variations:[],channels:['marketplace']};
+    vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit)=>{
+      if(url.pathname==='/users/me')return Response.json({id:23,nickname:accountId,site_id:'MLB',tags:['user_product_seller']});
+      if(url.pathname==='/items/'+itemId)return Response.json(source);
+      if(url.pathname==='/user-products/'+upId)return Response.json({id:upId,user_id:owner,site_id:'MLB'});
+      if(url.pathname==='/users/23/items/search')return Response.json({seller_id:23,results:[itemId],paging:{offset:0,total}});
+      if(url.pathname==='/user-products/'+upId+'/items'&&init.method==='POST'){
+        posts++;expect(JSON.parse(String(init.body))).toEqual({price:12,category_id:'MLB1234',currency_id:'BRL',buying_mode:'buy_it_now',listing_type_id:'gold_pro',channels:['marketplace'],catalog_listing:false});
+        created=true;return Response.json({id:newId},{status:201});
+      }
+      if(url.pathname==='/items/'+newId&&created)return Response.json({...source,id:newId,price:12,listing_type_id:'gold_pro',seller_id:readback?23:24});
+      throw Error('rota inesperada');
+    }));
+    try{
+      const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
+      expect((await call('variation.api.createUpOffer',request)).ok).toBe(false);expect(posts).toBe(0);
+      owner=23;total=51;
+      expect((await call('variation.api.createUpOffer',request)).ok).toBe(false);expect(posts).toBe(0);
+      total=1;
+      const results=await Promise.all([call('variation.api.createUpOffer',request),call('variation.api.createUpOffer',request)]);
+      expect(results.filter(r=>r.ok)).toHaveLength(1);expect(posts).toBe(1);
+      expect(results.find(r=>r.ok)?.result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:newId,action:'CREATE_UP_OFFER'});
+      const {confirmed,...verify}=request;readback=true;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:newId});
+      expect((await call('operation.measure',{accountId,proposalId:draft.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_UP_OFFER_CONFIRMED',measurementScope:'USER_PRODUCT_ORIGINAL_VS_OFFER',createdOffer:{externalId:newId,stock:3},metrics:null,causalityVerified:false});
+      const again=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Outra proposta da mesma oferta',options:[option],proposedPriceCents:1200,proposedStock:3})).result as {id:string};
+      expect((await call('offer.variation.review',{accountId,id:again.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+      expect((await call('variation.api.createUpOffer',{...request,proposalId:again.id})).ok).toBe(false);
+      expect(posts).toBe(1);
+    }finally{vi.unstubAllGlobals();}
   });
 
   it('autoriza variação simples e duplicação apenas com proposta, contexto e limites correspondentes',async()=>{
@@ -703,8 +796,21 @@ describe('capacidades adicionais 3.10.3', () => {
     const duplication=await call('listing.browser.claim',duplicateCtx);expect(duplication.ok).toBe(true);
     expect((duplication.result as any).plan).toEqual({originalTitle:'Teste'});
     const d=(duplication.result as any);
-    expect((await call('listing.browser.result',{id:d.id,token:d.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(true);
+    expect((await call('listing.browser.result',{id:d.id,token:d.token,outcome:'NEEDS_VERIFICATION',message:'Teste',duplicateReceipt:'Anúncio MLB1234567 duplicado com sucesso. Novo anúncio: MLB9876543'})).ok).toBe(true);
     expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:externalListingId})).ok).toBe(false);
+    db.db.prepare("UPDATE listing_browser_executions SET created_at=?,updated_at=? WHERE id=?").run('2025-01-08T12:00:00.000Z','2025-01-08T13:00:00.000Z',d.id);
+    const insertCopy=db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)');
+    const insertSnap=db.db.prepare('INSERT INTO listing_snapshots(id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES(?,?,?,?,?,?,?,?)');
+    const captured='2025-01-16T12:00:00.000Z';
+    insertCopy.run('wrong-copy',accountId,'mercado_livre','MLB8888888','Teste','ACTIVE',captured,captured);
+    insertSnap.run('wrong-copy-snap','wrong-copy',accountId,captured,captured,'{}','A_PRIMARY_UI','{}');
+    expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:'MLB8888888'})).ok).toBe(false);
+    insertCopy.run('right-copy',accountId,'mercado_livre','MLB9876543','Teste','ACTIVE',captured,captured);
+    insertSnap.run('right-copy-snap','right-copy',accountId,captured,captured,JSON.stringify({orders:12}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+    expect((await call('listing.browser.verify',{accountId,proposalId:duplicate.id,observedExternalId:'MLB9876543'})).result).toMatchObject({status:'UI_READBACK_MATCHED',duplicateOriginObserved:true,remoteVerified:false});
+    db.db.prepare("UPDATE listing_browser_executions SET updated_at=? WHERE id=?").run('2025-01-08T13:00:00.000Z',d.id);
+    db.db.prepare("UPDATE listing_snapshots SET metrics_json=?,evidence_json=? WHERE id=?").run(JSON.stringify({orders:10}),JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}),'browser-baseline');
+    expect((await call('operation.measure',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id})).result).toMatchObject({status:'DUPLICATE_STATE_CONFIRMED',measurementStatus:'OBSERVED_CHANGE',measurementScope:'DUPLICATE_ORIGINAL_VS_COPY',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:false,causalityVerified:false});
     const rows=(await call('listing.browser.list',{accountId})).result as any[];
     expect(rows).toHaveLength(2);expect(rows.every(row=>row.token_hash===undefined)).toBe(true);
   });
@@ -1688,6 +1794,10 @@ describe('tarefas e guard', () => {
     expect(approved.ok).toBe(true);
     const approval = approved.result as { approvalIds: string[]; requiresPerListingBrowserConfirmation: boolean };
     expect(approval.requiresPerListingBrowserConfirmation).toBe(true);
+    db.db.prepare("INSERT INTO listing_browser_executions(id,proposal_kind,proposal_id,account_id,listing_id,external_listing_id,action,plan_json,context_json,token_hash,status,created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run('busy-browser','VARIATION','busy-proposal','ml:publish','listing-publish','MLBPUBLISH1','CREATE_VARIATION','{}','{}','hash','NEEDS_VERIFICATION',now,now,now);
+    expect((await call('task.claimNextPublish',{marketplace:'mercado_livre',accountId:'ml:publish',externalListingId:'MLBPUBLISH1'})).result).toBeNull();
+    db.db.prepare("UPDATE listing_browser_executions SET status='CANCELLED' WHERE id=?").run('busy-browser');
     const claim = await call('task.claimNextPublish', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
     const publish = claim.result as { approvalId: string; task: { mode: string }; item: { id: string; baselineTitle: string; baselineDescription: string } };
     expect(publish.task.mode).toBe('PUBLISH');

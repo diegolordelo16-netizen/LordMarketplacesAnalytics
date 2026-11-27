@@ -540,8 +540,28 @@
     if(!campaignStatus)throw Error('estado da campanha não reconhecido');
     return {...budget,field,button:buttons[0],campaignStatus,statusValues};
   }
+  function campaignRoasContext(campaignRef){
+    const budget=campaignBudgetContext(campaignRef),row=budget.field.closest('[data-campaign-id]');
+    if(!row||row.getAttribute('data-campaign-id')!==campaignRef)throw Error('campanha não comprovada');
+    const fields=Array.from(row.querySelectorAll('input[type="number"]')).filter(el=>el.closest('[data-campaign-id]')===row&&
+      window.MI_DOM.isVisible(el)&&isEditableVisible(el)&&!el.getAttribute('form')&&
+      /^(roas objetivo|roas alvo|roas target|target roas)( \(x\))?$/.test(operationLabel(el)));
+    if(fields.length!==1)throw Error('campo dedicado de ROAS objetivo não encontrado');
+    const field=fields[0],form=field.form;
+    if(!form||field.closest('form')!==form||!row.contains(form)||form===budget.field.form||
+      new URL(form.action||location.href,location.href).origin!==location.origin||!['_self',''].includes(form.target)||
+      form.querySelector('[contenteditable]:not([contenteditable="false"])'))throw Error('formulário dedicado de ROAS não comprovado');
+    const editable=Array.from(form.elements).filter(el=>!['hidden','button','submit','reset'].includes(el.type));
+    if(editable.length!==1||editable[0]!==field)throw Error('formulário de ROAS contém outros campos');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&
+      el.form===form&&!['formaction','form','formtarget','formmethod'].some(attr=>el.hasAttribute(attr))&&
+      /^(salvar|salvar alteracoes|atualizar roas|save|save changes|update roas)$/.test(operationLabel(el)));
+    const raw=String(field.value),roasTargetHundredths=Math.round(Number(raw)*100);
+    if(buttons.length!==1||!/^\d+(?:\.\d{1,2})?$/.test(raw)||!Number.isSafeInteger(roasTargetHundredths)||roasTargetHundredths<100||roasTargetHundredths>3500)throw Error('ROAS objetivo ou controle inválido');
+    return {...budget,field,button:buttons[0],roasTargetHundredths};
+  }
   function budgetPublicContext(campaignRef,changeKind){
-    const {field,button,statusValues,...ctx}=changeKind==='STATUS'?campaignStatusContext(campaignRef):campaignBudgetContext(campaignRef);
+    const {field,button,statusValues,...ctx}=changeKind==='STATUS'?campaignStatusContext(campaignRef):changeKind==='ROAS'?campaignRoasContext(campaignRef):campaignBudgetContext(campaignRef);
     return ctx;
   }
   async function applyCampaignBudget(grant){
@@ -549,30 +569,32 @@
     try{
       if(!grant||typeof grant.id!=='string'||consumedBudgetGrants.has(grant.id)||consumedBudgetGrants.size>=100)throw Error('autorização já utilizada ou limite atingido');
       consumedBudgetGrants.add(grant.id);
-      const changingStatus=grant.targetStatus!==undefined;
-      const read=()=>changingStatus?campaignStatusContext(grant.campaignRef):campaignBudgetContext(grant.campaignRef);
+      const changingStatus=grant.targetStatus!==undefined,changingRoas=grant.targetRoas!==undefined;
+      if(changingStatus&&changingRoas)throw Error('alteração combinada não autorizada');
+      const read=()=>changingStatus?campaignStatusContext(grant.campaignRef):changingRoas?campaignRoasContext(grant.campaignRef):campaignBudgetContext(grant.campaignRef);
       const ctx=read();
       const same=c=>c.accountId===grant.accountId&&c.sourcePath===grant.sourcePath&&c.documentNonce===grant.documentNonce&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
       const validBudget=Number.isSafeInteger(grant.targetCents)&&grant.targetCents>0&&grant.targetCents<=100000000;
       const validChange=changingStatus?['ACTIVE','PAUSED'].includes(grant.targetStatus)&&['ACTIVE','PAUSED'].includes(grant.beforeStatus)&&
-        grant.beforeStatus!==grant.targetStatus&&grant.beforeCents===grant.targetCents:grant.beforeCents!==grant.targetCents;
-      if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||ctx.campaignStatus!==grant.beforeStatus||!validBudget||!validChange)throw Error('contexto ou alteração aprovada diverge');
+        grant.beforeStatus!==grant.targetStatus&&grant.beforeCents===grant.targetCents:changingRoas?Number.isSafeInteger(grant.beforeRoas)&&Number.isSafeInteger(grant.targetRoas)&&grant.beforeRoas>=100&&grant.beforeRoas<=3500&&grant.targetRoas>=100&&grant.targetRoas<=3500&&grant.beforeRoas!==grant.targetRoas&&grant.beforeCents===grant.targetCents:grant.beforeCents!==grant.targetCents;
+      if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||ctx.campaignStatus!==grant.beforeStatus||ctx.roasTargetHundredths!==grant.beforeRoas||!validBudget||!validChange)throw Error('contexto ou alteração aprovada diverge');
       const description=changingStatus
         ? (grant.targetStatus==='PAUSED'?'Pausar':'Reativar')+' a campanha. Orçamento diário: R$ '+(grant.targetCents/100).toFixed(2)
+        : changingRoas?'ROAS objetivo atual: '+(grant.beforeRoas/100).toFixed(2)+'x → '+(grant.targetRoas/100).toFixed(2)+'x; orçamento diário mantido: R$ '+(grant.targetCents/100).toFixed(2)
         : 'Orçamento diário atual: R$ '+(grant.beforeCents/100).toFixed(2)+'\nNovo orçamento diário: R$ '+(grant.targetCents/100).toFixed(2);
       if(!window.confirm('Campanha '+grant.campaignRef+'\n'+description+'\nConfirma alterar e salvar agora?'))return {outcome:'CANCELLED',message:'cancelado antes de editar'};
       const again=read();
-      if(!same(again)||again.field!==ctx.field||again.button!==ctx.button||again.budgetCents!==grant.beforeCents||again.campaignStatus!==grant.beforeStatus||
+      if(!same(again)||again.field!==ctx.field||again.button!==ctx.button||again.budgetCents!==grant.beforeCents||again.campaignStatus!==grant.beforeStatus||again.roasTargetHundredths!==grant.beforeRoas||
           (changingStatus&&again.statusValues[grant.targetStatus]!==ctx.statusValues[grant.targetStatus]))throw Error('contexto mudou antes da edição');
       const prototype=changingStatus?HTMLSelectElement.prototype:HTMLInputElement.prototype;
       const setter=Object.getOwnPropertyDescriptor(prototype,'value')?.set;
       if(!setter)throw Error('campo não oferece setter nativo');
       touched=true;
-      setter.call(again.field,changingStatus?again.statusValues[grant.targetStatus]:(grant.targetCents/100).toFixed(2));
+      setter.call(again.field,changingStatus?again.statusValues[grant.targetStatus]:changingRoas?(grant.targetRoas/100).toFixed(2):(grant.targetCents/100).toFixed(2));
       again.field.dispatchEvent(new Event('input',{bubbles:true}));again.field.dispatchEvent(new Event('change',{bubbles:true}));
       await new Promise(resolve=>setTimeout(resolve,300));
       const ready=read();
-      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||ready.campaignStatus!==grant.targetStatus||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
+      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||ready.campaignStatus!==grant.targetStatus||ready.roasTargetHundredths!==grant.targetRoas||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
       ready.button.click();
       return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de salvar acionado. Confira a campanha antes de qualquer nova tentativa.'};
     }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
@@ -642,6 +664,27 @@
   function listingOperationPublicContext(message){
     return listingOperationContext(message.action,message.externalListingId,message.variationId).base;
   }
+  function duplicateMessages(){
+    return Array.from(document.querySelectorAll('[role="alert"], [aria-live="polite"], [class*="snackbar"], [class*="toast"]'))
+      .filter(el=>window.MI_DOM.isVisible(el)).map(el=>String(el.textContent||'').replace(/\s+/g,' ').trim()).filter(text=>text&&text.length<=500);
+  }
+  async function readDuplicateReceipt(sourceId,existing){
+    for(let attempt=0;attempt<8;attempt++){
+      if(window.MI_DOM.hasChallenge(document)||visibleAccountIdentity().accountId==null)return null;
+      const candidates=duplicateMessages().filter(text=>!existing.has(text)).flatMap(message=>{
+        const normalized=message.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+        const match=/^ANUNCIO (MLB-?\d{5,17}) (?:FOI )?DUPLICADO COM SUCESSO[.!]? NOVO ANUNCIO: ?(MLB-?\d{5,17})[.!]?$/.exec(normalized);
+        if(!match)return [];
+        const source=match[1].replace('-',''),newId=match[2].replace('-','');
+        return source===sourceId.replace('-','').toUpperCase()&&source!==newId?[{message,newId}]:[];
+      });
+      const unique=new Map(candidates.map(row=>[row.newId,row]));
+      if(unique.size===1)return [...unique.values()][0];
+      if(unique.size>1)return null;
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    return null;
+  }
   async function applyListingOperation(grant){
     let touched=false;
     try{
@@ -667,8 +710,11 @@
           ? {listingIds:before.listings.map(row=>row.listingId),filterSignature:filters.signature,
             spaPage:window.MI_DOM.spaPaginationState?.(document)?.page}
           : null;
+        const existing=new Set(duplicateMessages());
         touched=true;again.button.click();
-        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
+        const receipt=await readDuplicateReceipt(g.externalListingId,existing);
+        const duplicateReceipt=receipt&&visibleAccountIdentity().accountId===g.accountId?receipt:null;
+        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,...(duplicateReceipt?{duplicateReceipt}:{}),message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
       }
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
       if(!setter)throw Error('setter nativo ausente');

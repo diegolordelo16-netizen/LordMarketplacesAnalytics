@@ -238,6 +238,8 @@ export const IPC_METHODS = [
   'listing.browser.list',
   'variation.api.create',
   'variation.api.remove',
+  'variation.api.editStock',
+  'variation.api.createUpOffer',
   'variation.api.verify',
   'variation.api.list',
   'operation.limits.get',

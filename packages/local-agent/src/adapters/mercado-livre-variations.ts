@@ -13,7 +13,23 @@ export const legacyVariationOption = z.object({
     .refine(ids => new Set(ids).size === ids.length, 'imagens repetidas'),
 }).strict();
 export type LegacyVariationOption = z.infer<typeof legacyVariationOption>;
+export const legacyStockOption=z.object({editVariationId:z.string().regex(/^\d{1,20}$/),beforePriceCents:z.number().int().positive(),beforeStock:z.number().int().nonnegative()}).strict();
+export type LegacyStockOption=z.infer<typeof legacyStockOption>;
 
+const upId=z.string().regex(/^MLBU\d{4,17}$/);
+export const upOfferOption=z.object({
+  userProductId:upId,categoryId:z.string().regex(/^MLB\d{3,12}$/),
+  listingTypeId:z.enum(['gold_special','gold_pro']),beforePriceCents:z.number().int().positive(),
+  beforeStock:z.number().int().nonnegative(),
+}).strict();
+type UpOfferOption=z.infer<typeof upOfferOption>;
+const upItemSchema=z.object({
+  id:itemId,seller_id:remoteId,site_id:z.literal('MLB'),currency_id:z.literal('BRL'),
+  user_product_id:upId,category_id:z.string(),listing_type_id:z.string(),buying_mode:z.literal('buy_it_now'),
+  condition:z.literal('new'),catalog_listing:z.literal(false),price:z.number().positive(),
+  available_quantity:z.number().int().nonnegative(),status:z.string(),
+  variations:z.array(z.unknown()).max(0),channels:z.array(z.string()).optional(),
+});
 const identitySchema = z.object({id:remoteId,nickname:z.string().min(1),site_id:z.literal('MLB'),tags:z.array(z.string())});
 const itemSchema = z.object({
   id:itemId,seller_id:remoteId,site_id:z.literal('MLB'),currency_id:z.literal('BRL'),
@@ -57,6 +73,46 @@ export class MercadoLivreVariations {
     return { item, sellerId:seller.id };
   }
 
+  async readUpOfferOwner(rawItemId:string,localHandle:string,option:UpOfferOption) {
+    const id=itemId.parse(rawItemId.replace(/^MLB-/i,'MLB').toUpperCase());
+    const seller=identitySchema.parse(await this.request('/users/me'));
+    if(seller.nickname.trim().toLowerCase()!==localHandle.trim().toLowerCase()||!seller.tags.includes('user_product_seller'))throw Error('conta User Products não confirmada');
+    const item=upItemSchema.parse(await this.request('/items/'+id));
+    const product=z.object({id:upId,user_id:remoteId,site_id:z.literal('MLB')}).parse(await this.request('/user-products/'+option.userProductId));
+    if(item.id!==id||item.seller_id!==seller.id||item.user_product_id!==option.userProductId||item.category_id!==option.categoryId||
+       product.id!==option.userProductId||product.user_id!==seller.id)throw Error('User Product ou anúncio de outra conta/categoria');
+    return {item,sellerId:seller.id};
+  }
+  async checkUpOffer(item:z.infer<typeof upItemSchema>,sellerId:string,option:UpOfferOption,stock:number) {
+    if(item.status!=='active'||item.listing_type_id===option.listingTypeId||Math.round(item.price*100)!==option.beforePriceCents||
+       item.available_quantity!==option.beforeStock||stock!==option.beforeStock||!item.channels?.includes('marketplace'))throw Error('condição de venda nova, preço de origem e estoque compartilhado confirmado necessários');
+    const response=z.object({seller_id:remoteId,results:z.array(itemId).max(50),paging:z.object({offset:z.literal(0),total:z.number().int().nonnegative()})})
+      .parse(await this.request('/users/'+sellerId+'/items/search?user_product_id='+option.userProductId+'&limit=50'));
+    if(response.seller_id!==sellerId||response.paging.total!==response.results.length||new Set(response.results).size!==response.results.length||!response.results.includes(item.id))throw Error('lista de ofertas incompleta ou de outra conta');
+    for(const id of response.results){
+      if(id===item.id)continue;
+      const offer=upItemSchema.parse(await this.request('/items/'+id));
+      if(offer.id!==id||offer.seller_id!==sellerId||offer.user_product_id!==option.userProductId||
+         offer.category_id!==option.categoryId||offer.listing_type_id===option.listingTypeId)throw Error('oferta existente ou contexto de oferta divergente');
+    }
+    return response.results;
+  }
+  async createUpOffer(option:UpOfferOption,priceCents:number) {
+    const data=await this.request('/user-products/'+option.userProductId+'/items',{
+      price:priceCents/100,category_id:option.categoryId,currency_id:'BRL',buying_mode:'buy_it_now',
+      listing_type_id:option.listingTypeId,channels:['marketplace'],catalog_listing:false,
+    });
+    return z.object({id:itemId}).parse(data).id;
+  }
+  async matchesUpOffer(newId:string,sourceId:string,sellerId:string,option:UpOfferOption,priceCents:number,stock:number) {
+    const id=itemId.parse(newId);
+    if(id===sourceId)return false;
+    const offer=upItemSchema.parse(await this.request('/items/'+id));
+    return offer.id===id&&offer.seller_id===sellerId&&offer.user_product_id===option.userProductId&&
+      offer.category_id===option.categoryId&&offer.listing_type_id===option.listingTypeId&&
+      Math.round(offer.price*100)===priceCents&&offer.available_quantity===stock&&
+      ['active','paused'].includes(offer.status)&&offer.channels?.includes('marketplace')===true;
+  }
   checkNewOption(item:z.infer<typeof itemSchema>, option:LegacyVariationOption) {
     if(option.pictureIds.some(id=>!item.pictures.some(pic=>pic.id===id)))throw Error('imagem fora do anúncio aprovado');
     if(item.variations.some(variant=>ids(variant.attribute_combinations)===ids(option.attributeCombinations))){
@@ -78,6 +134,30 @@ export class MercadoLivreVariations {
         variant.price===undefined||Math.round(variant.price*100)!==priceCents){
       throw Error('remoção exige outra variação no anúncio e um alvo sem estoque, sem vendas e com preço aprovado');
     }
+  }
+
+  checkStockEdit(item:z.infer<typeof itemSchema>, option:LegacyStockOption, priceCents:number, stock:number) {
+    const variant=item.variations.find(row=>row.id===option.editVariationId);
+    if(!variant||new Set(item.variations.map(row=>row.id)).size!==item.variations.length||
+      variant.price===undefined||Math.round(variant.price*100)!==option.beforePriceCents||
+      variant.available_quantity!==option.beforeStock||priceCents!==option.beforePriceCents||stock===option.beforeStock){
+      throw Error('estoque anterior, preço inalterado e ID único da variação devem corresponder à proposta');
+    }
+  }
+
+  async editStock(item:z.infer<typeof itemSchema>, option:LegacyStockOption, stock:number) {
+    await this.request('/items/'+item.id,{variations:item.variations.map(row=>row.id===option.editVariationId
+      ?{id:row.id,available_quantity:stock}:{id:row.id})},'PUT');
+  }
+
+  async matchesStock(item:z.infer<typeof itemSchema>, variation:string, priceCents:number, stock:number) {
+    const id=remoteId.parse(variation);
+    const rows=item.variations.filter(row=>row.id===id);
+    const row=rows[0];
+    if(rows.length!==1||!row||row.price===undefined||Math.round(row.price*100)!==priceCents||row.available_quantity!==stock)return false;
+    const observed=z.object({id:remoteId,price:z.number().positive(),available_quantity:z.number().int().nonnegative()})
+      .parse(await this.request('/items/'+item.id+'/variations/'+id));
+    return observed.id===id&&Math.round(observed.price*100)===priceCents&&observed.available_quantity===stock;
   }
 
   async remove(item:string, variation:string) {

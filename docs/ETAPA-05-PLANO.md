@@ -1,6 +1,6 @@
 # Etapa 05 — Financeiro, publicidade, estoque e anúncios
 
-Base integrada: master 3.13.0, merge b439433 (CI 135 aprovada). Branch de desenvolvimento validation/3.14.0-etapa-05. A versão 3.14.0 é candidata; metadados continuam 3.13.0 até a preparação de entrega.
+Base integrada: master 3.13.0, merge b439433 (CI 135 aprovada). Branch de desenvolvimento validation/3.14.0-etapa-05. A versão 3.14.0 é candidata e seus metadados já estão sincronizados. Master permanece 3.13.0 enquanto houver escopo técnico não concluído.
 
 | Grupo | IDs | Situação inicial |
 |---|---|---|
