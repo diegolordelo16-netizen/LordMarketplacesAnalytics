@@ -178,6 +178,7 @@ export const IPC_METHODS = [
   'sync.retryFailed',
   'sync.completeAccount',
   'sync.accountProgress',
+  'sync.claimAccount',
   'sync.schedule.create',
   'sync.schedule.list',
   'sync.schedule.setEnabled',

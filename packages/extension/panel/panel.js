@@ -196,7 +196,7 @@ async function syncAllAccounts() {
       createPayload.accountId = $('sync-account').value;
       if (!createPayload.accountId) { out.textContent = 'Selecione uma conta ativa para sincronizar.'; return; }
     }
-    const created = await call('sync.createAll', createPayload);
+    const created = await call('sync.createAll', { ...createPayload, browserRequest:true });
     if (!created?.ok || !created.result?.batchId) {
       out.textContent = `Não foi possível criar o lote: ${created?.error?.message ?? 'resposta inválida'}`;
       return;
@@ -402,7 +402,7 @@ async function loadSyncAccounts() {
 async function retryFailedSync(batchId, scheduleId, button) {
   button.disabled = true; button.textContent = 'Preparando repetição…';
   try {
-    const created = await call('sync.retryFailed', { batchId });
+    const created = await call('sync.retryFailed', { batchId, browserRequest:true });
     if (!created?.ok || !created.result?.batchId) { $('sync-out').textContent = `Não foi possível repetir: ${created?.error?.message ?? 'erro'}`; return; }
     const scanned = await call('capture.syncAllOpenTabs', { batchId: created.result.batchId, maxPages: 50 });
     if (!scanned?.ok || !scanned.result) { $('sync-out').textContent = `Novo lote ${created.result.batchId} criado; a extensão não concluiu a coleta: ${scanned?.error?.message ?? 'erro'}`; return; }

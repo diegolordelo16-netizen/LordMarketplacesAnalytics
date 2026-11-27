@@ -74,11 +74,12 @@ describe('capacidades adicionais 3.10.3', () => {
     const { batchId } = (await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-sync-large',browserRequest:true})).result as {batchId:string};
     const url = (n:number) => 'https://vendedores.mercadolivre.com.br/pedidos?page='+n+'&start_date=2026-11-01&end_date=2026-11-30';
     const pages = Array.from({length:16},(_,i)=>({page:i+1,url:url(i+1),pageKind:'seller_orders',ok:true}));
-    const payload={batchId,accountId:'acct-sync-large',pagesScanned:16,pagesSucceeded:16,pages,seenUrls:pages.map(p=>p.url),pendingLinks:[{url:url(17),label:'próxima'}],maxPages:16,receiptProtocol:1};
+    const leaseToken=(await call('sync.claimAccount',{batchId,accountId:'acct-sync-large'})).result as {leaseToken:string};
+    const payload={batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,pagesScanned:16,pagesSucceeded:16,pages,seenUrls:pages.map(p=>p.url),pendingLinks:[{url:url(17),label:'próxima'}],maxPages:16,receiptProtocol:1};
     expect((await call('sync.accountProgress',payload)).ok).toBe(true);
     expect((await call('sync.accountProgress',{...payload,pages:pages.slice(0,15),pagesScanned:15,pagesSucceeded:15,seenUrls:pages.slice(0,15).map(p=>p.url)})).ok).toBe(false);
-    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',status:'COMPLETED',pagesScanned:16,pagesSucceeded:16})).ok).toBe(false);
-    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',status:'PARTIAL',pagesScanned:16,pagesSucceeded:16})).ok).toBe(true);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'COMPLETED',pagesScanned:16,pagesSucceeded:16})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'PARTIAL',pagesScanned:16,pagesSucceeded:16})).ok).toBe(true);
     const retried=await call('sync.retryFailed',{batchId,browserRequest:true});
     expect(retried.ok).toBe(true);
     const retryId=(retried.result as {batchId:string}).batchId;
@@ -88,6 +89,26 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(JSON.parse(info.accounts[0].progress_json).pendingLinks[0].url).toBe(url(17));
     expect(info.pageRuns).toHaveLength(16);
   });
+  it('exclui outro navegador e outro lote; depois de expirar rejeita o token antigo', async () => {
+    seedImportAccount('acct-lease');
+    const first=(await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-lease'})).result as {batchId:string};
+    const second=(await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-lease'})).result as {batchId:string};
+    const req={batchId:first.batchId,accountId:'acct-lease'};
+    const claim=(await call('sync.claimAccount',req)).result as {claimed:boolean;leaseToken:string};
+    expect(claim.claimed).toBe(true);
+    expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:false});
+    expect((await call('sync.claimAccount',req)).result).toMatchObject({claimed:false});
+    expect((await call('sync.claimAccount',{...req,leaseToken:claim.leaseToken})).result).toMatchObject({claimed:true});
+    expect(JSON.stringify((await call('sync.list',{batchId:first.batchId})).result)).not.toContain('lease_hash');
+    db.db.prepare("UPDATE sync_batch_accounts SET lease_expires_at='2000-01-01T00:00:00.000Z' WHERE batch_id=?").run(first.batchId);
+    const renewed=(await call('sync.claimAccount',req)).result as {claimed:boolean;leaseToken:string};
+    expect(renewed.claimed).toBe(true);
+    expect(renewed.leaseToken).not.toBe(claim.leaseToken);
+    expect((await call('sync.completeAccount',{...req,leaseToken:claim.leaseToken,status:'FAILED'})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{...req,leaseToken:renewed.leaseToken,status:'FAILED'})).ok).toBe(true);
+    expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:true});
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';
@@ -119,14 +140,17 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(attempts.map((result) => result.result)).toEqual([
       { claimed: true, batchId, recoveredStaleLease: false }, { claimed: false },
     ]);
+    const lease = (await call('sync.claimAccount',{batchId,accountId:payload.accountId})).result as {claimed:boolean;leaseToken:string};
+    expect(lease.claimed).toBe(true);
+    expect((await call('sync.claimAccount',{batchId,accountId:payload.accountId})).result).toMatchObject({claimed:false});
     const firstPage = 'https://vendedores.mercadolivre.com.br/resumo';
     const pending = 'https://vendedores.mercadolivre.com.br/vendas';
     expect((await call('sync.accountProgress', {
-      batchId, accountId: payload.accountId, pagesScanned: 1, pagesSucceeded: 1,
+      batchId, accountId: payload.accountId, leaseToken:lease.leaseToken, pagesScanned: 1, pagesSucceeded: 1,
       pages: [{ page: 1, pageKind: 'seller_dashboard', url: firstPage, ok: true }],
       pendingLinks: [{ url: pending, label: 'Vendas' }], seenUrls: [firstPage], maxPages: 8,
     })).ok).toBe(true);
-    const premature = await call('sync.completeAccount', { batchId, accountId: payload.accountId, status: 'COMPLETED', pagesScanned: 1, pagesSucceeded: 1 });
+    const premature = await call('sync.completeAccount', { batchId, accountId: payload.accountId, leaseToken:lease.leaseToken, status: 'COMPLETED', pagesScanned: 1, pagesSucceeded: 1 });
     expect(premature.error?.message).toContain('páginas pendentes');
     db.db.prepare("UPDATE sync_batches SET browser_claimed_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(batchId);
     expect((await call('sync.claimBrowserRequest', {})).result).toEqual({ claimed: false });
@@ -147,9 +171,14 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(created.ok).toBe(true);
     const result = created.result as { batchId: string; accounts: Array<{ account_id: string; marketplace: string }> };
     expect(result.accounts.map((a) => a.marketplace)).toEqual(['mercado_livre','shopee']);
-    const first = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-ml', status: 'COMPLETED', pagesScanned: 2, pagesSucceeded: 2 });
+    const mlClaim=(await call('sync.claimAccount',{batchId:result.batchId,accountId:'acct-sync-ml'})).result as {leaseToken:string};
+    const mlPages=[1,2].map(page=>({page,pageKind:'seller_orders',url:'https://vendedores.mercadolivre.com.br/pedidos?page='+page,ok:true}));
+    expect((await call('sync.completeAccount',{batchId:result.batchId,accountId:'acct-sync-ml',leaseToken:mlClaim.leaseToken,status:'COMPLETED',pagesScanned:2,pagesSucceeded:2})).ok).toBe(false);
+    expect((await call('sync.accountProgress',{batchId:result.batchId,accountId:'acct-sync-ml',leaseToken:mlClaim.leaseToken,pagesScanned:2,pagesSucceeded:2,pages:mlPages,seenUrls:mlPages.map(p=>p.url),pendingLinks:[],maxPages:50})).ok).toBe(true);
+    const first = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-ml', leaseToken:mlClaim.leaseToken, status: 'COMPLETED', pagesScanned: 2, pagesSucceeded: 2 });
     expect(first.ok).toBe(true);
-    const second = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-shopee', status: 'SKIPPED', pagesScanned: 0, pagesSucceeded: 0, error: 'aba não aberta' });
+    const shClaim=(await call('sync.claimAccount',{batchId:result.batchId,accountId:'acct-sync-shopee'})).result as {leaseToken:string};
+    const second = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-shopee', leaseToken:shClaim.leaseToken, status: 'SKIPPED', pagesScanned: 0, pagesSucceeded: 0, error: 'aba não aberta' });
     expect((second.result as { batchStatus: string }).batchStatus).toBe('PARTIAL');
   });
 

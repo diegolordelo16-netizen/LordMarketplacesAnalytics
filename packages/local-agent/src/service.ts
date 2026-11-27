@@ -186,6 +186,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'sync.retryFailed': 'execute_task',
   'sync.completeAccount': 'execute_task',
   'sync.accountProgress': 'execute_task',
+  'sync.claimAccount': 'execute_task',
   'sync.schedule.create': 'execute_task',
   'sync.schedule.list': 'view_reports',
   'sync.schedule.setEnabled': 'execute_task',
@@ -2112,7 +2113,7 @@ export class LocalService {
 
     this.register('sync.list', (payload) => {
       const i = z.object({ batchId: z.string().optional(), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
-      if (i.batchId) return { batch: db.row('SELECT * FROM sync_batches WHERE id=?', i.batchId), accounts: db.rows('SELECT * FROM sync_batch_accounts WHERE batch_id=? ORDER BY marketplace,account_id', i.batchId), pageRuns: db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? ORDER BY account_id,page_no', i.batchId) };
+      if (i.batchId) return { batch: db.row('SELECT * FROM sync_batches WHERE id=?', i.batchId), accounts: db.rows<Record<string,unknown>>('SELECT * FROM sync_batch_accounts WHERE batch_id=? ORDER BY marketplace,account_id', i.batchId).map(({lease_hash:_leaseHash,...account})=>account), pageRuns: db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? ORDER BY account_id,page_no', i.batchId) };
       return db.rows('SELECT * FROM sync_batches ORDER BY requested_at DESC LIMIT ?', i.limit);
     });
 
@@ -2245,10 +2246,33 @@ export class LocalService {
       return { claimed: true, batchId: row.batch_id, runId: row.id, recoveredStaleLease: true };
     }));
 
+    // One account, one active collector across browser instances and batches.
+    this.register('sync.claimAccount', (payload, auth) => db.transaction(() => {
+      const i = z.object({batchId:z.string().min(1),accountId:z.string().min(1),leaseToken:z.string().uuid().optional()}).parse(payload);
+      const now=nowIso(), expiresAt=new Date(Date.now()+120_000).toISOString();
+      const row=db.row<{id:string;status:string;lease_hash:string|null;lease_expires_at:string|null}>(`SELECT ba.id,ba.status,ba.lease_hash,ba.lease_expires_at
+        FROM sync_batch_accounts ba JOIN accounts a ON a.id=ba.account_id AND a.is_active=1 AND a.marketplace=ba.marketplace
+        JOIN sync_batches b ON b.id=ba.batch_id WHERE ba.batch_id=? AND ba.account_id=? AND b.status IN ('QUEUED','RUNNING')`,i.batchId,i.accountId);
+      if (!row || !['WAITING_BROWSER','RUNNING'].includes(row.status)) return {ok:true,claimed:false,reason:'conta/lote não está disponível'};
+      if (i.leaseToken) {
+        if (row.lease_hash!==sha256(i.leaseToken) || !row.lease_expires_at || row.lease_expires_at<=now) throw new Error('reserva de coleta expirada ou substituída');
+        db.db.prepare('UPDATE sync_batch_accounts SET lease_expires_at=? WHERE id=?').run(expiresAt,row.id);
+        return {ok:true,claimed:true,leaseToken:i.leaseToken,expiresAt};
+      }
+      if (db.row(`SELECT id FROM sync_batch_accounts WHERE account_id=? AND status='RUNNING' AND lease_hash IS NOT NULL AND lease_expires_at>? LIMIT 1`,i.accountId,now)) {
+        return {ok:true,claimed:false,reason:'esta conta já tem coleta em execução'};
+      }
+      const leaseToken=randomUUID();
+      db.db.prepare("UPDATE sync_batch_accounts SET status='RUNNING',lease_hash=?,lease_expires_at=?,started_at=COALESCE(started_at,?) WHERE id=?").run(sha256(leaseToken),expiresAt,now,row.id);
+      db.db.prepare("UPDATE sync_batches SET status='RUNNING',browser_claimed_at=COALESCE(browser_claimed_at,?) WHERE id=?").run(now,i.batchId);
+      this.audit(auth,'SYNC_ACCOUNT_CLAIM','sync_batch_account',row.id,'OK','reserva exclusiva');
+      return {ok:true,claimed:true,leaseToken,expiresAt};
+    }));
+
     this.register('sync.accountProgress', (payload, auth) => {
       const pageKind = z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']);
       const i = z.object({
-        batchId: z.string().min(1), accountId: z.string().min(1),
+        batchId: z.string().min(1), accountId: z.string().min(1), leaseToken:z.string().uuid(),
         pagesScanned: z.number().int().min(0).max(200), pagesSucceeded: z.number().int().min(0).max(200),
         pages: z.array(z.object({ page: z.number().int().min(1).max(200), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(200),
         seenUrls: z.array(z.string().max(2048)).max(200),
@@ -2258,9 +2282,9 @@ export class LocalService {
         .refine((v) => v.pages.every((page, index) => page.page === index + 1) && new Set(v.pages.map((page) => page.page)).size === v.pages.length, 'numeração de páginas inválida')
         .refine((v) => v.pages.filter((page) => page.ok).length === v.pagesSucceeded, 'páginas concluídas não correspondem à contagem')
         .parse(payload ?? {});
-      const row = db.row<{ id: string; status: string; marketplace: string; pages_scanned: number; pages_succeeded: number }>('SELECT ba.id,ba.status,ba.marketplace,ba.pages_scanned,ba.pages_succeeded FROM sync_batch_accounts ba JOIN accounts a ON a.id=ba.account_id AND a.marketplace=ba.marketplace AND a.is_active=1 WHERE ba.batch_id=? AND ba.account_id=?', i.batchId, i.accountId);
+      const row = db.row<{ id: string; status: string; marketplace: string; pages_scanned: number; pages_succeeded: number; lease_hash:string|null;lease_expires_at:string|null }>('SELECT ba.id,ba.status,ba.marketplace,ba.pages_scanned,ba.pages_succeeded,ba.lease_hash,ba.lease_expires_at FROM sync_batch_accounts ba JOIN accounts a ON a.id=ba.account_id AND a.marketplace=ba.marketplace AND a.is_active=1 WHERE ba.batch_id=? AND ba.account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
-      if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) throw new Error('não é permitido atualizar progresso de conta terminal');
+      if (row.status!=='RUNNING' || row.lease_hash!==sha256(i.leaseToken) || !row.lease_expires_at || row.lease_expires_at<=nowIso()) throw new Error('reserva de coleta expirada ou substituída');
       const hosts: Record<string, RegExp> = {
         mercado_livre: /(^|\.)mercadolivre\.com\.br$/i,
         shopee: /(^|\.)shopee\.com\.br$/i,
@@ -2310,25 +2334,25 @@ export class LocalService {
         for (const page of cleanPages) upsertPage.run(randomUUID(), i.batchId, i.accountId, page.page_no, page.page_url, page.page_kind, page.status, page.error, page.queued, now);
         const current = cleanPages.at(-1) ?? null;
         db.db.prepare(`UPDATE sync_batch_accounts SET status='RUNNING',pages_scanned=MAX(pages_scanned,?),pages_succeeded=MAX(pages_succeeded,?),
-          current_page_no=?,current_url=?,progress_json=?,progress_updated_at=?,started_at=COALESCE(started_at,?) WHERE id=?`)
-          .run(i.pagesScanned, i.pagesSucceeded, current?.page_no ?? null, current?.page_url ?? null, JSON.stringify(cleanState), now, now, row.id);
+          current_page_no=?,current_url=?,progress_json=?,progress_updated_at=?,lease_expires_at=?,started_at=COALESCE(started_at,?) WHERE id=?`)
+          .run(i.pagesScanned, i.pagesSucceeded, current?.page_no ?? null, current?.page_url ?? null, JSON.stringify(cleanState), now, new Date(Date.now()+120_000).toISOString(), now, row.id);
       });
       return { ok: true, pagesScanned: i.pagesScanned, pagesSucceeded: i.pagesSucceeded, currentPage: cleanPages.at(-1)?.page_no ?? null, pendingPages: i.pendingLinks.length, updatedAt: now };
     });
 
     this.register('sync.completeAccount', (payload, auth) => db.transaction(() => {
-      const i = z.object({ batchId: z.string(), accountId: z.string(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(200).default(0), pagesSucceeded: z.number().int().min(0).max(200).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
-      const row = db.row<{ id: string; status: string; progress_json: string }>('SELECT id,status,progress_json FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
+      const i = z.object({ batchId: z.string(), accountId: z.string(), leaseToken:z.string().uuid(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(200).default(0), pagesSucceeded: z.number().int().min(0).max(200).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
+      const row = db.row<{ id: string; status: string; progress_json: string;lease_hash:string|null;lease_expires_at:string|null;pages_scanned:number;pages_succeeded:number }>('SELECT id,status,progress_json,lease_hash,lease_expires_at,pages_scanned,pages_succeeded FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
       if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) {
         if (row.status !== i.status) throw new Error('conta em estado terminal; use a repetição em novo lote');
         const batch = db.row<{ status: string; summary_json: string }>('SELECT status,summary_json FROM sync_batches WHERE id=?', i.batchId)!;
         return { ok: true, batchStatus: batch.status, counts: parseJsonObject(batch.summary_json) };
       }
+      if (row.lease_hash!==sha256(i.leaseToken) || !row.lease_expires_at || row.lease_expires_at<=nowIso()) throw new Error('reserva de coleta expirada ou substituída');
       if (i.status === 'COMPLETED') {
         const progress = parseJsonObject(row.progress_json);
-        if (progress.unsupportedLinks === true || (Array.isArray(progress.pendingLinks) && progress.pendingLinks.length) ||
-            (Array.isArray(progress.pages) && (!progress.pages.length || progress.pages.some((page) => page?.ok !== true)))) {
+        if (progress.unsupportedLinks === true || !Array.isArray(progress.pendingLinks) || progress.pendingLinks.length || !Array.isArray(progress.pages) || !progress.pages.length || progress.pages.length!==i.pagesScanned || i.pagesScanned!==i.pagesSucceeded || i.pagesScanned!==row.pages_scanned || i.pagesSucceeded!==row.pages_succeeded || progress.pages.some((page) => page?.ok !== true)) {
           throw new Error('a coleta tem páginas pendentes ou sem confirmação');
         }
       }

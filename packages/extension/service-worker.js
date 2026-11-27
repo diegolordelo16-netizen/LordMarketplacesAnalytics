@@ -737,6 +737,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
 
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
   if (currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
+    if (options.beforeCapture) await options.beforeCapture();
     const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
     recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued) });
     if (firstCapture.ok || (firstCapture.queued && !options.logicalBatchId)) {
@@ -790,6 +791,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         stoppedReason = 'a área ou a conta da loja mudou durante a navegação';
         break;
       }
+      if (options.beforeCapture) await options.beforeCapture();
       const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
       recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued) });
       if (captured.ok || (captured.queued && !options.logicalBatchId)) {
@@ -968,34 +970,40 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
         matched = { tab, info }; break;
       }
     }
+    const claim = await callService('sync.claimAccount',{batchId,accountId:account.account_id});
+    if (!captureAccepted(claim)) throw new Error(claim?.error?.message ?? 'reserva de coleta não confirmada');
+    if (!claim.result.claimed) { notifyProgress({current:outcomes.length,total:accounts.length,accountId:account.account_id,marketplace:account.marketplace,status:'RUNNING',message:claim.result.reason}); continue; }
+    const leaseToken=claim.result.leaseToken;
     if (!matched) {
       const pagesScanned = Number(account.pages_scanned ?? 0);
       const pagesSucceeded = Number(account.pages_succeeded ?? 0);
       const status = pagesSucceeded > 0 ? 'PARTIAL' : 'SKIPPED';
-      const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status, pagesScanned, pagesSucceeded, error: 'nenhuma aba autenticada aberta com a identidade desta conta; abra o painel do vendedor e refaça a sincronização' });
+      const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, leaseToken, status, pagesScanned, pagesSucceeded, error: 'nenhuma aba autenticada aberta com a identidade desta conta; abra o painel do vendedor e refaça a sincronização' });
       if (!captureAccepted(result)) throw new Error(result?.error?.message ?? 'resultado da conta não confirmado');
       outcomes.push({ accountId: account.account_id, marketplace: account.marketplace, status, result });
       notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, status, message: 'Não há aba autenticada correspondente.' });
       continue;
     }
-    const started = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status: 'RUNNING', pagesScanned: Number(account.pages_scanned ?? 0), pagesSucceeded: Number(account.pages_succeeded ?? 0) });
-    if (!captureAccepted(started)) throw new Error(started?.error?.message ?? 'início da coleta não confirmado');
     const scan = await captureAuthorizedAreas(matched.tab.id, requestedMaxPages, {
       resumeState,
       logicalBatchId: batch.result.batch?.logical_batch_id || batchId,
       expectedAccountId: account.account_id,
+      beforeCapture: async () => {
+        const renewed=await callService('sync.claimAccount',{batchId,accountId:account.account_id,leaseToken});
+        if (!captureAccepted(renewed) || !renewed.result.claimed) throw new Error('reserva da coleta perdida; interrompida antes da próxima página');
+      },
       onProgress: async (progress) => {
-        const saved = await callService('sync.accountProgress', { batchId, accountId: account.account_id, ...progress });
+        const saved = await callService('sync.accountProgress', { batchId, accountId: account.account_id, leaseToken, ...progress });
         if (!saved?.ok) throw new Error(saved?.error?.message ?? 'serviço não confirmou a gravação do progresso');
         const latest = progress.pages?.at(-1);
         notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, phase: 'PAGE', pagesScanned: progress.pagesScanned, pagesSucceeded: progress.pagesSucceeded, currentPage: latest?.page ?? 0, pendingPages: progress.pendingLinks.length, message: `Coletando página ${latest?.page ?? 0}; ${progress.pendingLinks.length} área(s) restantes.` });
       },
     });
     if (scan.progressError) throw new Error(scan.stoppedReason);
-    const pages = Number(scan.pagesScanned ?? scan.pages?.length ?? 0);
-    const succeeded = Number(scan.pagesSucceeded ?? scan.pages?.filter((page) => page.ok).length ?? 0);
-    const status = !scan.ok ? 'FAILED' : succeeded === pages && Number(scan.pendingPages ?? 0) === 0 && !scan.unsupportedLinks ? 'COMPLETED' : succeeded > 0 ? 'PARTIAL' : 'FAILED';
-    const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status, pagesScanned: pages, pagesSucceeded: succeeded, ...(status === 'COMPLETED' ? {} : { error: scan.error ?? scan.stoppedReason }) });
+    const pages = Math.max(Number(account.pages_scanned ?? 0),Number(scan.pagesScanned ?? scan.pages?.length ?? 0));
+    const succeeded = Math.max(Number(account.pages_succeeded ?? 0),Number(scan.pagesSucceeded ?? scan.pages?.filter((page) => page.ok).length ?? 0));
+    const status = !scan.ok ? (succeeded>0?'PARTIAL':'FAILED') : succeeded === pages && Number(scan.pendingPages ?? 0) === 0 && !scan.unsupportedLinks ? 'COMPLETED' : succeeded > 0 ? 'PARTIAL' : 'FAILED';
+    const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, leaseToken, status, pagesScanned: pages, pagesSucceeded: succeeded, ...(status === 'COMPLETED' ? {} : { error: scan.error ?? scan.stoppedReason }) });
     if (!captureAccepted(result)) throw new Error(result?.error?.message ?? 'resultado da coleta não confirmado');
     outcomes.push({ accountId: account.account_id, marketplace: account.marketplace, status, scan, result });
     notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, status, pagesScanned: pages, pagesSucceeded: succeeded, message: `Conta processada: ${status}.` });

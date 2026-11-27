@@ -235,10 +235,13 @@
     "behavior": "activates/deactivates user; revokes sessions on deactivation; disallows self-deactivation and deactivation of the last active super_admin",
     "permission": "manage_users"
   },
+  "sync.claimAccount": {"payload":"batchId | accountId | leaseToken? (renewal)","permission":"execute_task"},
+  "sync.completeAccount": {"payload":"batchId | accountId | leaseToken | status | pagesScanned | pagesSucceeded","permission":"execute_task"},
   "sync.accountProgress": {
     "payload": {
       "batchId": "string",
       "accountId": "string",
+      "leaseToken": "UUID from exclusive claim",
       "pagesScanned": "integer 0..200",
       "pagesSucceeded": "integer 0..pagesScanned",
       "pages": "array of per-page URL/kind/result (max 200)",
