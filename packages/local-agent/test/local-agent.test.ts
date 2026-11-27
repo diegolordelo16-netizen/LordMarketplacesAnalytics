@@ -1602,6 +1602,8 @@ describe('análise por produto de catálogo', () => {
     expect((result.result as {listingCount:number;totalMatched:number;truncated:boolean}).listingCount).toBe(1);
     expect((result.result as {totalMatched:number}).totalMatched).toBe(1);
     expect((result.result as {truncated:boolean}).truncated).toBe(false);
+    const single=await call('analysis.run',{mode:'360',accountId:'acct-product-analysis',listingId:'ML-PROD-1',agents:['finance'],days:30});
+    expect(single.result).toMatchObject({listingCount:1,agents:['finance'],analyses:[{contextEvidence:{windowVerified:false,marginPct:null},director:{finalAction:null}}]});
   });
 });
 

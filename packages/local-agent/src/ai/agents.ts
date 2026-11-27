@@ -638,6 +638,7 @@ export function synthesize(
   const conflicts: DirectorSynthesis['conflicts'] = [];
 
   const marginNegative = (ctx.metrics.contributionMarginPct ?? 0) < 0;
+  const marginUnknown=ctx.metrics.contributionMarginPct==null;
   const trafficIncreasing = recommendations.filter((r) =>
     ['seo_demand', 'keyword_rank', 'ads', 'market_category'].includes(r.agentKey),
   );
@@ -653,6 +654,7 @@ export function synthesize(
     notes.push('margem negativa detectada: recomendações de aumento de tráfego foram bloqueadas');
   }
 
+  if(marginUnknown&&trafficIncreasing.length){notes.push('margem não confirmada: recomendações de tráfego exigem validação financeira antes de priorizar investimento');}
   if (ctx.dataConfidence < 0.7) {
     notes.push(`confiança dos dados ${(ctx.dataConfidence * 100).toFixed(0)}% abaixo de 70%: diagnóstico não é conclusivo`);
   }
@@ -666,7 +668,7 @@ export function synthesize(
   return {
     recommendations: filtered,
     conflicts,
-    finalAction: ranked[0] ?? null,
+    finalAction: ctx.dataConfidence<0.7?null:ranked.find(r=>!marginUnknown||!trafficIncreasing.includes(r))??null,
     notes,
   };
 }

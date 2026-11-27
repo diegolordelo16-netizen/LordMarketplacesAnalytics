@@ -3933,39 +3933,46 @@ export class LocalService {
 
     // ------------------------------------------------------------ agentes
     this.register('analysis.run', (payload, auth) => {
-      const i = z.object({ mode: z.enum(['RAPIDA','PADRAO','FORENSE','360']), accountId: z.string().optional(), listingId: z.string().optional(), catalogProductId: z.string().optional(), days: z.number().int().min(1).max(365).default(30) }).refine((value) => !(value.listingId && value.catalogProductId), 'selecione anúncio ou produto, não ambos').parse(payload);
-      const selected: AgentKey[] = i.mode === 'RAPIDA' ? ['finance','inventory','ads','conversion_cro'] : i.mode === 'PADRAO' ? ['seo_demand','ads','competition','conversion_cro','finance','inventory','content_postpurchase','pricing_offer'] : [...AGENT_KEYS];
+      const i = z.object({ mode: z.enum(['RAPIDA','PADRAO','FORENSE','360']), accountId: z.string().optional(), listingId: z.string().optional(), catalogProductId: z.string().optional(), days: z.number().int().min(1).max(365).default(30),agents:z.array(z.enum(AGENT_KEYS)).min(1).max(14).optional(),offset:z.number().int().min(0).max(1000000).default(0),limit:z.number().int().min(1).max(300).optional() }).refine((value) => !(value.listingId && value.catalogProductId), 'selecione anúncio ou produto, não ambos').parse(payload);
+      if(i.accountId&&!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',i.accountId))throw Error('conta ativa não encontrada');
+      const selected: AgentKey[] = i.agents?[...new Set(i.agents)]:i.mode === 'RAPIDA' ? ['finance','inventory','ads','conversion_cro'] : i.mode === 'PADRAO' ? ['seo_demand','ads','competition','conversion_cro','finance','inventory','content_postpurchase','pricing_offer'] : [...AGENT_KEYS];
       const listingRows = i.listingId
-        ? db.rows<{ id: string; account_id: string; marketplace: string }>('SELECT id,account_id,marketplace FROM listings WHERE id=? AND (? IS NULL OR account_id=?)', i.listingId, i.accountId ?? null, i.accountId ?? null)
+        ? db.rows<{ id: string; account_id: string; marketplace: string }>('SELECT id,account_id,marketplace FROM listings WHERE (id=? OR (? IS NOT NULL AND external_id=?)) AND (? IS NULL OR account_id=?) AND account_id IN (SELECT id FROM accounts WHERE is_active=1)', i.listingId,i.accountId??null,i.listingId,i.accountId ?? null,i.accountId ?? null)
         : i.catalogProductId
           ? db.rows<{ id: string; account_id: string; marketplace: string }>(
             `SELECT l.id,l.account_id,l.marketplace FROM listings l
              JOIN skus s ON s.id=l.sku_id
              JOIN catalog_products cp ON cp.id=s.catalog_product_id AND cp.account_id=l.account_id
-             WHERE cp.id=? AND (? IS NULL OR l.account_id=?) ORDER BY l.account_id,l.id`,
+             WHERE cp.id=? AND (? IS NULL OR l.account_id=?) AND l.account_id IN (SELECT id FROM accounts WHERE is_active=1) ORDER BY l.account_id,l.id`,
             i.catalogProductId, i.accountId ?? null, i.accountId ?? null,
           )
-          : db.rows<{ id: string; account_id: string; marketplace: string }>('SELECT id,account_id,marketplace FROM listings WHERE (? IS NULL OR account_id=?) ORDER BY account_id, id', i.accountId ?? null, i.accountId ?? null);
+          : db.rows<{ id: string; account_id: string; marketplace: string }>('SELECT id,account_id,marketplace FROM listings WHERE (? IS NULL OR account_id=?) AND account_id IN (SELECT id FROM accounts WHERE is_active=1) ORDER BY account_id, id', i.accountId ?? null, i.accountId ?? null);
       if (!listingRows.length) return { ok: true, mode: i.mode, listingCount: 0, totalMatched: 0, analyses: [], message: i.catalogProductId ? 'Nenhum anúncio vinculado ao produto selecionado nesta conta.' : 'Nenhum anúncio cadastrado para o escopo selecionado. Capture uma página autenticada primeiro.' };
-      const requestedLimit = i.listingId ? 1 : i.mode === '360' || i.mode === 'FORENSE' ? 300 : 25;
-      const targets = listingRows.slice(0, requestedLimit);
-      const truncated = listingRows.length > targets.length;
+      if(i.listingId&&listingRows.length!==1)throw Error('anúncio ambíguo');
+      const requestedLimit = i.listingId ? 1 : Math.min(i.limit??300,i.mode === '360' || i.mode === 'FORENSE' ? 300 : 25);
+      const offset=i.listingId?0:i.offset;
+      const targets = listingRows.slice(offset, offset+requestedLimit);
+      const truncated = listingRows.length > offset+targets.length;
       const analyses = targets.map((listing) => {
-        const k = capture.kpisForListing(listing.id, i.days);
-        const p = k?.pillars;
-        const cvr = p?.conversion_cro.cvr.value ?? null;
-        const roas = p?.acquisition_ads.roas.value ?? null;
-        const contribution = null;
-        const missing = k?.missingInputs ?? ['snapshot inexistente'];
-        const end = nowIso();
-        const start = new Date(Date.now() - i.days * 86400000).toISOString();
+        const snapshot=db.row<{id:string;captured_at:string;source_class:string;evidence_json:string;metrics_json:string}>('SELECT id,captured_at,source_class,evidence_json,metrics_json FROM listing_snapshots WHERE listing_id=? AND account_id=? ORDER BY captured_at DESC,id DESC LIMIT 1',listing.id,listing.account_id);
+        const window=snapshot&&snapshot.source_class==='A_PRIMARY_UI'?observedWindow(parseJsonObject(snapshot.evidence_json)):null;
+        const verified=!!window&&window.days===i.days&&!!snapshot&&Date.parse(snapshot.captured_at)<=Date.now()&&Date.now()-Date.parse(snapshot.captured_at)<=Math.max(7,i.days)*86400000;
+        const k=verified?capture.kpisForListing(listing.id,i.days):null,p=k?.pillars;
+        const end=verified&&window?window.to+'T23:59:59.999Z':nowIso();
+        const start=verified&&window?window.from+'T00:00:00.000Z':new Date(Date.parse(end)-i.days*86400000).toISOString();
+        const records=verified?db.rows<Record<string,unknown>>('SELECT * FROM realized_profit_snapshots WHERE account_id=? AND listing_id=? AND period_start=? AND period_end=?',listing.account_id,listing.id,start,end):[];
+        const profit=records[0],validProfit=records.length===1&&!!profit&&profitFields.every(key=>knownNumber(profit,key)!==null)&&parseJsonObject(String(profit.evidence_json??'')).costFieldsConfirmed===true;
+        const net=validProfit?knownNumber(profit!,'net_revenue_cents'):null,contribution=net===null?null:net-profitFields.slice(1).reduce((sum,key)=>sum+Number(profit![key]),0),margin=net!==null&&net>0&&contribution!==null?contribution/net*100:null;
+        const reasons=db.rows<{reason:string;count:number}>(`SELECT TRIM(text_redacted) reason,COUNT(*) count FROM customer_voice_items WHERE account_id=? AND listing_id=? AND kind='RETURN_REASON' AND source_class='A_PRIMARY_UI' AND observed_at>=? AND observed_at<=? AND TRIM(text_redacted)<>'' GROUP BY TRIM(text_redacted) HAVING COUNT(*)>=2 ORDER BY count DESC,reason LIMIT 10`,listing.account_id,listing.id,start,end);
+        const missing=[...(k?.missingInputs??['snapshot com janela explícita e compatível não disponível']),...(margin===null?['margem realizada do intervalo não confirmada']:[])];
         const ctx: AgentContext = {
           accountId: listing.account_id, marketplace: listing.marketplace, listingId: listing.id,
-          window: { start, end, days: i.days },
-          metrics: { visits: p?.conversion_cro.visits ?? null, orders: p?.conversion_cro.orders ?? null, cvrPct: cvr, adSpendCents: p?.acquisition_ads.adSpend == null ? null : Math.round(p.acquisition_ads.adSpend * 100), adRevenueCents: p?.acquisition_ads.adAttributedRevenue == null ? null : Math.round(p.acquisition_ads.adAttributedRevenue * 100), adClicks: p?.acquisition_ads.adClicks ?? null, adImpressions: null, roas, stockCoverageDays: p?.operational_health.stockCoverageDays.value ?? null, units: p?.conversion_cro.units ?? null, dailySales: p?.operational_health.dailySalesAvg.value ?? null, contributionCents: contribution, contributionMarginPct: null, returnRatePct: p?.revenue_profit.returnRate.value ?? null, keywordCoveragePct: p?.discovery_seo.keywordCoverage ?? null, attributeCompletenessPct: p?.discovery_seo.attributeCompleteness ?? null, reviewRating: p?.revenue_profit.reviewRating ?? null, pendingQuestions: p?.operational_health.pendingQuestions ?? null },
-          dataConfidence: k ? Math.max(0.1, 1 - missing.length / 24) : 0, missingData: missing,
+          window:{start,end,days:i.days},
+          metrics:{visits:p?.conversion_cro.visits??null,orders:p?.conversion_cro.orders??null,cvrPct:p?.conversion_cro.cvr.value??null,adSpendCents:p?.acquisition_ads.adSpend==null?null:Math.round(p.acquisition_ads.adSpend*100),adRevenueCents:p?.acquisition_ads.adAttributedRevenue==null?null:Math.round(p.acquisition_ads.adAttributedRevenue*100),adClicks:p?.acquisition_ads.adClicks??null,adImpressions:null,roas:p?.acquisition_ads.roas.value??null,stockCoverageDays:p?.operational_health.stockCoverageDays.value??null,units:p?.conversion_cro.units??null,dailySales:p?.operational_health.dailySalesAvg.value??null,contributionCents:contribution,contributionMarginPct:margin,returnRatePct:p?.revenue_profit.returnRate.value??null,keywordCoveragePct:p?.discovery_seo.keywordCoverage??null,attributeCompletenessPct:p?.discovery_seo.attributeCompleteness??null,reviewRating:p?.revenue_profit.reviewRating??null,pendingQuestions:p?.operational_health.pendingQuestions??null},
+          returnReasons:reasons.map(r=>r.reason),dataConfidence:k?Math.max(0.1,1-missing.length/24):0,missingData:missing,
         };
         const recs = runAgents(selected, ctx);
+        for(const rec of recs){if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...e,sourceClass:String(profit!.source_class??'F_USER_INPUT')}));}rec.impactRange=null;}
         const summary = synthesize(recs, ctx);
         const runIds = new Map<AgentKey, string>();
         for (const key of selected) {
@@ -3980,15 +3987,15 @@ export class LocalService {
           db.db.prepare(`INSERT INTO agent_recommendations (id,agent_run_id,account_id,listing_id,diagnosis,evidence_json,window,facts_json,hypotheses_json,confidence,missing_data_json,impact_range_json,risk,guardrail_metric,action_proposed,alternative,requires_approval,required_permission,verification_criteria,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
             .run(randomUUID(), runId, listing.account_id, listing.id, rec.diagnosis, JSON.stringify(rec.evidence), rec.window, JSON.stringify(rec.facts), JSON.stringify(rec.hypotheses), rec.confidence, JSON.stringify(rec.missingData), rec.impactRange ? JSON.stringify(rec.impactRange) : null, rec.risk, rec.guardrailMetric, rec.actionProposed, rec.alternative, rec.requiresApproval ? 1 : 0, rec.requiredPermission, rec.verificationCriteria, 'PROPOSTA', nowIso());
         }
-        return { listingId: listing.id, accountId: listing.account_id, marketplace: listing.marketplace, missingData: missing, recommendationCount: recs.length, recommendations: recs, director: summary };
+        return { listingId:listing.id,accountId:listing.account_id,marketplace:listing.marketplace,missingData:missing,recommendationCount:recs.length,recommendations:recs,director:summary,contextEvidence:{snapshotId:verified?snapshot?.id??null:null,capturedAt:snapshot?.captured_at??null,windowVerified:verified,period:{start,end},realizedProfitId:validProfit?profit?.id??null:null,marginPct:margin,returnReasonGroups:reasons.length} };
       });
       this.audit(auth, 'ANALYSIS_RUN', 'analysis', null, 'OK', `${i.mode}: ${analyses.length} anúncios`);
-      return { ok: true, mode: i.mode, scope: i.catalogProductId ? 'catalog_product' : i.listingId ? 'listing' : i.accountId ? 'account' : 'all_accounts', catalogProductId: i.catalogProductId ?? null, agents: selected, listingCount: analyses.length, totalMatched: listingRows.length, truncated, limit: requestedLimit, analyses };
+      return { ok: true, mode: i.mode, scope: i.catalogProductId ? 'catalog_product' : i.listingId ? 'listing' : i.accountId ? 'account' : 'all_accounts', catalogProductId: i.catalogProductId ?? null, agents: selected, listingCount: analyses.length, totalMatched: listingRows.length, truncated, limit: requestedLimit,offset,nextOffset:truncated?offset+targets.length:null,analyses };
     });
 
     this.register('agent.run', (payload, auth) => {
       const schema = z.object({
-        agents: z.array(z.string()).min(1),
+        agents: z.array(z.enum(AGENT_KEYS)).min(1).max(14),
         context: z.record(z.string(), z.unknown()),
       });
       const i = schema.parse(payload);
@@ -3998,10 +4005,7 @@ export class LocalService {
       return synthesis;
     });
 
-    this.register('agent.runs', () => db.rows<Record<string, unknown>>(
-      `SELECT r.*, (SELECT COUNT(*) FROM agent_recommendations a WHERE a.agent_run_id=r.id) AS recommendation_count
-         FROM agent_runs r ORDER BY r.started_at DESC LIMIT 100`,
-    ));
+    this.register('agent.runs',payload=>{const i=z.object({accountId:z.string().optional()}).parse(payload??{});return db.rows<Record<string,unknown>>(`SELECT r.*, (SELECT COUNT(*) FROM agent_recommendations a WHERE a.agent_run_id=r.id) AS recommendation_count FROM agent_runs r WHERE (? IS NULL OR r.account_id=?) ORDER BY r.started_at DESC LIMIT 100`,i.accountId??null,i.accountId??null);});
     this.register('agent.recommendations', (payload) => {
       const i = z.object({ accountId: z.string().optional(), listingId: z.string().optional(), status: z.string().optional(), limit: z.number().int().min(1).max(500).default(100) }).parse(payload ?? {});
       return db.rows<Record<string, unknown>>(
