@@ -9,6 +9,7 @@ import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { seoResearchInput } from './connectors/openseo';
 import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/external-seo';
 import { customerInsights, compareCatalogText } from './competitive/customer-insights';
+import { recordContent, contentComparison } from './competitive/content-evidence';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -244,6 +245,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'ads.reconcile': 'manage_accounts',
   'finance.realized.summary': 'view_reports',
   'competitor.evidence.record': 'manage_competitors',
+  'competitor.content.record': 'manage_competitors',
   'competitor.evidence.compare': 'view_reports',
   'campaign.change.prepare': 'manage_market_intelligence',
   'campaign.change.list': 'view_reports',
@@ -2971,9 +2973,15 @@ export class LocalService {
       return { ok: true, id, relationId: i.relationId, capturedAt, visualComparison: 'HASH_ONLY_WHEN_PROVIDED', missingFieldsRemainNull: true };
     }));
 
+    this.register('competitor.content.record',(payload,auth)=>db.transaction(()=>{
+      const result=recordContent(db,payload);
+      this.audit(auth,'COMPETITOR_CONTENT_RECORD','competitor_content_observation',result.id,'OK',result.sourceClass);
+      return result;
+    }));
+
     this.register('competitor.evidence.compare', (payload) => {
       const i = z.object({relationId:z.string(),accountId:z.string().min(1).optional()}).parse(payload ?? {});
-      const row = db.row<Record<string, unknown>>(`SELECT r.id,r.status,o.title own_title,o.attributes_json own_attributes,o.price_cents own_price,o.shipping_cents own_shipping,o.delivery_days_min own_delivery_min,o.delivery_days_max own_delivery_max,o.images_json own_images,c.title competitor_title,c.attributes_json competitor_attributes,c.rating competitor_rating,c.reviews competitor_reviews,c.price_cents competitor_price,c.shipping_cents competitor_shipping,c.delivery_days_min competitor_delivery_min,c.delivery_days_max competitor_delivery_max,c.images_json competitor_images,c.sponsored,
+      const row = db.row<Record<string, unknown>>(`SELECT r.id,r.status,o.account_id,o.title own_title,o.attributes_json own_attributes,o.price_cents own_price,o.shipping_cents own_shipping,o.delivery_days_min own_delivery_min,o.delivery_days_max own_delivery_max,o.images_json own_images,c.title competitor_title,c.attributes_json competitor_attributes,c.rating competitor_rating,c.reviews competitor_reviews,c.price_cents competitor_price,c.shipping_cents competitor_shipping,c.delivery_days_min competitor_delivery_min,c.delivery_days_max competitor_delivery_max,c.images_json competitor_images,c.sponsored,
         p.id AS observed_id,p.captured_at AS observed_at,p.price_cents AS observed_price,p.shipping_cents AS observed_shipping,
         p.delivery_days_min AS observed_delivery_min,p.delivery_days_max AS observed_delivery_max,p.images_json AS observed_images,p.sponsored AS observed_sponsored,p.rating observed_rating,p.reviews observed_reviews,p.position observed_position,p.promotions_json observed_promotions,p.title observed_title
         FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id
@@ -2990,7 +2998,7 @@ export class LocalService {
       const sharedHashes = compImages.map((image) => image.sha256).filter((hash): hash is string => Boolean(hash && ownHashes.has(hash)));
       const diff = (own: unknown, competitor: unknown) => own == null || competitor == null ? null : Number(competitor) - Number(own);
       const sponsored=row.observed_id?row.observed_sponsored:row.sponsored;
-      return { relationId: i.relationId, status: row.status, observedAt:row.observed_at??null, competitorRating:row.observed_id?row.observed_rating:row.competitor_rating,competitorReviews:row.observed_id?row.observed_reviews:row.competitor_reviews,position:row.observed_position??null,promotions:(()=>{try{const v:unknown=JSON.parse(String(row.observed_promotions??'null'));return Array.isArray(v)?v.filter((x):x is string=>typeof x==='string'):null;}catch{return null;}})(),catalogComparison:compareCatalogText(String(row.own_title),String(row.observed_title??row.competitor_title),parseJsonObject(String(row.own_attributes??'{}')),parseJsonObject(String(row.competitor_attributes??'{}'))),priceDifferenceCents: diff(row.own_price,row.observed_id?row.observed_price:row.competitor_price), shippingDifferenceCents: diff(row.own_shipping,row.observed_id?row.observed_shipping:row.competitor_shipping), deliveryDaysMinDifference: diff(row.own_delivery_min,row.observed_id?row.observed_delivery_min:row.competitor_delivery_min), deliveryDaysMaxDifference: diff(row.own_delivery_max,row.observed_id?row.observed_delivery_max:row.competitor_delivery_max), images: { ownCount: ownImages.length, competitorCount: compImages.length, identicalHashes: sharedHashes.length, visualSimilarity: 'NOT_COMPUTED', explanation: 'hashes iguais indicam arquivo idêntico; hashes diferentes/ausentes não provam diferença visual' }, sponsored: sponsored == null ? null : Boolean(sponsored), unknowns: ['frete/prazo não coletados permanecem null','patrocínio só é informado quando visível e registrado'] };
+      return { relationId: i.relationId, content:contentComparison(db,String(row.account_id),i.relationId), status: row.status, observedAt:row.observed_at??null, competitorRating:row.observed_id?row.observed_rating:row.competitor_rating,competitorReviews:row.observed_id?row.observed_reviews:row.competitor_reviews,position:row.observed_position??null,promotions:(()=>{try{const v:unknown=JSON.parse(String(row.observed_promotions??'null'));return Array.isArray(v)?v.filter((x):x is string=>typeof x==='string'):null;}catch{return null;}})(),catalogComparison:compareCatalogText(String(row.own_title),String(row.observed_title??row.competitor_title),parseJsonObject(String(row.own_attributes??'{}')),parseJsonObject(String(row.competitor_attributes??'{}'))),priceDifferenceCents: diff(row.own_price,row.observed_id?row.observed_price:row.competitor_price), shippingDifferenceCents: diff(row.own_shipping,row.observed_id?row.observed_shipping:row.competitor_shipping), deliveryDaysMinDifference: diff(row.own_delivery_min,row.observed_id?row.observed_delivery_min:row.competitor_delivery_min), deliveryDaysMaxDifference: diff(row.own_delivery_max,row.observed_id?row.observed_delivery_max:row.competitor_delivery_max), images: { ownCount: ownImages.length, competitorCount: compImages.length, identicalHashes: sharedHashes.length, visualSimilarity: 'NOT_COMPUTED', explanation: 'hashes iguais indicam arquivo idêntico; hashes diferentes/ausentes não provam diferença visual' }, sponsored: sponsored == null ? null : Boolean(sponsored), unknowns: ['frete/prazo não coletados permanecem null','patrocínio só é informado quando visível e registrado'] };
     });
 
     this.register('campaign.change.prepare', (payload, auth) => {
