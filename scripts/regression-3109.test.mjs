@@ -409,3 +409,35 @@ test('variação simples e duplicação assistidas recusam ambiguidade e repeti�
   assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'NEEDS_VERIFICATION');assert.equal(clicks,2);
   assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');assert.equal(clicks,2);
 });
+
+test('conferência automática de orçamento lê documento distinto da mesma conta e fecha a aba temporária',async()=>{
+  const src=readFileSync(new URL('../packages/extension/service-worker.js',import.meta.url),'utf8');
+  const snippet=src.slice(src.indexOf('async function verifyCampaignInFreshTab'),src.indexOf('async function readCapturePageInfo'));
+  const sourcePath='https://vendedores.mercadolivre.com.br/publicidade';
+  const tab={id:10,url:sourcePath,windowId:1};
+  const grant={campaignRef:'C1',accountId:'store-a',sourcePath,documentNonce:'old',targetCents:1200};
+  let info={ok:true,campaignRef:'C1',accountId:'store-a',sourcePath,documentNonce:'new',budgetCents:1200};
+  const calls=[],removed=[];
+  const ctx=vm.createContext({
+    tab,grant,chrome:{tabs:{
+      create:async options=>{assert.equal(options.active,false);assert.equal(options.url,sourcePath);return {id:11};},
+      sendMessage:async(id,message)=>{assert.equal(id,11);assert.equal(message.type,'MI_CAMPAIGN_BUDGET_CONTEXT');return info;},
+      remove:async id=>removed.push(id),
+    }},
+    waitForTabComplete:async(id,url)=>{assert.equal(id,11);assert.equal(url,sourcePath);},
+    callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:{status:'UI_READBACK_MATCHED'}};},
+  });
+  vm.runInContext(snippet,ctx);
+  const verify=()=>vm.runInContext('verifyCampaignInFreshTab(tab,grant,"proposal")',ctx);
+  assert.equal((await verify()).result.status,'UI_READBACK_MATCHED');
+  assert.equal(calls[0].method,'campaign.budget.verify');
+  assert.equal(calls[0].payload.proposalId,'proposal');
+  for(const mismatch of [{accountId:'another-store'},{budgetCents:1000},{documentNonce:'old'}]){
+    const original=info;
+    info={...info,...mismatch};
+    assert.equal(await verify(),null);
+    info=original;
+  }
+  assert.equal(calls.length,1);
+  assert.deepEqual(removed,[11,11,11,11]);
+});

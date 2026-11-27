@@ -505,6 +505,26 @@ function waitForTabComplete(tabId, expectedUrl, timeoutMs = 15000) {
   });
 }
 
+async function verifyCampaignInFreshTab(tab, grant, proposalId) {
+  let verificationTab;
+  try {
+    // Use the seller URL already validated at claim time. Only this new document is read.
+    verificationTab = await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
+    if (!Number.isInteger(verificationTab.id)) return null;
+    await waitForTabComplete(verificationTab.id,tab.url,8000);
+    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef});
+    if (!info?.ok || info.accountId!==grant.accountId || info.campaignRef!==grant.campaignRef ||
+        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents) return null;
+    const {ok,...context}=info;
+    const verified=await callService('campaign.budget.verify',{...context,proposalId});
+    return verified?.ok && verified.result?.status==='UI_READBACK_MATCHED' ? verified : null;
+  } catch {
+    return null;
+  } finally {
+    if (Number.isInteger(verificationTab?.id)) await chrome.tabs.remove(verificationTab.id).catch(()=>{});
+  }
+}
+
 async function readCapturePageInfo(tabId) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const info = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
@@ -1285,7 +1305,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
         const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
         const recorded=await callService('campaign.budget.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
-        sendResponse(recorded);return;
+        const verified=recorded?.ok && outcome==='NEEDS_VERIFICATION' && result?.clicked===true
+          ? await verifyCampaignInFreshTab(tab,grant,input.proposalId)
+          : null;
+        sendResponse(verified??recorded);return;
       }
       if (message.method === 'capture.activeTab') {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

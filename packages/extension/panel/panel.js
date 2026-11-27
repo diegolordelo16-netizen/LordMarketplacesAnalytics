@@ -556,7 +556,7 @@ async function budgetAction(action){
   if(budgetBusy)return;
   const proposalId=$('budget-proposal').value.trim(),campaignRef=$('budget-campaign').value.trim(),out=$('budget-out');
   if(!proposalId||!campaignRef){out.textContent='Informe a proposta e a campanha.';return;}
-  if(!window.confirm(action==='apply'?'Solicitar uma execução única da proposta aprovada? Confira a loja e o orçamento na página.':'A página foi recarregada e corresponde à mesma campanha?'))return;
+  if(!window.confirm(action==='apply'?'Solicitar uma execução única da proposta aprovada? A extensão tentará conferir o valor em uma nova aba da mesma página.':'A página foi recarregada e corresponde à mesma campanha?'))return;
   budgetBusy=true;$('budget-apply').disabled=true;$('budget-verify').disabled=true;
   try{
     const response=await call('campaign.browser.'+action,{proposalId,campaignRef,confirmed:true});

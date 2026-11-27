@@ -537,7 +537,7 @@
       const ready=campaignBudgetContext(grant.campaignRef);
       if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
       ready.button.click();
-      return {outcome:'NEEDS_VERIFICATION',message:'controle de salvar acionado; recarregue manualmente a página e verifique a campanha. Não repetir automaticamente.'};
+      return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de salvar acionado. Confira o orçamento antes de qualquer nova tentativa.'};
     }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
   }
 

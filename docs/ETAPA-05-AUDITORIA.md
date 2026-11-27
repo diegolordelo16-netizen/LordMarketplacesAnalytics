@@ -16,7 +16,7 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 | 173 | Anúncios para mais investimento | Sinal de revisão com receita atribuída superior ao gasto, pedidos atribuídos, estoque positivo e lucro registrado positivo; não ordem de aumento. |
 | 174 | Orçamento sem resultado | Gasto positivo e receita atribuída explicitamente zero em janela reconhecida; dado ausente não é zero. |
 | 178 | Preparar alterações de campanha | Rascunho local com baseline, alterações, motivo e revisão por super_admin. |
-| 179 | Executar alterações autorizadas | **PARCIAL**: execução assistida de orçamento diário no Mercado Livre com autorização única, confirmação na aba e leitura em novo documento. Outros tipos de alteração e comprovação independente ainda pendentes. |
+| 179 | Executar alterações autorizadas | **PARCIAL**: execução assistida de orçamento diário no Mercado Livre com autorização única, confirmação na aba e conferência automática em uma nova aba da mesma campanha, com conferência manual disponível se o valor ainda não estiver visível. Outros tipos de alteração e comprovação independente ainda pendentes. |
 | 182 | Gestão de variações | **PARCIAL**: edição assistida de preço e estoque de variação simples no Mercado Livre, com comparação entre capturas da mesma loja. Os demais campos, remoção e outros marketplaces dependem de adaptadores. |
 | 185 | Sugestões de imagens | Prévia de arquivo local decodificado, resolução, enquadramento, texto alternativo e checklist de revisão; não certifica adequação às regras do marketplace. |
 | 187 | Preparar troca de capa | Rascunho vinculado a anúncio, snapshot inicial e hash da imagem da mesma conta; prévia e aprovação. Upload remoto não implementado. |
