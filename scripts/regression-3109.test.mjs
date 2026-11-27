@@ -394,7 +394,7 @@ test('variação simples e duplicação assistidas recusam ambiguidade e repeti�
   const dup={textContent:'Duplicar anúncio',disabled:false,getAttribute:()=>null,closest:selector=>selector==='form'?null:nestedOther?{}:row,click:()=>clicks++};
   const row={getAttribute:k=>k==='data-item-id'?listing:null,querySelectorAll:()=>[dup]};
   const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:s=>s==='form'?(ambiguous?[form,form]:[form]):s==='[data-item-id],[data-listing-id]'?(ambiguous?[row,row]:[row]):[]};
-  const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(editUrl),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=>kind,currentExternalListingId:()=>listing,visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
+  const ctx=vm.createContext({URL,Date,MAX_LISTINGS:100,captureListingList:()=>({accountId,listings:[{listingId:listing,title:'Teste'}]}),crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(editUrl),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge,collectionFilterState:()=>({signature:'',warnings:[]})},confirm:()=>consent},currentPageKind:()=>kind,currentExternalListingId:()=>listing,visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
   vm.runInContext(snippet,ctx);
   const apply=(id,action,url,plan)=>{ctx.grant={id,context:{accountId:'store-a',externalListingId:listing,sourcePath:url,documentNonce:'doc-1',action},plan,expiresAt:new Date(Date.now()+60000).toISOString()};return vm.runInContext('applyListingOperation(grant)',ctx);};
   const plan={name:'Cor',option:'Azul',priceCents:1200,stock:5};
@@ -408,7 +408,9 @@ test('variação simples e duplicação assistidas recusam ambiguidade e repeti�
   accountId='other';assert.equal((await apply('wrong','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');accountId='store-a';
   challenge=true;assert.equal((await apply('challenge','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');challenge=false;
   nestedOther=true;assert.equal((await apply('nested','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');nestedOther=false;
-  assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'NEEDS_VERIFICATION');assert.equal(clicks,2);
+  const duplicate=await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'});
+  assert.equal(duplicate.outcome,'NEEDS_VERIFICATION');
+  assert.equal(duplicate.clicked,true);assert.equal(duplicate.baseline.listingIds[0],listing);assert.equal(clicks,2);
   assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');assert.equal(clicks,2);
 });
 
@@ -496,4 +498,34 @@ test('criação assistida apenas registra um candidato único em nova leitura',a
   snapshot.details=[row];
   assert.equal((await verify()).result.remoteVerified,false);
   assert.equal(calls[1].payload.observedExternalId,'V1');
+});
+
+test('duplicação assistida procura apenas um novo candidato no mesmo recorte da loja',async()=>{
+  const start=worker.indexOf('async function observeDuplicateInFreshTab');
+  const end=worker.indexOf('async function readCapturePageInfo',start);
+  const url='https://vendedores.mercadolivre.com.br/anuncios',accountId='store-a',externalListingId='MLB1234567';
+  const source={listingId:externalListingId,title:'Produto'};
+  const existing={listingId:'MLB2345678',title:'Produto'};
+  const candidate={listingId:'MLB3456789',title:'Produto'};
+  const snapshot={accountId,marketplace:'mercado_livre',url,pageKind:'seller_listings',filterSignature:'status=all',listings:[source,existing,candidate]};
+  const grant={context:{accountId,sourcePath:url,externalListingId},plan:{originalTitle:source.title}};
+  const baseline={listingIds:[source.listingId,existing.listingId],filterSignature:'status=all'};
+  const calls=[],removed=[];
+  const ctx=vm.createContext({grant,baseline,tab:{url},captureAccepted:r=>r.ok,waitForTabComplete:async()=>{},chrome:{tabs:{
+    create:async()=>({id:29}),remove:async id=>removed.push(id),sendMessage:async()=>({ok:true,snapshot}),
+  }},callService:async(method,payload)=>{calls.push({method,payload});return {ok:true,result:method==='capture.ingest'
+    ?{listingsIngested:1}:{status:'CANDIDATE_OBSERVED',remoteVerified:false}};}});
+  vm.runInContext(worker.slice(start,end),ctx);
+  const observe=()=>vm.runInContext('observeDuplicateInFreshTab(tab,grant,"proposal",baseline)',ctx);
+  snapshot.filterSignature='status=active';
+  assert.equal(await observe(),null);
+  snapshot.filterSignature=baseline.filterSignature;
+  snapshot.listings.push({listingId:'MLB4567890',title:'Produto'});
+  assert.equal(await observe(),null);
+  assert.equal(calls.length,0);
+  snapshot.listings.pop();
+  assert.equal((await observe()).result.remoteVerified,false);
+  assert.equal(calls[0].payload.listings[0].listingId,candidate.listingId);
+  assert.equal(calls[1].payload.observedExternalId,candidate.listingId);
+  assert.deepEqual(removed,[29,29,29]);
 });

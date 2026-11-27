@@ -145,3 +145,7 @@ A homologação real foi adiada por autorização do usuário.
 A criação assistida agora tenta localizar um único candidato compatível em
 nova leitura do editor. O serviço bloqueia o reaproveitamento de um mesmo
 candidato em outra tentativa da loja. A confirmação de origem continua pendente.
+A duplicação assistida passou a buscar automaticamente um candidato fora
+dos IDs visíveis no momento do clique autorizado. A releitura exige a mesma
+loja, os mesmos filtros e a mesma página, com o anúncio de origem ainda
+visível. Diálogos do marketplace continuam sob controle do operador.

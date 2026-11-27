@@ -572,6 +572,39 @@ async function verifyVariationInFreshTab(tab, grant, proposalId) {
   }
 }
 
+async function observeDuplicateInFreshTab(tab, grant, proposalId, baseline) {
+  const {accountId,sourcePath,externalListingId}=grant.context;
+  const {originalTitle}=grant.plan;
+  if(!baseline?.listingIds?.includes(externalListingId)||typeof baseline.filterSignature!=='string'||!originalTitle)return null;
+  const before=new Set(baseline.listingIds);
+  let verificationTab;
+  try{
+    verificationTab=await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
+    if(!Number.isInteger(verificationTab.id))return null;
+    await waitForTabComplete(verificationTab.id,tab.url,8000);
+    const response=await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAPTURE_REQUEST'});
+    const snapshot=response?.snapshot;
+    if(!response?.ok||snapshot?.marketplace!=='mercado_livre'||snapshot.accountId!==accountId||
+        snapshot.url!==tab.url||snapshot.pageKind!=='seller_listings'||snapshot.coverageWarnings?.length||
+        snapshot.filterSignature!==baseline.filterSignature||snapshot.spaPage!==baseline.spaPage||
+        !Array.isArray(snapshot.listings)||!snapshot.listings.some(row=>row.listingId===externalListingId&&row.title===originalTitle))return null;
+    const candidates=snapshot.listings.filter(row=>/^MLB-?\d{5,}$/i.test(row.listingId)&&!before.has(row.listingId)&&row.title===originalTitle);
+    if(candidates.length!==1)return null;
+    const listing=candidates[0],now=new Date().toISOString();
+    const capture=await callService('capture.ingest',{
+      accountId,marketplace:'mercado_livre',pageKind:'seller_listings',url:sourcePath,sourceClass:'A_PRIMARY_UI',
+      referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[listing],
+    });
+    if(!captureAccepted(capture)||capture.result?.listingsIngested!==1)return null;
+    const candidate=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:listing.listingId});
+    return candidate?.ok&&candidate.result?.status==='CANDIDATE_OBSERVED'?candidate:null;
+  }catch{
+    return null;
+  }finally{
+    if(Number.isInteger(verificationTab?.id))await chrome.tabs.remove(verificationTab.id).catch(()=>{});
+  }
+}
+
 async function readCapturePageInfo(tabId) {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const info = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
@@ -1330,8 +1363,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
         const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
         const recorded=await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
-        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true&&['EDIT_VARIATION','CREATE_VARIATION'].includes(input.action)
-          ? await verifyVariationInFreshTab(tab,grant,input.proposalId)
+        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true
+          ? input.action==='DUPLICATE'
+            ? await observeDuplicateInFreshTab(tab,grant,input.proposalId,result.baseline)
+            : await verifyVariationInFreshTab(tab,grant,input.proposalId)
           : null;
         sendResponse(verified??recorded);return;
       }

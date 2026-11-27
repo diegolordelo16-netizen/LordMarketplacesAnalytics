@@ -621,8 +621,17 @@
       const again=listingOperationContext(g.action,g.externalListingId,g.variationId);
       if(!baselineMatches(again)||again.button!==initial.button||Object.keys(initial.fields).some(k=>again.fields[k]!==initial.fields[k]))throw Error('formulário mudou antes da ação');
       if(g.action==='DUPLICATE'){
+        const before=captureListingList();
+        const filters=window.MI_DOM.collectionFilterState?.(document);
+        const warnings=window.MI_DOM.collectionCoverage?.(document)??[];
+        const sourceVisible=before.listings.some(row=>row.listingId===g.externalListingId&&row.title===p.originalTitle);
+        const baseline=sourceVisible&&before.accountId===g.accountId&&before.listings.length<MAX_LISTINGS&&
+          filters&&typeof filters.signature==='string'&&!filters.warnings.length&&!warnings.length
+          ? {listingIds:before.listings.map(row=>row.listingId),filterSignature:filters.signature,
+            spaPage:window.MI_DOM.spaPaginationState?.(document)?.page}
+          : null;
         touched=true;again.button.click();
-        return {outcome:'NEEDS_VERIFICATION',message:'controle de duplicação acionado; revise eventual diálogo e capture o novo anúncio. Não repetir automaticamente.'};
+        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
       }
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
       if(!setter)throw Error('setter nativo ausente');
