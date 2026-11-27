@@ -354,7 +354,7 @@
   // Only a single, explicitly identified pagination region and button. No form submits.
   function semanticNextControl(region){
     const candidates=Array.from(region.querySelectorAll('button[type="button"],button[aria-label],[role="button"][aria-label]')).filter(el=>{
-      if(!isVisible(el)||el.closest('form')||String(el.getAttribute('type')||'').toLowerCase()==='submit')return false;
+      if(!isVisible(el)||el.closest('form')||el.form||el.getAttribute('form')||el.getAttribute('formaction')||el.getAttribute('href')||String(el.tagName||'').toUpperCase()==='A'||/^(submit|reset)$/i.test(String(el.getAttribute('type')||'')))return false;
       const label=normalizeLabel(el.getAttribute('aria-label')||el.getAttribute('title')||el.innerText||'');
       return /^(next|next page|próxima|proxima|próximo|proximo|próxima página|proxima pagina|seguinte|siguiente|página siguiente)$/.test(label);
     });
@@ -564,7 +564,7 @@
     for(const {control,next,option} of changes){
       if(!verify()||!isVisible(control)||control.disabled||control.closest('form'))return false;
       if(option){
-        if(!isVisible(option)||option.disabled||option.getAttribute('aria-disabled')==='true'||option.closest('form')||!control.contains(option))return false;
+        if(!isVisible(option)||option.disabled||option.getAttribute('aria-disabled')==='true'||option.closest('form')||option.form||option.getAttribute('form')||option.getAttribute('formaction')||option.getAttribute('href')||String(option.tagName||'').toUpperCase()==='A'||/^(submit|reset)$/i.test(String(option.getAttribute('type')||''))||!control.contains(option))return false;
         option.click();continue;
       }
       const setter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control),'value')?.set;
