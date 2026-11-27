@@ -1152,6 +1152,27 @@ describe('evidência em snapshots individuais', () => {
   });
 });
 
+describe('captura Growth por anúncio',()=>{
+  it('persiste novos indicadores com evidência individual, sem copiar para o anúncio vizinho',async()=>{
+    seedImportAccount('acct-growth-funnel');
+    const at='2025-01-20T12:00:00.000Z';
+    const captured=await call('capture.ingest',{
+      marketplace:'mercado_livre',accountId:'acct-growth-funnel',pageKind:'seller_listings',
+      url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',
+      referenceAt:at,collectedAt:at,method:'content_script_dom',
+      listings:[{listingId:'GROWTH-A',totalImpressions:1000,checkoutStarts:12,funnelEvidence:{totalImpressions:'Impressões totais: 1000',checkoutStarts:'Checkouts iniciados: 12'}},{listingId:'GROWTH-B',visits:100}],
+      evidence:{filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all'}
+    });
+    expect(captured.ok).toBe(true);
+    const rows=db.rows<{external_id:string;metrics_json:string;evidence_json:string}>('SELECT l.external_id,s.metrics_json,s.evidence_json FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id WHERE s.account_id=? ORDER BY l.external_id','acct-growth-funnel');
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[0]!.metrics_json)).toMatchObject({totalImpressions:1000,checkoutStarts:12});
+    expect(JSON.parse(rows[0]!.evidence_json)).toMatchObject({listingFunnelEvidence:{checkoutStarts:'Checkouts iniciados: 12'}});
+    expect(JSON.parse(rows[1]!.metrics_json).checkoutStarts).toBeUndefined();
+    expect(JSON.parse(rows[1]!.evidence_json).listingFunnelEvidence).toBeUndefined();
+  });
+});
+
 describe('captura de métricas agregadas da conta', () => {
   it('aceita página de Ads sem listingId e alimenta histórico com proveniência', async () => {
     seedImportAccount('acct-account-snapshot');
