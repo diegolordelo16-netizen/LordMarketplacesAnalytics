@@ -485,6 +485,30 @@
       const chartId=String(region.getAttribute('data-chart-id')||'');
       if(!/^[A-Za-z0-9_.:-]{1,120}$/.test(chartId)||regions.filter(el=>el.getAttribute('data-chart-id')===chartId).length!==1){incomplete=true;continue;}
       const tables=String(region.tagName||'').toUpperCase()==='TABLE'?[region]:Array.from(region.querySelectorAll('table')).filter(isVisible);
+      if(tables.length===0){
+        // Explicit data marks only: never derive a number from pixel position.
+        const title=String(region.getAttribute('aria-label')||'').trim();
+        const marks=Array.from(region.querySelectorAll('[data-series][data-dimension][data-value]')).filter(isVisible);
+        const batch=[],local=new Set();
+        let ok=Boolean(title&&title.length<=150&&marks.length&&marks.length<=200);
+        for(const mark of marks){
+          const series=String(mark.getAttribute('data-series')||'').trim();
+          const dimension=String(mark.getAttribute('data-dimension')||'').trim();
+          const raw=String(mark.getAttribute('data-value')||'').trim();
+          const label=String(mark.getAttribute('aria-label')||mark.innerText||mark.textContent||'').trim();
+          const value=parseNumberPtBr(raw);
+          const key=JSON.stringify([chartId,series,dimension]);
+          if(!series||series.length>120||!dimension||dimension.length>100||!raw||raw.length>80||value===null||!label.includes(raw)||!label.includes(series)||!label.includes(dimension)||local.has(key)||keys.has(key)||points.length+batch.length>=200){ok=false;break;}
+          local.add(key);
+          const unit=/%\s*$/.test(raw)||/\(%\)$/.test(series)?'PERCENT':/^R\$\s*/.test(raw)||/\(R\$\)$/.test(series)?'BRL':'UNSPECIFIED';
+          batch.push({chartId,chartTitle:title,series,dimension,value,unit,raw});
+        }
+        if(!ok){incomplete=true;continue;}
+        for(const point of batch){keys.add(JSON.stringify([point.chartId,point.series,point.dimension]));points.push(point);}
+        // Marks do not prove that all chart data is rendered.
+        incomplete=true;
+        continue;
+      }
       if(tables.length!==1){incomplete=true;continue;}
       const table=tables[0],headers=table.tHead?.rows?.length===1?Array.from(table.tHead.rows[0].cells):[];
       const title=String(table.caption&&isVisible(table.caption)?table.caption.innerText??table.caption.textContent??'':region.getAttribute('aria-label')||'').trim();
