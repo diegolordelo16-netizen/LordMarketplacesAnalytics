@@ -1195,7 +1195,7 @@ async function navigationPage(tabId){
   if(!marketplace||!info?.ok||info.marketplace!==marketplace||info.url!==tab.url||!info.accountId||info.loginRequired||info.challenge||!AUTHORIZED_AREA_KINDS.has(info.pageKind))throw Error('abra uma área de leitura autenticada e com conta identificada');
   const url=normalizeAuthorizedAreaUrl(tab.url,origin,marketplace);
   if(!url||url.port||url.hash)throw Error('rota não autorizada');
-  return {tabId,accountId:info.accountId,origin,route:url.pathname,pageKind:info.pageKind};
+  return {tabId,accountId:info.accountId,origin,route:url.pathname,pageKind:info.pageKind,spaPage:Number.isInteger(info.spaPagination?.page)?info.spaPagination.page:null,canAdvance:info.spaPagination?.canAdvance===true,filterSignature:info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')?null:info.filterSignature??''};
 }
 /** Ponte para o painel lateral e para o popup. */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -1219,8 +1219,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const requested=message.payload;
         if(!requested||requested.tabId!==ctx.tabId||requested.accountId!==ctx.accountId||requested.origin!==ctx.origin)throw Error('aba, loja ou origem mudou; aprendizado interrompido');
         if(message.method==='learning.observe'&&(requested.route!==ctx.route||requested.pageKind!==ctx.pageKind))throw Error('a página mudou durante a observação; demonstre novamente');
+        let actionKind;
+        if(message.method==='learning.observe'&&requested.previous){
+          const p=requested.previous;
+          if(requested.spaPage!==ctx.spaPage||requested.filterSignature!==ctx.filterSignature)throw Error('estado de página mudou durante a observação');
+          if(p.tabId===ctx.tabId&&p.accountId===ctx.accountId&&p.origin===ctx.origin&&p.route===ctx.route&&p.pageKind===ctx.pageKind&&typeof p.filterSignature==='string'&&typeof ctx.filterSignature==='string'){
+            if(Number.isInteger(p.spaPage)&&ctx.spaPage===p.spaPage+1&&p.canAdvance===true&&p.filterSignature===ctx.filterSignature)actionKind='SPA_NEXT';
+            else if(p.filterSignature!==ctx.filterSignature&&p.spaPage===ctx.spaPage)actionKind='FILTER_CHANGE';
+          }
+        }
         const base={accountId:ctx.accountId,origin:ctx.origin};
-        const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind,...(typeof requested.fromRoute==='string'?{fromRoute:requested.fromRoute}:{})}:base);
+        const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind,...(typeof requested.fromRoute==='string'?{fromRoute:requested.fromRoute}:{}),...(actionKind?{actionKind}:{})}:base);
         sendResponse(result);return;
       }
       if (message.method === 'capture.activeTab') {
