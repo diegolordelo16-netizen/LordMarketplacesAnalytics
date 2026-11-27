@@ -139,6 +139,9 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'guard.evaluate': 'execute_task',
   'audit.list': 'manage_backups',
   'audit.rollback': 'manage_backups',
+  'audit.changes': 'manage_backups',
+  'operation.limits.history': 'manage_financial_limits',
+  'operation.limits.restore': 'manage_financial_limits',
   'adapter.diagnostics': 'view_reports',
   'keyword.upsert': 'manage_market_intelligence',
   'seo.external.research': 'manage_connectors',
@@ -1782,6 +1785,8 @@ export class LocalService {
         );
         const originalValue = task.kind === 'edit_title' ? baseline?.before_title : baseline?.before_description;
         const capturedAt = baseline?.baseline_captured_at ? Date.parse(baseline.baseline_captured_at) : Number.NaN;
+        const rollback=db.row<{before_text:string;after_text:string;rolled_back_at:string|null;account_id:string;listing_id:string}>('SELECT c.before_text,c.after_text,c.rolled_back_at,c.account_id,c.listing_id FROM report_rollback_links r JOIN change_sets c ON c.id=r.change_set_id WHERE r.task_id=?',i.taskId);
+        if(rollback&&(rollback.rolled_back_at||rollback.account_id!==item.account_id||rollback.listing_id!==item.listing_id||baseline?.before_title!==rollback.after_text||item.title!==rollback.before_text))throw Error('estado atual diverge da mudança original; reversão bloqueada');
         if (!baseline?.baseline_source_url || originalValue === null || originalValue === undefined || !Number.isFinite(capturedAt) || Date.now() - capturedAt > 30 * 60_000) {
           throw new Error(`item ${item.id} sem snapshot original recente e verificável; reabra o anúncio e gere novamente o rascunho`);
         }
@@ -1900,6 +1905,13 @@ export class LocalService {
           const beforeText = field === 'title' ? approval.before_title : approval.before_description;
           const afterText = field === 'title' ? i.after.title : i.after.description;
           if (beforeText === null || afterText === null || beforeText === afterText) throw new Error('não há mudança verificável para registrar');
+          const rollback=db.row<{id:string;account_id:string;listing_id:string;before_text:string;after_text:string;rolled_back_at:string|null}>('SELECT c.* FROM report_rollback_links r JOIN change_sets c ON c.id=r.change_set_id WHERE r.task_id=?',approval.task_id);
+          if(rollback){
+            if(rollback.rolled_back_at||rollback.account_id!==approval.account_id||rollback.listing_id!==approval.listing_id||field!=='title'||beforeText!==rollback.after_text||afterText!==rollback.before_text)throw Error('evidência de reversão incompatível');
+            const verifiedAt=nowIso();db.db.prepare('UPDATE change_sets SET rolled_back_at=? WHERE id=? AND rolled_back_at IS NULL').run(verifiedAt,rollback.id);
+            db.db.prepare('UPDATE report_rollback_links SET verified_at=? WHERE change_set_id=? AND verified_at IS NULL').run(verifiedAt,rollback.id);
+            this.audit(auth,'ROLLBACK_VERIFIED','change_set',rollback.id,'OK','título original restaurado em publicação verificada');
+          }
           db.db.prepare(`INSERT INTO change_sets (id,account_id,listing_id,field,before_text,after_text,diff_json,preservation_ok,verified_after_save,applied_at,actor_user_id,task_id)
             VALUES (?,?,?,?,?,?,?,1,1,?,?,?)`)
             .run(randomUUID(), approval.account_id, approval.listing_id, field, beforeText, afterText, JSON.stringify({source:'human_confirmed_marketplace_save',successText:i.successText}), nowIso(), auth.userId, approval.task_id);
@@ -1909,24 +1921,25 @@ export class LocalService {
       return { ok: true, status: terminal, itemStatus, manualVerificationRequired: i.outcome === 'UNCERTAIN' };
     });
 
-    this.register('task.rollbackPrepare', (payload, auth) => {
-      const i = z.object({ approvalId: z.string().min(1) }).parse(payload ?? {});
-      const approval = db.row<Record<string, any>>(`SELECT a.*,i.listing_id FROM task_publish_approvals a JOIN task_items i ON i.id=a.item_id AND i.task_id=a.task_id WHERE a.id=? AND a.status='PUBLISHED'`, i.approvalId);
-      if (!approval) throw new Error('publicação verificada não encontrada');
-      const change = db.row<{ before_text: string; after_text: string; field: string }>(
-        `SELECT before_text,after_text,field FROM change_sets WHERE task_id=? AND listing_id=? AND field='title' ORDER BY applied_at DESC LIMIT 1`, approval.task_id, approval.listing_id,
-      );
-      if (!change) throw new Error('rollback assistido disponível somente para título; descrição exige revisão manual do texto original');
-      const listing = db.row<{ external_id: string; marketplace: string; title: string | null }>('SELECT external_id,marketplace,title FROM listings WHERE id=? AND account_id=?', approval.listing_id, approval.account_id);
-      if (!listing) throw new Error('anúncio original não está mais disponível na conta');
-      const created = tasks.create({
-        name: `Reverter título · ${listing.external_id}`, kind: 'edit_title', accountId: approval.account_id, mode: 'DRAFT', scheduleAt: null, recurrence: null,
-        typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 300, verifyAfterTyping: true },
-        options: { rollbackOfApproval: approval.id, sourceTaskId: approval.task_id }, createdBy: auth?.userId ?? 'system',
-        items: [{ listingId: listing.external_id, marketplace: listing.marketplace as 'mercado_livre' | 'shopee', accountId: approval.account_id, copies: 1, title: change.before_text }],
-      });
-      this.audit(auth, 'TASK_ROLLBACK_DRAFT_PREPARE', 'task', created.taskId, 'DRAFT_CREATED', `rascunho de reversão para aprovação ${approval.id}`);
-      return { ok: true, taskId: created.taskId, execution: 'DRAFT_ONLY', note: 'rascunho restaurador criado; precisa ser revisado, preenchido e autorizado separadamente. Nenhuma chamada remota foi feita.' };
+    const prepareRollback=(changeSetId:string,auth:AuthContext|null)=>db.transaction(()=>{
+      if(!auth||auth.role!=='super_admin')throw Error('somente super_admin prepara reversão');
+      const cs=db.row<{id:string;account_id:string;listing_id:string;field:string;before_text:string|null;after_text:string|null;verified_after_save:number;rolled_back_at:string|null;applied_at:string;task_id:string}>('SELECT * FROM change_sets WHERE id=?',changeSetId);
+      if(!cs||cs.verified_after_save!==1||cs.rolled_back_at||!cs.before_text||!cs.after_text||cs.before_text===cs.after_text)throw Error('mudança original não verificada ou já revertida');
+      if(cs.field!=='title')throw Error('reversão de descrição integral não possui executor seguro; restaure manualmente após revisar o texto original');
+      if(db.row('SELECT change_set_id FROM report_rollback_links WHERE change_set_id=?',cs.id))throw Error('já existe rascunho restaurador para esta mudança; revise a tarefa existente');
+      if(db.row('SELECT id FROM change_sets WHERE account_id=? AND listing_id=? AND field=? AND id<>? AND applied_at>=?',cs.account_id,cs.listing_id,cs.field,cs.id,cs.applied_at))throw Error('existem alterações posteriores ou simultâneas; não sobrescreva o estado atual');
+      const listing=db.row<{id:string;external_id:string;marketplace:string}>("SELECT l.id,l.external_id,l.marketplace FROM listings l JOIN accounts a ON a.id=l.account_id AND a.is_active=1 AND a.verified_by_user=1 AND a.marketplace=l.marketplace WHERE l.id=? AND l.account_id=? AND l.status<>'CLOSED'",cs.listing_id,cs.account_id);
+      if(!listing||!['mercado_livre','shopee'].includes(listing.marketplace))throw Error('anúncio original indisponível para reversão assistida');
+      const created=tasks.create({name:'Reverter título · '+listing.external_id,kind:'edit_title',accountId:cs.account_id,mode:'DRAFT',scheduleAt:null,recurrence:null,typing:{mode:'set_value',charDelayMs:0,settleDelayMs:300,verifyAfterTyping:true},options:{rollbackOfChangeSet:cs.id,sourceTaskId:cs.task_id},createdBy:auth.userId,items:[{listingId:listing.id,marketplace:listing.marketplace,accountId:cs.account_id,copies:1,title:cs.before_text}]});
+      db.db.prepare('INSERT INTO report_rollback_links(change_set_id,task_id,created_at) VALUES(?,?,?)').run(cs.id,created.taskId,nowIso());
+      this.audit(auth,'TASK_ROLLBACK_DRAFT_PREPARE','change_set',cs.id,'DRAFT_CREATED','rascunho '+created.taskId+'; nenhuma alteração remota');
+      return {ok:true,taskId:created.taskId,changeSetId:cs.id,execution:'DRAFT_ONLY',note:'Rascunho restaurador criado. A mudança só será marcada como revertida após nova publicação autorizada e verificada.'};
+    });
+    this.register('task.rollbackPrepare',(payload,auth)=>{
+      const i=z.object({approvalId:z.string().min(1)}).parse(payload??{});
+      const cs=db.row<{id:string}>("SELECT c.id FROM task_publish_approvals a JOIN task_items i ON i.id=a.item_id AND i.task_id=a.task_id JOIN change_sets c ON c.task_id=a.task_id AND c.listing_id=i.listing_id AND c.account_id=a.account_id WHERE a.id=? AND a.status='PUBLISHED' ORDER BY c.applied_at DESC LIMIT 1",i.approvalId);
+      if(!cs)throw Error('publicação verificada não encontrada');
+      return prepareRollback(cs.id,auth);
     });
 
     // ------------------------------------------------------------ guard
@@ -1973,16 +1986,14 @@ export class LocalService {
       return db.rows<Record<string, unknown>>('SELECT * FROM audit_log ORDER BY at DESC LIMIT ?', i.limit);
     });
 
-    this.register('audit.rollback', (payload, auth) => {
-      const i = z.object({ changeSetId: z.string() }).parse(payload);
-      const cs = db.row<{ id: string; listing_id: string; field: string; before_text: string | null; after_text: string | null }>(
-        'SELECT id, listing_id, field, before_text, after_text FROM change_sets WHERE id = ?',
-        i.changeSetId,
-      );
-      if (!cs) throw new Error('change set inexistente');
-      db.db.prepare('UPDATE change_sets SET rolled_back_at = ? WHERE id = ?').run(new Date().toISOString(), i.changeSetId);
-      this.audit(auth, 'ROLLBACK', 'change_set', i.changeSetId, 'OK', `campo ${cs.field}`);
-      return { ok: true, field: cs.field, restoreValue: cs.before_text, note: 'reaplicação no marketplace exige execução de tarefa aprovada' };
+    this.register('audit.changes',payload=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(50),offset:z.number().int().min(0).default(0)}).strict().parse(payload);
+      return db.rows("SELECT c.*,l.external_id,r.task_id rollback_task_id,r.verified_at rollback_verified_at FROM change_sets c JOIN listings l ON l.id=c.listing_id AND l.account_id=c.account_id LEFT JOIN report_rollback_links r ON r.change_set_id=c.id WHERE c.account_id=? ORDER BY c.applied_at DESC,c.id DESC LIMIT ? OFFSET ?",i.accountId,i.limit,i.offset);
+    });
+    this.register('audit.rollback',(payload,auth)=>{
+      const i=z.object({changeSetId:z.string().min(1),accountId:z.string().min(1),confirmed:z.literal(true)}).strict().parse(payload);
+      if(!db.row('SELECT id FROM change_sets WHERE id=? AND account_id=?',i.changeSetId,i.accountId))throw Error('mudança não pertence à conta');
+      return prepareRollback(i.changeSetId,auth);
     });
 
     this.register('adapter.diagnostics', (payload) => {
@@ -3085,10 +3096,30 @@ export class LocalService {
     this.register('operation.limits.set',(payload,auth)=>{
       const i=z.object({accountId:z.string().min(1),limits:assistedLimitsSchema,confirmed:z.literal(true)}).strict().parse(payload);operationAccount(i.accountId);
       if(auth?.role!=='super_admin')throw Error('super_admin necessário');
-      db.db.prepare('INSERT INTO settings(key,value_json,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by').run('assisted_limits:'+i.accountId,JSON.stringify(i.limits),nowIso(),auth.userId??null);
+      db.transaction(()=>{
+        const before=readAssistedLimits(i.accountId),at=nowIso();
+        db.db.prepare('INSERT INTO settings(key,value_json,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at,updated_by=excluded.updated_by').run('assisted_limits:'+i.accountId,JSON.stringify(i.limits),at,auth.userId);
+        db.db.prepare('INSERT INTO financial_limit_revisions(id,account_id,before_json,after_json,created_at,created_by) VALUES(?,?,?,?,?,?)').run(randomUUID(),i.accountId,before?JSON.stringify(before):null,JSON.stringify(i.limits),at,auth.userId);
+      });
       this.audit(auth,'ASSISTED_LIMITS_SET','account',i.accountId,'OK','limites de operação assistida confirmados');
       return {ok:true,limits:i.limits};
     });
+    this.register('operation.limits.history',payload=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(30)}).strict().parse(payload);operationAccount(i.accountId);
+      return db.rows('SELECT * FROM financial_limit_revisions WHERE account_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?',i.accountId,i.limit);
+    });
+    this.register('operation.limits.restore',(payload,auth)=>db.transaction(()=>{
+      const i=z.object({accountId:z.string().min(1),revisionId:z.string().min(1),confirmed:z.literal(true)}).strict().parse(payload);operationAccount(i.accountId);
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário');
+      const rev=db.row<{id:string;before_json:string|null;after_json:string}>('SELECT id,before_json,after_json FROM financial_limit_revisions WHERE account_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1',i.accountId);
+      const current=readAssistedLimits(i.accountId);
+      if(!rev||rev.id!==i.revisionId||canonicalJson(current)!==canonicalJson(JSON.parse(rev.after_json)))throw Error('limites atuais divergem da última revisão');
+      const before=rev.before_json?assistedLimitsSchema.parse(JSON.parse(rev.before_json)):null,at=nowIso();
+      if(before)db.db.prepare('UPDATE settings SET value_json=?,updated_at=?,updated_by=? WHERE key=?').run(JSON.stringify(before),at,auth.userId,'assisted_limits:'+i.accountId);
+      else db.db.prepare('DELETE FROM settings WHERE key=?').run('assisted_limits:'+i.accountId);
+      db.db.prepare('INSERT INTO financial_limit_revisions(id,account_id,before_json,after_json,created_at,created_by,restored_from) VALUES(?,?,?,?,?,?,?)').run(randomUUID(),i.accountId,JSON.stringify(current),JSON.stringify(before),at,auth.userId,rev.id);
+      this.audit(auth,'ASSISTED_LIMITS_RESTORE','account',i.accountId,'OK','revisão restaurada '+rev.id);return {ok:true,limits:before};
+    }));
     const budgetContext=z.object({accountId:z.string().min(1),campaignRef:z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/),sourcePath:z.string().min(1).max(1000),documentNonce:z.string().uuid(),budgetCents:z.number().int().min(0).max(100000000),campaignStatus:z.enum(['ACTIVE','PAUSED']).optional(),roasTargetHundredths:z.number().int().min(100).max(3500).optional()});
     const budgetSource=(path:string)=>{
       const url=new URL(path);
