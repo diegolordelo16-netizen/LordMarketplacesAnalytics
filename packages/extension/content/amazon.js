@@ -197,7 +197,7 @@
       return true;
     }
     if(message?.type==='MI_CAPTURE_REAPPLY_FILTERS'){
-      const verify=()=>detectPageKind(location.href)==='seller_listings'&&visibleAccountIdentity().accountId===message.accountId&&location.href===message.url&&!window.MI_DOM.hasChallenge(document)&&!document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]');
+      const verify=()=>['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(detectPageKind(location.href))&&(detectPageKind(location.href)===message.pageKind||(!message.pageKind&&detectPageKind(location.href)==='seller_listings'))&&visibleAccountIdentity().accountId===message.accountId&&location.href===message.url&&!window.MI_DOM.hasChallenge(document)&&!document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]');
       const ok=Boolean(window.MI_DOM.restoreVisibleFilters?.(document,message.currentSignature,message.targetSignature,verify));
       sendResponse({ok});return false;
     }
