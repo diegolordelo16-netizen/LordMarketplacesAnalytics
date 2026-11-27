@@ -680,6 +680,7 @@ describe('comparação de períodos e entidades', () => {
     const campaignResult=(await call('kpi.compare.detail',{...payload,listingId:undefined})).result as any;
     expect(campaignResult.campaigns).toEqual([expect.objectContaining({campaignId:'C-loss',spend:100,attributedRevenue:30})]);
     expect((await call('kpi.compare.detail',payload)).result).toMatchObject({campaigns:[]});
+    expect((await call('kpi.compare.detail',{...payload,listingId:undefined,groupBy:'marketplace'})).result).toMatchObject({rows:[{id:'mercado_livre',marketplace:'mercado_livre',comparisonQuality:{coverageVerified:false}}]});
     expect((await call('kpi.compare.detail',{...payload,listingId:undefined,primaryFrom:'2025-01-09'})).result).toMatchObject({campaigns:[]});
   });
 });
@@ -1659,7 +1660,7 @@ describe('analytics, keyword intelligence and bundle simulation', () => {
     const dashboard=await call('kpi.dashboard',scope);
     expect(dashboard.result).toMatchObject({totals:{gmvCents:1000},window:{entityScoped:true,days:30},coverage:{totalListings:1,accountsWithSnapshots:0}});
     const scopedHistory=await call('kpi.history',scope);
-    expect(scopedHistory.result).toMatchObject({points:[{gmv:10,orders:1,accountsCaptured:1}]});
+    expect(scopedHistory.result).toMatchObject({points:[{gmv:10,orders:1,accountsCaptured:1,aovCents:1000,cvr:null}]});
     const recent=await call('kpi.dashboard',{...scope,days:7});
     expect(recent.result).toMatchObject({totals:{gmvCents:null},coverage:{capturedListings:0}});
     expect((await call('kpi.history',{...scope,days:7})).result).toMatchObject({points:[]});
