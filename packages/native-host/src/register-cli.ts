@@ -9,9 +9,9 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { appDataDir } from './host';
-import { HOST_NAME, buildRegFile, planRegistration, writeManifest } from './register';
+import { REGISTRY_KEYS, buildRegFile, planRegistration, writeManifest } from './register';
 
 function readExtensionId(): string {
   const explicit = process.argv.find((a) => a.startsWith('--extension-id='));
@@ -28,10 +28,7 @@ function main(): void {
   const dataDir = appDataDir();
 
   if (unregister) {
-    for (const key of [
-      `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`,
-      `HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\${HOST_NAME}`,
-    ]) {
+    for (const key of REGISTRY_KEYS) {
       spawnSync('reg', ['delete', key, '/f'], { stdio: 'ignore' });
     }
     process.stdout.write('host nativo removido do registro (Chrome e Edge)\n');
@@ -47,10 +44,12 @@ function main(): void {
   }
 
   // O host roda a partir da pasta do instalador; o manifesto guarda o caminho absoluto.
-  const hostDir = dirname(process.argv[1] ?? '.');
-  const hostScript = join(hostDir, 'native-host.js');
-  const nodeExe = join(dirname(hostDir), 'node.exe');
-  const hostPath = existsSync(nodeExe) ? `${nodeExe} "${hostScript}"` : hostScript;
+  const hostDir = dirname(resolve(process.argv[1] ?? '.'));
+  const hostPath = join(hostDir, 'native-host.cmd');
+  if (!existsSync(hostPath)) {
+    process.stderr.write('Launcher do host nativo ausente.\n');
+    process.exit(2);
+  }
 
   const plan = planRegistration({ appDataDir: dataDir, hostExePath: hostPath, extensionId });
   writeManifest(plan);
