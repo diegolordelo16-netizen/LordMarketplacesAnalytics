@@ -323,5 +323,24 @@
     "listingId": "string?",
     "skuId": "string?",
     "method": "latest daily snapshots by listing/account, null for missing contributions, observed ratios"
+  },
+  "finance.profitability": {
+    "accountId": "string",
+    "periodStart": "ISO datetime",
+    "periodEnd": "ISO datetime",
+    "method": "exact-window realized listing records; unknown/conflicting values null"
+  },
+  "inventory.dashboard": {
+    "accountId": "string",
+    "days": "1–365 capture recency",
+    "method": "latest listing stock, verified sales-window coverage, no shared SKU summation"
+  },
+  "ads.dashboard": {
+    "accountId": "string",
+    "from": "ISO datetime",
+    "to": "ISO datetime",
+    "kind": "AD|AD_CAMPAIGN?",
+    "externalId": "string?",
+    "method": "latest observations per entity; TACoS only for compatible account source windows"
   }
 }
