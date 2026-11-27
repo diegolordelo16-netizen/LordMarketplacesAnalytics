@@ -1858,8 +1858,10 @@ const ACTIONS = {
   },
   'kw-visibility': async () => {
     if (!state.accountId) throw new Error('selecione uma conta ativa');
-    const result = await run(() => api('keyword.visibility', { accountId: state.accountId, days: 30 }));
-    $('#kw-intelligence-out').innerHTML = table(['Termo','Amostras','Top 3','Top 10','Top 20','Share observado'], result.terms.map((r) => `<tr><td>${esc(r.term)}</td><td>${num(r.sampleSize)}</td><td>${pct(r.top3PresencePct)}</td><td>${pct(r.top10PresencePct)}</td><td>${pct(r.top20PresencePct)}</td><td>${pct(r.ownVisibilitySharePct)}</td></tr>`), 'Nenhuma SERP capturada no período.') + `<p class="muted small">${esc(result.note)}</p>`;
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#kw-intelligence-out');
+    const result = await run(() => api('keyword.visibility', { accountId, days: 30 }));
+    if(!result||generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#kw-intelligence-out'))return;
+    host.innerHTML = table(['Termo','Amostras','Top 3','Top 10','Top 20','Share observado'], result.terms.map((r) => `<tr><td>${esc(r.term)}</td><td>${num(r.sampleSize)}</td><td>${pct(r.top3PresencePct)}</td><td>${pct(r.top10PresencePct)}</td><td>${pct(r.top20PresencePct)}</td><td>${pct(r.ownVisibilitySharePct)}</td></tr>`), 'Nenhuma SERP com resultados utilizáveis no período.') + `<p class="muted small">${esc(result.note)}</p>` + (result.excludedSnapshots?`<p class="muted small">${num(result.excludedSnapshots)} captura(s) sem posições válidas ou com posições repetidas no Top 20.</p>`:'');
     initializeTables($('#kw-intelligence-out'));
   },
   'kw-cannibal': async () => {

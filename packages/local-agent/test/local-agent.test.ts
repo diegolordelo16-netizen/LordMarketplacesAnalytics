@@ -1939,9 +1939,15 @@ describe('analytics, keyword intelligence and bundle simulation', () => {
     result.run('serp1',1,'ML-OWN','Meu anúncio',0,1);
     result.run('serp1',2,'ML-C1','Concorrente 1',0,0);
     result.run('serp1',3,'ML-C2','Concorrente 2',0,0);
+    const snapshot=db.db.prepare('INSERT INTO search_snapshots (id,marketplace,account_id,term,captured_at,results_count) VALUES (?,?,?,?,?,?)');
+    snapshot.run('serp-empty','mercado_livre','acct-vis','capacete norisk',now,0);
+    snapshot.run('serp-ambiguous','mercado_livre','acct-vis','capacete norisk',now,2);
+    result.run('serp-ambiguous',1,'ML-C3','Concorrente 3',0,0);
+    result.run('serp-ambiguous',1,'ML-C4','Concorrente 4',0,0);
     const response=await call('keyword.visibility',{accountId:'acct-vis',days:30});
     expect(response.ok).toBe(true);
     const terms=(response.result as {terms:Array<{term:string;top3PresencePct:number;ownVisibilitySharePct:number}>}).terms;
+    expect(response.result).toMatchObject({snapshots:3,excludedSnapshots:2,terms:[{sampleSize:1}]});
     expect(terms[0]?.top3PresencePct).toBe(100);
     expect(terms[0]?.ownVisibilitySharePct).toBeGreaterThan(0);
     expect((response.result as {note:string}).note).toContain('não é market share');

@@ -2024,18 +2024,19 @@ export class LocalService {
       return { marketplace:i.marketplace, clustersCreated:created, keywordsAssigned:assigned, method:'TOKEN_OVERLAP_LOCAL', threshold:i.threshold };
     });
 
-    this.register('keyword.visibility', (payload, auth) => {
+    this.register('keyword.visibility', (payload, auth) => db.transaction(() => {
       const i=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(30)}).parse(payload ?? {});
       const account=db.row<{marketplace:string}>('SELECT marketplace FROM accounts WHERE id=? AND is_active=1',i.accountId);
       if(!account) throw new Error('conta ativa não encontrada');
-      const from=new Date(Date.now()-i.days*86_400_000).toISOString();
-      const snapshots=db.rows<{id:string;term:string;captured_at:string;results_count:number}>('SELECT id,term,captured_at,results_count FROM search_snapshots WHERE account_id=? AND marketplace=? AND captured_at>=? ORDER BY captured_at DESC',i.accountId,account.marketplace,from);
-      const summaries=snapshots.map((snap)=>{
-        const results=db.rows<{position:number;is_own:number}>('SELECT position,is_own FROM search_results WHERE snapshot_id=? AND position<=20 ORDER BY position',snap.id);
+      const to=nowIso(),from=new Date(Date.parse(to)-i.days*86_400_000).toISOString();
+      const snapshots=db.rows<{id:string;term:string;captured_at:string;results_count:number}>('SELECT id,term,captured_at,results_count FROM search_snapshots WHERE account_id=? AND marketplace=? AND captured_at>=? AND captured_at<=? ORDER BY captured_at DESC,id DESC',i.accountId,account.marketplace,from,to);
+      const summaries=snapshots.flatMap((snap)=>{
+        const results=db.rows<{position:number;is_own:number}>('SELECT position,is_own FROM search_results WHERE snapshot_id=? AND position BETWEEN 1 AND 20 ORDER BY position',snap.id);
+        if(!results.length||new Set(results.map(r=>r.position)).size!==results.length)return [];
         const own=results.filter((r)=>r.is_own===1);
         const weighted=results.reduce((sum,r)=>sum+1/Math.log2(Math.max(2,r.position+1)),0);
         const ownWeighted=own.reduce((sum,r)=>sum+1/Math.log2(Math.max(2,r.position+1)),0);
-        return { term:snap.term,capturedAt:snap.captured_at,ownTop3:own.some((r)=>r.position<=3),ownTop10:own.some((r)=>r.position<=10),ownTop20:own.length>0,ownCount:own.length,totalCount:results.length,weightedShare:weighted>0?ownWeighted/weighted:null };
+        return [{ term:snap.term,capturedAt:snap.captured_at,ownTop3:own.some((r)=>r.position<=3),ownTop10:own.some((r)=>r.position<=10),ownTop20:own.length>0,ownCount:own.length,totalCount:results.length,weightedShare:weighted>0?ownWeighted/weighted:null }];
       });
       const byTerm=new Map<string,typeof summaries>();
       for(const item of summaries){const group=byTerm.get(item.term)??[];group.push(item);byTerm.set(item.term,group);}
@@ -2047,8 +2048,8 @@ export class LocalService {
         return result;
       });
       this.audit(auth,'KEYWORD_VISIBILITY','account',i.accountId,'OK',`${snapshots.length} snapshots observados`);
-      return {accountId:i.accountId,marketplace:account.marketplace,days:i.days,snapshots:snapshots.length,terms:output,note:'Share de visibilidade calculado somente sobre resultados SERP previamente capturados; não é market share.'};
-    });
+      return {accountId:i.accountId,marketplace:account.marketplace,days:i.days,snapshots:snapshots.length,excludedSnapshots:snapshots.length-summaries.length,terms:output,note:'Share de visibilidade calculado somente sobre resultados SERP previamente capturados; não é market share.'};
+    }));
 
     this.register('keyword.cannibalization', (payload) => {
       const i=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(90)}).parse(payload ?? {});

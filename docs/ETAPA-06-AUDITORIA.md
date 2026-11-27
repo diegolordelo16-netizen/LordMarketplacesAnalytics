@@ -19,3 +19,7 @@
 O painel apresenta o volume observado por tipo e fonte nos últimos 30 dias, a média das avaliações com nota explícita, o histórico de reputação capturado para a loja e motivos de devolução recorrentes quando o texto registrado coincide. A contagem descreve os registros locais do período. Notas ausentes permanecem vazias e a cobertura parcial das capturas permanece visível.
 
 Novos relatos manuais usam a fonte `F_USER_INPUT`. A migração 035 corrige registros antigos quando o log da operação identifica sua origem manual. A gravação direta exige uma conta ativa e valida o vínculo de anúncios à mesma loja.
+
+## Revisão da visibilidade SEO
+
+A presença e o share Top 20 usam capturas com posições válidas e sem empates de posição. Capturas vazias ou ambíguas são contabilizadas separadamente no painel. O registro do cálculo é transacional.
