@@ -1027,3 +1027,31 @@ describe('feedback em tabela virtualizada',()=>{
     expect(grid.scrollTop).toBe(25);
   });
 });
+
+describe('restauração de filtro listbox',()=>{
+  it('seleciona uma opção visível e inequívoca sem aceitar opções desabilitadas',()=>{
+    class E{
+      tagName='DIV';disabled=false;
+      constructor(public attrs:Record<string,string>,public nodes:E[]=[],public innerText=''){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return null}
+      querySelectorAll(s:string){return s.includes('aria-selected')?this.nodes.filter(x=>x.attrs['aria-selected']==='true'):this.nodes}
+      contains(n:E){return this.nodes.includes(n)}
+      click(){}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const a=new E({'aria-selected':'true'},[],'Últimos 7 dias');
+    const b=new E({'aria-selected':'false'},[],'Últimos 30 dias');
+    const control=new E({'role':'listbox','aria-label':'Período'},[a,b]);
+    const region=new E({'data-testid':'filters'},[control]);
+    const root={querySelectorAll:(s:string)=>s.startsWith('[role="combobox"]')?[control]:s.startsWith('[data-testid="filters"]')?[region]:[]};
+    b.click=()=>{a.attrs['aria-selected']='false';b.attrs['aria-selected']='true'};
+    b.disabled=true;
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(false);
+    b.disabled=false;
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(true);
+    expect(window.MI_DOM.collectionFilterState(root).signature).toBe('período=últimos 30 dias');
+  });
+});
