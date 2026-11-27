@@ -333,5 +333,58 @@
     state.button.click();
     return true;
   }
-  window.MI_DOM = { spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  // Scroll only a recognized grid; verify every declared row index and stable listing ID.
+  async function collectVirtualizedListings(root,initial,readSnapshot,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))){
+    if(initial.pageKind!=='seller_listings'||!initial.coverageWarnings?.includes('TABELA_VIRTUALIZADA'))return initial;
+    const grids=Array.from(root.querySelectorAll('table[aria-rowcount],[role="grid"][aria-rowcount]')).filter(el=>isVisible(el));
+    if(grids.length!==1)return initial;
+    const grid=grids[0],total=Number(grid.getAttribute('aria-rowcount'));
+    if(!Number.isInteger(total)||total<2||total>500||grid.clientHeight<=0||grid.scrollHeight<=grid.clientHeight)return initial;
+    const initialIds=(initial.listings??[]).map(row=>String(row.listingId));
+    const original=grid.scrollTop,byIndex=new Map(),byId=new Map();
+    const headerIndexes=new Set(),details=new Map();
+    let valid=true,finished=false;
+    const identity=row=>{
+      const attr=name=>String(row.getAttribute(name)||'');
+      if(initial.marketplace==='mercado_livre'){const id=attr('data-item-id');return /^MLB-?\d{5,}$/i.test(id)?id.toUpperCase():'';}
+      if(initial.marketplace==='shopee'){const id=attr('data-product-id')||attr('data-item-id');return /^\d+$/.test(id)?id:'';}
+      if(initial.marketplace==='amazon'){const sku=attr('data-sku'),asin=attr('data-asin');return sku?'SKU:'+sku:/^[A-Z0-9]{10}$/.test(asin)?asin:'';}
+      return '';
+    };
+    try{
+      grid.scrollTop=0;await wait(350);
+      for(let step=0;step<40;step++){
+        if(hasChallenge(root)||root.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]'))throw Error('login/CAPTCHA durante a rolagem');
+        const snap=readSnapshot();
+        if(snap.accountId!==initial.accountId||snap.url!==initial.url||snap.filterSignature!==initial.filterSignature||snap.pageKind!==initial.pageKind||snap.spaPage!==initial.spaPage||snap.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO'))throw Error('conta, página ou filtros mudaram durante a rolagem');
+        if(Number(grid.getAttribute('aria-rowcount'))!==total){valid=false;break;}
+        const local=new Map((snap.listings??[]).map(row=>[String(row.listingId),row]));
+        for(const row of grid.querySelectorAll('[aria-rowindex]')){
+          if(!isVisible(row))continue;
+          const idx=Number(row.getAttribute('aria-rowindex'));
+          if(!Number.isInteger(idx)||idx<1||idx>total){valid=false;continue;}
+          if(row.querySelector?.('[role="columnheader"],th')&&!row.querySelector?.('[role="gridcell"],td')){headerIndexes.add(idx);continue;}
+          const id=identity(row),data=local.get(id);
+          if(!id||!data||(byIndex.has(idx)&&byIndex.get(idx)!==id)||(byId.has(id)&&byId.get(id).index!==idx)){valid=false;continue;}
+          byIndex.set(idx,id);byId.set(id,{index:idx,data});
+        }
+        for(const detail of snap.details??[]){
+          const key=JSON.stringify([detail.kind,detail.parentExternalId??'',detail.externalId]);
+          if(!details.has(key)&&details.size>=100){valid=false;continue;}
+          details.set(key,detail);
+        }
+        if(snap.accountMetrics||snap.customerVoice?.length)valid=false;
+        const bottom=grid.scrollHeight-grid.clientHeight;
+        if(grid.scrollTop>=bottom-1){finished=true;break;}
+        const before=grid.scrollTop;
+        grid.scrollTop=Math.min(bottom,before+Math.max(1,Math.floor(grid.clientHeight*0.75)));
+        await wait(350);
+        if(grid.scrollTop<=before){valid=false;break;}
+      }
+    }finally{grid.scrollTop=original;}
+    const complete=valid&&finished&&Array.from({length:total},(_,i)=>i+1).every(i=>headerIndexes.has(i)!==byIndex.has(i))&&byId.size>0;
+    if(!complete)return initial;
+    return {...initial,initialListingIds:initialIds,listings:[...byId.values()].sort((a,b)=>a.index-b.index).map(row=>row.data),details:[...details.values()],coverageWarnings:initial.coverageWarnings.filter(x=>x!=='TABELA_VIRTUALIZADA'),evidence:{...initial.evidence,virtualizedRows:String(byId.size),virtualizedDeclaredRows:String(total)}};
+  }
+  window.MI_DOM = { collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

@@ -143,7 +143,7 @@ async function capturePages() {
   button.disabled = true;
   button.textContent = 'Coletando páginas…';
   const hint = $('hint');
-  hint.textContent = 'A coleta paginada abre uma aba temporária em segundo plano. Ela para em CAPTCHA/login e nunca envia ou publica alterações.';
+  hint.textContent = 'A coleta usa uma aba temporária, controles reconhecidos de paginação e rolagem de tabelas indexadas. Ela para em CAPTCHA/login e nunca publica alterações.';
   const res = await call('capture.scanListingPages', { maxPages: 5 });
   button.disabled = false;
   button.textContent = 'Coletar até 5 páginas de anúncios';

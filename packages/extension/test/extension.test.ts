@@ -793,3 +793,33 @@ describe('paginação SPA com controle explícito',()=>{
     expect(next.clicked).toBe(1);
   });
 });
+
+
+describe('rolagem de tabela virtualizada',()=>{
+  it('reúne todos os índices e restaura a posição, sem confundir linhas repetidas',async()=>{
+    class E{
+      scrollTop=0;clientHeight=100;scrollHeight=200;
+      constructor(public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelector(){return null}
+      querySelectorAll(){return [] as E[]}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const grid=new E({'aria-rowcount':'3'});grid.scrollTop=25;
+    const indices=()=>grid.scrollTop>=100?[2,3]:[1,2];
+    grid.querySelectorAll=()=>indices().map(i=>new E({'aria-rowindex':String(i),'data-product-id':String(i)}));
+    const root={querySelectorAll:()=>[grid],querySelector:()=>null,body:{innerText:''}};
+    const initial={pageKind:'seller_listings',marketplace:'shopee',accountId:'a',url:'https://seller.shopee.com.br/list',filterSignature:'',coverageWarnings:['TABELA_VIRTUALIZADA'],listings:[{listingId:'1'},{listingId:'2'}]};
+    const read=()=>({...initial,listings:indices().map(i=>({listingId:String(i)}))});
+    const result=await window.MI_DOM.collectVirtualizedListings(root,initial,read,async()=>{});
+    expect(result.listings.map((r:any)=>r.listingId)).toEqual(['1','2','3']);
+    expect(result.coverageWarnings).toEqual([]);expect(grid.scrollTop).toBe(25);
+    grid.attrs['aria-rowcount']='4';
+    const partial=await window.MI_DOM.collectVirtualizedListings(root,initial,read,async()=>{});
+    expect(partial.coverageWarnings).toContain('TABELA_VIRTUALIZADA');
+    expect(grid.scrollTop).toBe(25);
+  });
+});

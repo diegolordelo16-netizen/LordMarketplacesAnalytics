@@ -410,12 +410,13 @@ async function ensureAccount(marketplace, accountId, snapshot) {
 
 /** Pede o snapshot ao content script da aba e envia ao serviço. */
 async function captureTab(tabId, expected = {}) {
-  const response = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_REQUEST' }).catch(() => null);
+  const response = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_REQUEST', ...(expected.virtualized?{virtualized:true,accountId:expected.accountId,url:expected.url,filterSignature:expected.filterSignature,spaPage:expected.spaPage}:{}) }).catch(() => null);
   if (!response || !response.ok) {
     return { ok: false, error: response?.error ?? 'página sem captura disponível' };
   }
   const snapshot = response.snapshot;
-  const listingFingerprint=JSON.stringify((snapshot.listings??[]).map(row=>String(row.listingId)).sort());
+  const listingFingerprint=JSON.stringify((snapshot.initialListingIds??(snapshot.listings??[]).map(row=>String(row.listingId))).sort());
+  if(expected.excludedListingIds&&(snapshot.listings??[]).some(row=>expected.excludedListingIds.has(String(row.listingId))))return {ok:false,error:'anúncios já capturados nesta varredura'};
   if ((expected.spaPage!==undefined&&snapshot.spaPage!==expected.spaPage)||(expected.listingFingerprint!==undefined&&listingFingerprint!==expected.listingFingerprint)||(expected.accountId && snapshot.accountId !== expected.accountId) ||
       (expected.url && snapshot.url !== expected.url) || (expected.filterSignature!==undefined && snapshot.filterSignature!==expected.filterSignature)) {
     return { ok: false, error: 'a conta, página ou filtros mudaram antes da captura' };
@@ -551,11 +552,11 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
       const ids=preview.listings.map(row=>String(row.listingId));
       const key=JSON.stringify([info.url,info.spaPagination?.page??null,fingerprint]);
       if(seenPages.has(key)||ids.some(id=>seenIds.has(id))){stoppedReason='ciclo ou anúncios repetidos: coleta interrompida';break;}
-      const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint});
+      const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint,virtualized:true,excludedListingIds:seenIds});
       pages.push({page:index+1,url:info.url,spaPage:info.spaPagination?.page,ok:Boolean(captured.ok),listings:captured.snapshot?.listings?.length??0,error:captured.error});
       if(!captured.ok){stoppedReason='captura não confirmada: '+(captured.error??'erro');break;}
-      seenPages.add(key);ids.forEach(id=>seenIds.add(id));previousFingerprint=fingerprint;
-      if(info.coverageWarnings?.length||captured.snapshot?.coverageWarnings?.length){stoppedReason='cobertura parcial da interface';break;}
+      seenPages.add(key);(captured.snapshot?.listings??preview.listings).forEach(row=>seenIds.add(String(row.listingId)));previousFingerprint=fingerprint;
+      if((captured.snapshot?.coverageWarnings??info.coverageWarnings)?.length){stoppedReason='cobertura parcial da interface';break;}
       if(info.nextPageUrl){
         const next=normalizeAuthorizedAreaUrl(info.nextPageUrl,origin,marketplace);
         if(!next||next.pathname!==new URL(info.url).pathname||filterQuery(next.href)!==filterQuery(info.url)||next.href===info.url){stoppedReason='link de próxima página ou filtro divergente';break;}

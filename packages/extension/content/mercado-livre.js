@@ -525,7 +525,7 @@
         sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
         return true;
       }
-      try {
+      const readObserved=()=>{
         const observed=snapshot();
         observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
         const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
@@ -533,6 +533,15 @@
         observed.spaPage=observed.pageKind==='seller_listings'?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;
         observed.coverageWarnings=[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])];
         if(filters.signature) observed.evidence={...observed.evidence,filtersAndPeriod:filters.signature};
+        return observed;
+      };
+      try {
+        const observed=readObserved();
+        if(message.virtualized===true&&observed.pageKind==='seller_listings'&&window.MI_DOM.collectVirtualizedListings){
+          if(observed.accountId!==message.accountId||observed.url!==message.url||observed.filterSignature!==message.filterSignature||observed.spaPage!==message.spaPage)throw Error('contexto da rolagem não corresponde à aba verificada');
+          window.MI_DOM.collectVirtualizedListings(document,observed,readObserved).then(result=>sendResponse({ok:true,snapshot:result})).catch(error=>sendResponse({ok:false,error:String(error?.message??error)}));
+          return true;
+        }
         sendResponse({ok:true,snapshot:observed});
       }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
