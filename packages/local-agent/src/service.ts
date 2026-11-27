@@ -614,7 +614,7 @@ export class LocalService {
     });
 
     this.register('catalog.sku.upsert', (payload, auth) => {
-      const i = z.object({ id: z.string().optional(), accountId: z.string().optional(), productId: z.string().nullable().optional(), sku: z.string().min(1).max(120), ean: z.string().max(32).nullable().optional(), gtin: z.string().max(32).nullable().optional(), upc: z.string().max(32).nullable().optional(), attributes: z.record(z.unknown()).default({}) }).parse(payload);
+      const i = z.object({ id: z.string().optional(), accountId: z.string().optional(), productId: z.string().nullable().optional(), sku: z.string().min(1).max(120), ean: z.string().max(32).nullable().optional(), gtin: z.string().max(32).nullable().optional(), upc: z.string().max(32).nullable().optional(), attributes: z.record(z.string(), z.unknown()).default({}) }).parse(payload);
       const id = i.id ?? randomUUID();
       const attrs = JSON.stringify(i.attributes);
       if (i.accountId && !db.row('SELECT id FROM accounts WHERE id=? AND is_active=1', i.accountId)) throw new Error('conta ativa não encontrada');
@@ -1644,8 +1644,8 @@ export class LocalService {
             .object({ id: z.string(), accountId: z.string(), externalId: z.string(), status: z.string() })
             .nullable()
             .default(null),
-          currentState: z.record(z.unknown()).nullable().default(null),
-          financialLimits: z.record(z.unknown()).nullable().default(null),
+          currentState: z.record(z.string(), z.unknown()).nullable().default(null),
+          financialLimits: z.record(z.string(), z.unknown()).nullable().default(null),
           requiredData: z.object({ missing: z.array(z.string()) }).default({ missing: [] }),
           platformRules: z.object({ violations: z.array(z.string()) }).default({ violations: [] }),
           authorization: z.object({ approved: z.boolean(), approvedBy: z.string().optional(), reason: z.string().optional() }).default({ approved: false }),
@@ -1683,7 +1683,7 @@ export class LocalService {
     });
 
     this.register('adapter.diagnostics', (payload) => {
-      const i = z.object({ marketplace: z.string(), observed: z.record(z.number()).default({}) }).parse(payload);
+      const i = z.object({ marketplace: z.string(), observed: z.record(z.string(), z.number()).default({}) }).parse(payload);
       const adapter = IMPLEMENTED_ADAPTERS.find((a) => a.id === i.marketplace);
       if (!adapter) return { ok: false, error: `adapter ${i.marketplace} não implementado`, planned: PLANNED_ADAPTERS };
       return { ok: true, diagnostics: adapter.diagnose(i.observed) };
@@ -1837,7 +1837,7 @@ export class LocalService {
 
     this.register('rank.record', (payload, auth) => {
       const i = z
-        .object({ listingId: z.string(), keywordId: z.string().nullable().default(null), position: z.number().int().min(0).max(500), isSponsored: z.boolean().default(false), context: z.record(z.unknown()).default({}) })
+        .object({ listingId: z.string(), keywordId: z.string().nullable().default(null), position: z.number().int().min(0).max(500), isSponsored: z.boolean().default(false), context: z.record(z.string(), z.unknown()).default({}) })
         .parse(payload);
       db.db
         .prepare('INSERT INTO rank_observations (listing_id, keyword_id, position, is_sponsored, observed_at, context_json) VALUES (?, ?, ?, ?, ?, ?)')
@@ -2301,7 +2301,7 @@ export class LocalService {
         shippingCents: z.number().int().min(0).default(0), marketplaceFeesCents: z.number().int().min(0).default(0), taxesCents: z.number().int().min(0).default(0),
         adSpendCents: z.number().int().min(0).default(0), refundsCents: z.number().int().min(0).default(0), returnLogisticsCents: z.number().int().min(0).default(0),
         cancellationLossCents: z.number().int().min(0).default(0), otherCostsCents: z.number().int().min(0).default(0),
-        sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']), evidence: z.record(z.unknown()), observedAt: z.string().datetime().optional(),
+        sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']), evidence: z.record(z.string(), z.unknown()), observedAt: z.string().datetime().optional(),
       }).refine((v) => Date.parse(v.periodStart) <= Date.parse(v.periodEnd), 'periodStart deve ser anterior ou igual a periodEnd')
         .refine((v) => Object.keys(v.evidence).length > 0, 'informe evidência da origem dos valores').parse(payload ?? {});
       const account = db.row<{ id: string; is_active: number }>('SELECT id,is_active FROM accounts WHERE id=?', i.accountId);
@@ -2336,7 +2336,7 @@ export class LocalService {
     });
 
     this.register('competitor.evidence.record', (payload, auth) => {
-      const i = z.object({ relationId: z.string(), priceCents: z.number().int().min(0).nullable().optional(), shippingCents: z.number().int().min(0).nullable().optional(), deliveryDaysMin: z.number().min(0).nullable().optional(), deliveryDaysMax: z.number().min(0).nullable().optional(), rating: z.number().min(0).max(5).nullable().optional(), reviews: z.number().int().min(0).nullable().optional(), sponsored: z.boolean().nullable().optional(), images: z.array(z.object({ url: z.string().url().max(2048), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(10).default([]), sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT']), capturedAt: z.string().datetime().optional(), evidence: z.record(z.string().max(2000)).default({}) }).refine((v) => v.deliveryDaysMin == null || v.deliveryDaysMax == null || v.deliveryDaysMin <= v.deliveryDaysMax, 'prazo mínimo não pode superar o máximo').parse(payload ?? {});
+      const i = z.object({ relationId: z.string(), priceCents: z.number().int().min(0).nullable().optional(), shippingCents: z.number().int().min(0).nullable().optional(), deliveryDaysMin: z.number().min(0).nullable().optional(), deliveryDaysMax: z.number().min(0).nullable().optional(), rating: z.number().min(0).max(5).nullable().optional(), reviews: z.number().int().min(0).nullable().optional(), sponsored: z.boolean().nullable().optional(), images: z.array(z.object({ url: z.string().url().max(2048), sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(10).default([]), sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT']), capturedAt: z.string().datetime().optional(), evidence: z.record(z.string(), z.string().max(2000)).default({}) }).refine((v) => v.deliveryDaysMin == null || v.deliveryDaysMax == null || v.deliveryDaysMin <= v.deliveryDaysMax, 'prazo mínimo não pode superar o máximo').parse(payload ?? {});
       const relation = db.row<{ id: string; status: string; monitoring_state: string; own_product_id: string; candidate_id: string }>('SELECT id,status,monitoring_state,own_product_id,candidate_id FROM competitor_relations WHERE id=?', i.relationId);
       if (!relation || relation.status === 'REJEITADO') throw new Error('relação de concorrência inexistente ou rejeitada');
       const id = randomUUID(); const capturedAt = i.capturedAt ?? nowIso();
@@ -2368,7 +2368,7 @@ export class LocalService {
     });
 
     this.register('campaign.change.prepare', (payload, auth) => {
-      const i = z.object({ accountId: z.string(), marketplace: z.string(), campaignRef: z.string().min(1).max(200), baseline: z.record(z.unknown()), changes: z.record(z.unknown()), reason: z.string().min(5).max(2000) }).parse(payload ?? {});
+      const i = z.object({ accountId: z.string(), marketplace: z.string(), campaignRef: z.string().min(1).max(200), baseline: z.record(z.string(), z.unknown()), changes: z.record(z.string(), z.unknown()), reason: z.string().min(5).max(2000) }).parse(payload ?? {});
       if (!db.row('SELECT id FROM accounts WHERE id=? AND marketplace=? AND is_active=1', i.accountId, i.marketplace)) throw new Error('conta ativa e marketplace não correspondem');
       if (!Object.keys(i.changes).length) throw new Error('nenhuma alteração proposta');
       const id = randomUUID(); const now = nowIso();
@@ -2393,7 +2393,7 @@ export class LocalService {
     });
 
     this.register('offer.variation.prepare', (payload, auth) => {
-      const i = z.object({ accountId: z.string(), listingId: z.string(), variationName: z.string().min(1).max(120), options: z.array(z.record(z.unknown())).min(1).max(100), proposedPriceCents: z.number().int().min(0).nullable().optional(), proposedStock: z.number().int().min(0).nullable().optional() }).parse(payload ?? {});
+      const i = z.object({ accountId: z.string(), listingId: z.string(), variationName: z.string().min(1).max(120), options: z.array(z.record(z.string(), z.unknown())).min(1).max(100), proposedPriceCents: z.number().int().min(0).nullable().optional(), proposedStock: z.number().int().min(0).nullable().optional() }).parse(payload ?? {});
       const listing = db.row<{ id: string; account_id: string }>('SELECT id,account_id FROM listings WHERE id=? AND account_id=?',i.listingId,i.accountId);
       if (!listing) throw new Error('anúncio não pertence à conta');
       const id=randomUUID(); const now=nowIso();
@@ -2509,7 +2509,7 @@ export class LocalService {
     });
 
     this.register('connector.configure', (payload, auth) => {
-      const i=z.object({connectorId:z.string().min(1).max(160),provider:z.enum(['GOOGLE_TRENDS','GOOGLE_ANALYTICS4','GOOGLE_SEARCH_CONSOLE','SEO_SERVICE','MARKETPLACE_SERVICE','GENERIC']),publicConfig:z.record(z.unknown()).default({}),secrets:z.record(z.string().min(1).max(5000)).default({})}).parse(payload ?? {});
+      const i=z.object({connectorId:z.string().min(1).max(160),provider:z.enum(['GOOGLE_TRENDS','GOOGLE_ANALYTICS4','GOOGLE_SEARCH_CONSOLE','SEO_SERVICE','MARKETPLACE_SERVICE','GENERIC']),publicConfig:z.record(z.string(), z.unknown()).default({}),secrets:z.record(z.string(), z.string().min(1).max(5000)).default({})}).parse(payload ?? {});
       const connector=db.row<{id:string;requires_credentials:number}>('SELECT id,requires_credentials FROM connector_registry WHERE id=?',i.connectorId);if(!connector)throw new Error('conector não cadastrado');
       const target = googleReadTarget(i.connectorId, i.publicConfig);
       if (target && (i.provider !== target.provider || Object.keys(i.secrets).length !== 1 || !/^[A-Za-z0-9._~+/=-]+$/.test(i.secrets.accessToken ?? ''))) {
@@ -2711,7 +2711,7 @@ export class LocalService {
     this.register('agent.run', (payload, auth) => {
       const schema = z.object({
         agents: z.array(z.string()).min(1),
-        context: z.record(z.unknown()),
+        context: z.record(z.string(), z.unknown()),
       });
       const i = schema.parse(payload);
       const recs = runAgents(i.agents as never, i.context as unknown as AgentContext);
@@ -2740,8 +2740,8 @@ export class LocalService {
         outcome: z.object({
           success: z.boolean(),
           measuredAt: z.string().datetime(),
-          baseline: z.record(z.number().finite()),
-          after: z.record(z.number().finite()),
+          baseline: z.record(z.string(), z.number().finite()),
+          after: z.record(z.string(), z.number().finite()),
           sampleSize: z.number().int().min(1).max(10_000_000),
           source: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']),
           notes: z.string().max(2000).optional(),
@@ -2827,7 +2827,7 @@ export class LocalService {
     this.register('autoupgrade.list', () => autoUpgrade.list());
 
     this.register('autoupgrade.apply', (payload, auth) => {
-      const i = z.object({ proposalId: z.string(), approved: z.boolean(), readFile: z.record(z.string()).default({}) }).parse(payload);
+      const i = z.object({ proposalId: z.string(), approved: z.boolean(), readFile: z.record(z.string(), z.string()).default({}) }).parse(payload);
       const readFile = (rel: string) => i.readFile[rel] ?? null;
       const writes: Array<{ path: string; content: string }> = [];
       const res = autoUpgrade.apply({
@@ -2843,7 +2843,7 @@ export class LocalService {
     });
 
     this.register('autoupgrade.rollback', (payload, auth) => {
-      const i = z.object({ proposalId: z.string(), files: z.record(z.string()).default({}) }).parse(payload);
+      const i = z.object({ proposalId: z.string(), files: z.record(z.string(), z.string()).default({}) }).parse(payload);
       const writes: Array<{ path: string; content: string }> = [];
       const res = autoUpgrade.rollback(i.proposalId, '.', (rel) => i.files[rel] ?? null, (rel, content) => writes.push({ path: rel, content }));
       this.audit(auth, 'AUTOUPGRADE_ROLLBACK', 'auto_upgrade_proposal', i.proposalId, res.ok ? 'OK' : 'FAILED', res.message);
@@ -2918,7 +2918,7 @@ export class LocalService {
         fileType: z.enum(['csv','xlsx','pdf']).default('csv'),
         csvText: z.string().max(2_500_000).optional(),
         base64: z.string().max(3_600_000).optional(),
-        rows: z.array(z.record(z.unknown())).max(10_000).optional(),
+        rows: z.array(z.record(z.string(), z.unknown())).max(10_000).optional(),
         accountId: z.string().min(1),
       }).refine((value) => Boolean(value.rows || (value.fileType === 'csv' ? value.csvText : value.base64)), 'informe as linhas ou o conteúdo do arquivo').parse(payload ?? {});
       if (!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1', i.accountId)) throw new Error('conta ativa não encontrada para importar o arquivo');
@@ -2964,7 +2964,7 @@ export class LocalService {
         mapping: z.object({
           externalId: z.string().min(1),
           capturedAt: z.string().optional(),
-          metrics: z.record(z.string().min(1)).refine((value) => Object.keys(value).length > 0, 'mapeie ao menos um indicador'),
+          metrics: z.record(z.string(), z.string().min(1)).refine((value) => Object.keys(value).length > 0, 'mapeie ao menos um indicador'),
         }),
       }).parse(payload ?? {});
       const allowedMetrics = new Set([

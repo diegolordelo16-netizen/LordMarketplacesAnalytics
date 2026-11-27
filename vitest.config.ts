@@ -57,6 +57,7 @@ export default real;`,
     exclude: ['**/node_modules/**'],
     reporters: ['default'],
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true, execArgv: ['--experimental-sqlite'] } },
+    maxWorkers: 1,
+    execArgv: ['--experimental-sqlite'],
   },
 });

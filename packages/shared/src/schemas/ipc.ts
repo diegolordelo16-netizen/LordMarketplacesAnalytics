@@ -142,7 +142,7 @@ export const captureIngestSchema = z.object({
   listings: z.array(capturedListingMetricsSchema.refine((item) => item.deliveryDaysMin === undefined || item.deliveryDaysMax === undefined || item.deliveryDaysMin <= item.deliveryDaysMax, 'prazo mínimo não pode superar o máximo')).max(500).default([]),
   accountMetrics: capturedAccountMetricsSchema.optional(),
   /** Evidências textuais curtas (rótulo → valor lido), para auditoria. */
-  evidence: z.record(z.string().max(2000)).refine((value) => Object.keys(value).length <= 40 && JSON.stringify(value).length <= 12_000, 'evidências excedem os limites permitidos').optional(),
+  evidence: z.record(z.string(), z.string().max(2000)).refine((value) => Object.keys(value).length <= 40 && JSON.stringify(value).length <= 12_000, 'evidências excedem os limites permitidos').optional(),
 }).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined, 'captura sem anúncios nem métricas de conta');
 
 export type CaptureIngest = z.infer<typeof captureIngestSchema>;
@@ -154,7 +154,7 @@ export const mainWorldObservationSchema = z.object({
   /** Nome lógico do recurso observado (ex.: `pdp_state`), nunca URL de endpoint privado. */
   resource: z.string().max(120),
   /** Somente dados já renderizados/consumidos pela página. */
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
   observedAt: z.string().datetime(),
 });
 
@@ -183,8 +183,8 @@ export const guardEvaluationSchema = z.object({
   accountId: z.string().min(1),
   listingId: z.string().min(1),
   action: z.enum(['edit_title', 'edit_description', 'upload_image', 'change_price', 'duplicate_listing', 'toggle_ads']),
-  expectedState: z.record(z.unknown()).optional(),
-  newValues: z.record(z.unknown()).optional(),
+  expectedState: z.record(z.string(), z.unknown()).optional(),
+  newValues: z.record(z.string(), z.unknown()).optional(),
   actorRole: z.enum(['super_admin', 'operador', 'visualizador']),
 });
 

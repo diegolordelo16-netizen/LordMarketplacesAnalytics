@@ -26,6 +26,10 @@ jobs:
         with:
           node-version: 22.16.0
           cache: npm
+      - name: Generate candidate lockfile (temporary)
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit
+          base64 -w 180 package-lock.json | sed 's/^/LOCK_ETAPA02:/'
       - name: Install dependencies
         run: npm ci
       - name: Diagnóstico de vulnerabilidades npm (JSON)
