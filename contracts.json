@@ -615,5 +615,30 @@
     "sourceUrl": "recognized public search URL",
     "observedAt": "ISO datetime",
     "candidates": "1..20 visible cards"
+  },
+  "connector.configure": {
+    "connectorId": "supported official provider",
+    "provider": "GOOGLE_ANALYTICS4|GOOGLE_SEARCH_CONSOLE|MARKETPLACE_SERVICE",
+    "publicConfig": "property or seller identity plus accountId",
+    "secrets": "encrypted access/refresh credentials, never returned"
+  },
+  "connector.test": {
+    "connectorId": "string"
+  },
+  "connector.sync": {
+    "connectorId": "string",
+    "accountId": "active linked account",
+    "from": "optional YYYY-MM-DD",
+    "to": "optional YYYY-MM-DD",
+    "confirmedExternal": true
+  },
+  "connector.sync.history": {
+    "accountId": "string",
+    "connectorId": "optional",
+    "limit": "1..100"
+  },
+  "connector.sync.get": {
+    "accountId": "string",
+    "runId": "string"
   }
 }

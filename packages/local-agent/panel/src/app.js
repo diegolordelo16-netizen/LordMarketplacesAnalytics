@@ -895,9 +895,10 @@ async function viewTasks() {
 
 // ------------------------------------------------------------------ CONECTORES
 async function viewConnectors() {
-  const [registry, imports] = await Promise.all([
+  const [registry, imports, syncs] = await Promise.all([
     api('connector.registry', {}),
     state.accountId ? api('connector.import.list', { accountId: state.accountId, limit: 30 }) : Promise.resolve([]),
+    state.accountId ? api('connector.sync.history',{accountId:state.accountId,limit:30}) : Promise.resolve([]),
   ]);
   return card('Conectores opcionais', table(['Conector', 'Dados', 'Estado', 'Custo', 'Limites', 'Ação'],
     (registry || []).map((c) => `<tr><td>${esc(c.label || c.id)}</td><td>${esc(c.data_available || '—')}</td>
@@ -905,17 +906,25 @@ async function viewConnectors() {
         ${c.last_test_at ? `<div class="muted small">${dt(c.last_test_at)} · ${esc(c.last_test_message)}</div>` : ''}</td>
       <td>${esc(c.cost_note || '—')}</td><td>${esc(c.limits || '—')}</td><td><div class="actions">
         <button class="btn tiny" data-act="connector-toggle" data-id="${esc(c.id)}" data-enabled="${c.enabled ? '1':'0'}" ${c.enabled || !c.requires_credentials || c.status === 'CONECTADO' ? '' : 'disabled'}>${c.enabled ? 'Desativar' : 'Habilitar'}</button>
-        ${c.configured && ['google_analytics4','google_search_console'].includes(c.id) ? `<button class="btn tiny" data-act="connector-test" data-id="${esc(c.id)}">Testar</button>` : ''}
+        ${c.configured && ['google_analytics4','google_search_console','mercado_livre_official_api','shopee_official_api','amazon_sp_api'].includes(c.id) ? `<button class="btn tiny" data-act="connector-test" data-id="${esc(c.id)}">Testar</button>` : ''}
+        ${c.enabled&&c.bound_account_id===state.accountId?`<button class="btn tiny" data-act="connector-sync" data-id="${esc(c.id)}">Sincronizar</button>`:''}
+        <div class="small muted">${esc(c.bound_account_id||'Sem loja vinculada')} · ${num(c.requests_24h||0)}/30 chamadas · última leitura: ${c.last_sync_at?dt(c.last_sync_at):'—'}</div>
         <button class="btn tiny danger" data-act="connector-disconnect" data-id="${esc(c.id)}" data-label="${esc(c.label || c.id)}">Desconectar / limpar</button></div></td></tr>`),
     'Catálogo de conectores indisponível.'))
-  + card('Conexões Google', `<div class="form-grid">
-    <label>ID da propriedade GA4<input id="ga4-property" inputmode="numeric" maxlength="20"></label>
-    <label>Token OAuth de leitura do GA4<input id="ga4-token" type="password" autocomplete="off" maxlength="5000"></label>
-    <div class="wide actions"><button class="btn" data-act="connector-configure" data-id="google_analytics4">Salvar GA4</button></div>
-    <label>Propriedade Search Console<input id="gsc-property" placeholder="sc-domain:dominio.com" maxlength="500"></label>
-    <label>Token OAuth de leitura do Search Console<input id="gsc-token" type="password" autocomplete="off" maxlength="5000"></label>
-    <div class="wide actions"><button class="btn" data-act="connector-configure" data-id="google_search_console">Salvar Search Console</button></div>
-    </div><p class="muted small">Salve um token de acesso autorizado e teste a propriedade. Substitua o token quando expirar.</p>`)
+  + card('Configuração oficial — somente leitura', `<div class="form-grid">
+    <label>Provedor <select id="co-provider"><option value="google_analytics4">GA4</option><option value="google_search_console">Search Console</option><option value="mercado_livre_official_api">Mercado Livre</option><option value="shopee_official_api">Shopee</option><option value="amazon_sp_api">Amazon SP-API</option></select></label>
+    <label>Propriedade / ID do vendedor / Shop ID<input id="co-target" maxlength="500"></label>
+    <label>Partner ID (somente Shopee)<input id="co-partner" maxlength="15"></label>
+    <label>Access token (opcional se refresh completo)<input id="co-token" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Refresh token (opcional)<input id="co-refresh" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Client ID (Google, ML ou Amazon)<input id="co-client" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Client secret (Google, ML ou Amazon)<input id="co-secret" type="password" autocomplete="off" maxlength="5000"></label>
+    <label>Partner key (somente Shopee)<input id="co-key" type="password" autocomplete="off" maxlength="5000"></label>
+    <div class="wide actions"><button class="btn" data-act="connector-configure">Vincular à loja selecionada e salvar</button></div>
+    </div><p class="muted small">Credenciais autorizadas pelo titular, armazenadas cifradas. Um vínculo por provedor; salvar novamente substitui a configuração. Teste e habilite antes de sincronizar. Dados web externos não são somados aos KPIs. Limite local 30 chamadas em 24h; custos e cotas do provedor podem variar.</p>`)
+  + card('Sincronização externa', `<div class="form-grid"><label>Data inicial (Google, opcional)<input id="co-from" type="date"></label><label>Data final (Google, opcional)<input id="co-to" type="date"></label></div>
+    <p class="muted small">Sem datas, Google usa janela incremental; marketplaces consultam somente a primeira página. Ausência de linha não significa zero.</p>`+
+    table(['Provedor','Escopo','Status','Linhas','Última leitura','Ação'],(syncs||[]).map(r=>`<tr><td>${esc(r.connector_id)}</td><td>${esc(r.kind)} · ${esc(r.period_start||'—')} → ${esc(r.period_end||'—')}</td><td>${esc(r.status)}${r.partial?' · PARCIAL':''}</td><td>${num(r.row_count)}</td><td>${dt(r.finished_at)}</td><td><button class="btn tiny" data-act="connector-sync-get" data-id="${esc(r.id)}">Ver evidência</button></td></tr>`),'Nenhuma leitura nesta loja.')+'<div id="co-out" class="out"></div>')
   + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td></tr>`), 'Nenhuma importação para esta conta.'))
   + card('Importar relatório', `
     <div class="form-grid">
@@ -2348,19 +2357,31 @@ const ACTIONS = {
   },
   'media-delete': async (d) => { if (!confirm('Excluir esta imagem da biblioteca?')) return; await run(() => api('media.delete', { id: d.id, accountId: d.accountId || null }), 'Imagem excluída.'); renderView(); },
   'connector-toggle': async (d) => { await run(() => api('connector.setEnabled', { connectorId: d.id, enabled: d.enabled !== '1' }), 'Conector atualizado.'); renderView(); },
-  'connector-configure': async ({ id }) => {
-    const analytics = id === 'google_analytics4';
-    const property = $(analytics ? '#ga4-property' : '#gsc-property').value.trim();
-    const field = $(analytics ? '#ga4-token' : '#gsc-token');
-    const accessToken = field.value.trim();
-    if (!property || !accessToken) throw new Error('Informe a propriedade e o token de leitura.');
-    await api('connector.configure', {
-      connectorId: id, provider: analytics ? 'GOOGLE_ANALYTICS4' : 'GOOGLE_SEARCH_CONSOLE',
-      publicConfig: analytics ? { propertyId: property } : { siteUrl: property }, secrets: { accessToken },
-    });
-    field.value = '';
-    toast('Conexão configurada. Teste a propriedade.');
-    await renderView();
+  'connector-configure': async () => {
+    const id=$('#co-provider').value,target=$('#co-target').value.trim(),accountId=state.accountId;
+    if(!accountId||!target)throw Error('Selecione a loja e informe a propriedade ou ID autorizado.');
+    const provider=id==='google_analytics4'?'GOOGLE_ANALYTICS4':id==='google_search_console'?'GOOGLE_SEARCH_CONSOLE':'MARKETPLACE_SERVICE';
+    const publicConfig={accountId,...(id==='google_analytics4'?{propertyId:target}:id==='google_search_console'?{siteUrl:target}:id==='shopee_official_api'?{shopId:target,partnerId:$('#co-partner').value.trim()}:{sellerId:target})};
+    const fields={accessToken:'#co-token',refreshToken:'#co-refresh',clientId:'#co-client',clientSecret:'#co-secret',partnerKey:'#co-key'},secrets={};
+    for(const [key,selector] of Object.entries(fields)){const value=$(selector).value.trim();if(value)secrets[key]=value;}
+    if(!confirm('Vincular esta propriedade à loja selecionada e substituir a configuração anterior deste provedor?'))return;
+    await api('connector.configure',{connectorId:id,provider,publicConfig,secrets});
+    Object.values(fields).forEach(selector=>{const input=$(selector);if(input)input.value='';});
+    toast('Configuração salva. Teste a conexão.');await renderView();
+  },
+  'connector-sync':async ({id})=>{
+    const accountId=state.accountId,generation=viewRenderSequence;
+    if(!accountId||!confirm('Consultar a API externa autorizada? Sujeito a limites e condições do provedor.'))return;
+    const from=$('#co-from')?.value||undefined,to=$('#co-to')?.value||undefined;
+    const result=await api('connector.sync',{connectorId:id,accountId,from,to,confirmedExternal:true});
+    toast(result.ok?'Leitura registrada: '+result.rowCount+' linhas'+(result.partial?' (parcial)':''):result.message,result.ok?'ok':'bad');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'connector-sync-get':async ({id})=>{
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#co-out');
+    const result=await api('connector.sync.get',{accountId,runId:id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#co-out'))return;
+    const pre=document.createElement('pre');pre.className='json';pre.textContent=JSON.stringify(result,null,2);host.replaceChildren(pre);
   },
   'connector-test': async ({ id }) => {
     const result = await api('connector.test', { connectorId: id });

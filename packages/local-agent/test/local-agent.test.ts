@@ -2676,3 +2676,35 @@ describe('Etapa 07 — evidência externa, confiança e automação',()=>{
     expect((await service.processScheduledWork()).analyses).toBe(0);
   });
 });
+
+describe('Etapa 08 — conectores oficiais',()=>{
+  it('vincula GA4, renova token uma vez, preserva zero e isola o histórico',async()=>{
+    const accountId='connector-ga4-a',other='connector-ga4-b';seedImportAccount(accountId);seedImportAccount(other);
+    const mock=vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({name:'properties/12345/metadata'}))
+      .mockResolvedValueOnce(new Response(null,{status:401}))
+      .mockResolvedValueOnce(Response.json({access_token:'new-token',refresh_token:'new-refresh'}))
+      .mockResolvedValueOnce(Response.json({rowCount:1,metadata:{currencyCode:'BRL'},rows:[{dimensionValues:[{value:'20251101'}],metricValues:[{value:'0'},{value:'0'},{value:'0'},{value:'0'}]}]}));
+    vi.stubGlobal('fetch',mock);
+    const connectorId='google_analytics4';
+    try{
+      expect((await call('connector.configure',{connectorId,provider:'GOOGLE_ANALYTICS4',publicConfig:{accountId,propertyId:'12345'},secrets:{accessToken:'old-token',refreshToken:'old-refresh',clientId:'client-id',clientSecret:'client-secret'}})).ok).toBe(true);
+      expect((await call('connector.test',{connectorId})).result).toMatchObject({ok:true});
+      expect((await call('connector.setEnabled',{connectorId,enabled:true})).ok).toBe(true);
+      const input={connectorId,accountId,from:'2025-11-01',to:'2025-11-02',confirmedExternal:true};
+      expect((await call('connector.sync',{...input,accountId:other})).ok).toBe(false);
+      expect((await call('connector.sync',{...input,confirmedExternal:false})).ok).toBe(false);
+      const sync=await call('connector.sync',input);
+      expect(sync.result).toMatchObject({ok:true,rowCount:1,requests:3,partial:false});
+      const runId=(sync.result as {runId:string}).runId;
+      expect((await call('connector.sync.get',{accountId,runId})).result).toMatchObject({rows:[{date:'2025-11-01',values:{sessions:0,purchaseRevenue:0,currency:'BRL'}}]});
+      expect((await call('connector.sync.get',{accountId:other,runId})).ok).toBe(false);
+      expect((await call('connector.sync.history',{accountId:other})).result).toEqual([]);
+      expect(mock.mock.calls[2]?.[0]).toBe('https://oauth2.googleapis.com/token');
+      expect(mock.mock.calls[3]?.[1]).toMatchObject({headers:{authorization:'Bearer new-token'}});
+      expect(JSON.stringify((await call('connector.registry')).result)).not.toContain('new-token');
+      expect((await call('connector.disconnect',{connectorId})).ok).toBe(true);
+      expect((await call('connector.sync',input)).ok).toBe(false);
+    }finally{vi.unstubAllGlobals();}
+  });
+});

@@ -3878,7 +3878,7 @@ export class LocalService {
         const keys=['accessToken','refreshToken','clientId','clientSecret','partnerKey'] as const;
         let secrets:Secrets=Object.fromEntries(keys.flatMap(key=>{const v=this.deps.secrets.get(row.secret_namespace+key);return v?[[key,v]]:[];}));
         validateSecrets(id,secrets);
-        const scopeKey=createHash('sha256').update(row.public_config_json).digest('hex');
+        const scopeKey=createHash('sha256').update(JSON.stringify(cfg)).digest('hex');
         const runId=randomUUID(),started=nowIso();
         let requests=0;
         const request:RequestFn=async(url,init)=>{
@@ -4293,7 +4293,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       `SELECT c.*, COALESCE(s.enabled, CASE WHEN c.status = 'CONECTADO' THEN 1 ELSE 0 END) AS enabled, cfg.last_test_at,cfg.last_test_message,
               CASE WHEN cfg.connector_id IS NULL THEN 0 ELSE 1 END AS configured,
               (SELECT MAX(finished_at) FROM connector_sync_runs r WHERE r.connector_id=c.id AND r.status='OK') last_sync_at,
-              (SELECT COUNT(*) FROM connector_request_log q WHERE q.connector_id=c.id AND q.requested_at>=datetime('now','-1 day')) requests_24h,
+              (SELECT COUNT(*) FROM connector_request_log q WHERE q.connector_id=c.id AND q.requested_at>=strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')) requests_24h,
               json_extract(cfg.public_config_json,'$.accountId') bound_account_id
          FROM connector_registry c LEFT JOIN connector_states s ON s.connector_id = c.id
          LEFT JOIN connector_runtime_config cfg ON cfg.connector_id=c.id ORDER BY c.category, c.label`,
