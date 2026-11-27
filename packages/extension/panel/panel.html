@@ -33,6 +33,20 @@
     </section>
 
     <section class="card">
+      <h2>Inteligência de navegação</h2>
+      <p class="hint">Aprenda rotas de leitura enquanto você navega na mesma aba e loja. Não grava cliques, senhas, texto de clientes ou parâmetros de URL.</p>
+      <div class="actions">
+        <button id="learning-start">Iniciar aprendizado</button>
+        <button id="learning-stop" disabled>Parar aprendizado</button>
+        <button id="learning-observe">Ensinar página atual</button>
+        <button id="learning-list">Consultar memória</button>
+        <button id="learning-clear">Apagar memória desta loja</button>
+      </div>
+      <p class="hint" id="learning-status" role="status">Aprendizado desligado.</p>
+      <ul id="learning-routes"></ul>
+    </section>
+
+    <section class="card">
       <h2>Central de sincronização</h2>
       <label class="field-label" for="sync-scope">Escopo</label>
       <select id="sync-scope">
