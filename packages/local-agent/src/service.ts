@@ -3047,7 +3047,7 @@ export class LocalService {
         }
         observedId=snap.id;
       }
-      db.db.prepare('UPDATE listing_browser_executions SET status=?,updated_at=?,result_json=? WHERE id=?').run(status,nowIso(),JSON.stringify({observedExternalId:i.observedExternalId,observedSnapshotId:observedId}),e.id);
+      db.db.prepare('UPDATE listing_browser_executions SET status=?,updated_at=?,result_json=? WHERE id=?').run(status,nowIso(),JSON.stringify({observedExternalId:i.observedExternalId,observedSnapshotId:observedId}),String(e.id));
       this.audit(auth,'LISTING_BROWSER_READBACK','listing_browser_execution',String(e.id),status,'observação de UI; vínculo causal e cobertura integral não comprovados');
       return {status,observedSnapshotId:observedId,remoteVerified:false};
     }));
