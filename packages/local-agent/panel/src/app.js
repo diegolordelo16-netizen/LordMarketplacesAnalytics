@@ -1751,21 +1751,27 @@ const ACTIONS = {
     const generation=viewRenderSequence,host=$('#operation-measure-out');
     const result=await api('operation.measure',{accountId:state.accountId,proposalKind:d.kind,proposalId:d.id});
     if(generation!==viewRenderSequence||host!==$('#operation-measure-out')||!host)return;
+    const apiMetrics=()=>'<h4>Desempenho observado do anúncio inteiro</h4><p>'+esc(result.measurementStatus||'')+'</p>'+
+      (result.before&&result.after?'<p>'+esc(result.before.window.from)+' a '+esc(result.before.window.to)+' × '+esc(result.after.window.from)+' a '+esc(result.after.window.to)+'</p>':'')+
+      table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">A comparação não atribui causalidade à operação.</p>';
     if(result.editedVariation){
       const edited=result.editedVariation;
-      host.innerHTML='<p>Estoque confirmado pela API: '+esc(edited.externalId)+' · '+esc(edited.beforeStock)+' → '+esc(edited.stock)+' · preço mantido '+brl(edited.priceCents)+'</p><p class="muted">Estado observado; não prova efeito econômico causal.</p>';
+      host.innerHTML='<p>Estoque confirmado pela API: '+esc(edited.externalId)+' · '+esc(edited.beforeStock)+' → '+esc(edited.stock)+' · preço mantido '+brl(edited.priceCents)+'</p>'+apiMetrics();
+      initializeTables(host);host.scrollIntoView({block:'nearest'});
       return;
     }
     if(result.removedVariation){
       const removed=result.removedVariation;
-      host.innerHTML='<h4>Remoção da variação '+esc(removed.externalId)+' confirmada pela API</h4><p>'+dt(removed.confirmedAt)+'</p>';
+      host.innerHTML='<h4>Remoção da variação '+esc(removed.externalId)+' confirmada pela API</h4><p>'+dt(removed.confirmedAt)+'</p>'+apiMetrics();
+      initializeTables(host);
       host.scrollIntoView({block:'nearest'});
       return;
     }
     const created=result.createdVariation;
     if(created){
       host.innerHTML='<h4>Variação '+esc(created.externalId)+' confirmada pela API</h4><p>'+dt(created.confirmedAt)+
-        ' · Preço '+brl(created.priceCents)+' · Estoque '+num(created.stock)+'</p>';
+        ' · Preço '+brl(created.priceCents)+' · Estoque '+num(created.stock)+'</p>'+apiMetrics();
+      initializeTables(host);
       host.scrollIntoView({block:'nearest'});
       return;
     }

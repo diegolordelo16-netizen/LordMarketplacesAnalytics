@@ -53,3 +53,5 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - A migração 038 registra a remoção de variação legada pela API oficial. A execução exige uma proposta específica, preço correspondente, estoque zero, nenhuma venda e outra variação no anúncio. A confirmação depende de uma nova leitura da lista do anúncio e a remoção nunca é reenviada automaticamente.
 
 - Migration 039: edição de estoque por API em variação legada ativa, com preço mantido, baseline aprovado, lista completa de IDs, reserva única e dupla releitura. Adicionada proteção de conflito entre publicação de tarefas e tentativas assistidas pendentes. Homologação real dispensada; CI do novo SHA deve ser verificada.
+
+- Medição de operações confirmadas pela API: mantém o estado exato da variação e compara métricas do anúncio inteiro em janelas compatíveis, fora do intervalo de execução. Teste com janela ausente e janela válida. Não atribui causalidade.

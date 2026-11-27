@@ -558,6 +558,12 @@ describe('capacidades adicionais 3.10.3', () => {
       expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({
         status:'API_VARIATION_STOCK_CONFIRMED',editedVariation:{externalId:'42',beforeStock:0,stock:3,priceCents:1200},
       });
+      db.db.prepare("UPDATE listing_api_executions SET started_at=?,updated_at=? WHERE proposal_id=?").run('2025-01-08T12:00:00.000Z','2025-01-08T13:00:00.000Z',edit.id);
+      const insertMetric=db.db.prepare('INSERT INTO listing_snapshots(id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES(?,?,?,?,?,?,?,?)');
+      insertMetric.run('api-before',listingId,accountId,'2025-01-07T23:59:59.999Z','2025-01-07T23:59:59.999Z',JSON.stringify({orders:10}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-01|end_date=2025-01-07|status=all'}));
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({measurementStatus:'INSUFFICIENT_COMPATIBLE_WINDOWS',remoteVerified:true,metrics:null});
+      insertMetric.run('api-after',listingId,accountId,'2025-01-16T12:00:00.000Z','2025-01-16T12:00:00.000Z',JSON.stringify({orders:12}),'A_PRIMARY_UI',JSON.stringify({filtersAndPeriod:'start_date=2025-01-09|end_date=2025-01-15|status=all'}));
+      expect((await call('operation.measure',{accountId,proposalId:edit.id,proposalKind:'VARIATION'})).result).toMatchObject({status:'API_VARIATION_STOCK_CONFIRMED',measurementStatus:'OBSERVED_CHANGE',measurementScope:'LISTING',metrics:{orders:{before:10,after:12,deltaPct:20}},remoteVerified:true,causalityVerified:false});
       remoteStock=0;
       const removal=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Remover Azul',
         options:[{removeVariationId:'42'}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};

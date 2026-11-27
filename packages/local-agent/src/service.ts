@@ -3041,9 +3041,9 @@ export class LocalService {
       const stock=z.number().int().min(0).max(1000000).parse(row.proposed_stock);
       return { handle,listingId:row.listing_id,externalId:row.external_id,status:row.listing_status,option,priceCents,stock };
     };
-    type VariationApiExecution={seller_id:string;item_id:string;variation_id:string|null;status:string;updated_at:string;price_cents:number;stock:number;action:'CREATE_VARIATION'|'REMOVE_VARIATION'|'EDIT_VARIATION'};
+    type VariationApiExecution={seller_id:string;item_id:string;variation_id:string|null;status:string;started_at:string;updated_at:string;price_cents:number;stock:number;action:'CREATE_VARIATION'|'REMOVE_VARIATION'|'EDIT_VARIATION'};
     const readVariationExecution=(accountId:string,proposalId:string)=>db.row<VariationApiExecution>(
-      'SELECT seller_id,item_id,variation_id,status,updated_at,price_cents,stock,action FROM listing_api_executions WHERE account_id=? AND proposal_id=?',accountId,proposalId);
+      'SELECT seller_id,item_id,variation_id,status,started_at,updated_at,price_cents,stock,action FROM listing_api_executions WHERE account_id=? AND proposal_id=?',accountId,proposalId);
     const executeVariationApi=(action:VariationApiExecution['action']):Handler=>async(payload,auth)=>{
 
       if(auth?.role!=='super_admin')throw Error('super_admin necessário');
@@ -3334,32 +3334,32 @@ export class LocalService {
     this.register('operation.measure',(payload)=>{
       const i=z.object({accountId:z.string().min(1),proposalKind:z.enum(['CAMPAIGN','VARIATION','LISTING_CHANGE']),proposalId:z.string().min(1)}).strict().parse(payload);
       const account=operationAccount(i.accountId);
-      if(i.proposalKind==='VARIATION'){
-        const created=readVariationExecution(i.accountId,i.proposalId);
-        if(created?.status==='REMOTE_VERIFIED'&&created.variation_id&&created.action==='REMOVE_VARIATION'){
-          return {status:'API_VARIATION_REMOVAL_CONFIRMED',remoteVerified:true,causalityVerified:false,metrics:null,
-            removedVariation:{externalId:created.variation_id,confirmedAt:created.updated_at}};
-        }
-        if(created?.status==='REMOTE_VERIFIED'&&created.variation_id&&created.action==='EDIT_VARIATION'){
+      const apiRun=i.proposalKind==='VARIATION'?readVariationExecution(i.accountId,i.proposalId):undefined;
+      let apiState:Record<string,unknown>|undefined;
+      if(apiRun){
+        if(apiRun.status!=='REMOTE_VERIFIED'||!apiRun.variation_id)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
+        const externalId=apiRun.variation_id,confirmedAt=apiRun.updated_at;
+        if(apiRun.action==='REMOVE_VARIATION'){
+          apiState={status:'API_VARIATION_REMOVAL_CONFIRMED',removedVariation:{externalId,confirmedAt}};
+        }else if(apiRun.action==='EDIT_VARIATION'){
           const p=variationApiTarget(i.accountId,i.proposalId);
-          if(!('editVariationId' in p.option)||p.option.editVariationId!==created.variation_id)throw Error('proposta de estoque divergente');
-          return {status:'API_VARIATION_STOCK_CONFIRMED',remoteVerified:true,causalityVerified:false,metrics:null,
-            editedVariation:{externalId:created.variation_id,confirmedAt:created.updated_at,priceCents:created.price_cents,beforeStock:p.option.beforeStock,stock:created.stock}};
+          if(!('editVariationId' in p.option)||p.option.editVariationId!==externalId)throw Error('proposta de estoque divergente');
+          apiState={status:'API_VARIATION_STOCK_CONFIRMED',editedVariation:{externalId,confirmedAt,priceCents:apiRun.price_cents,beforeStock:p.option.beforeStock,stock:apiRun.stock}};
+        }else{
+          apiState={status:'API_VARIATION_CONFIRMED',createdVariation:{externalId,confirmedAt,priceCents:apiRun.price_cents,stock:apiRun.stock}};
         }
-        if(created?.status==='REMOTE_VERIFIED'&&created.variation_id){
-          return {status:'API_VARIATION_CONFIRMED',remoteVerified:true,causalityVerified:false,metrics:null,
-            createdVariation:{externalId:created.variation_id,confirmedAt:created.updated_at,priceCents:created.price_cents,stock:created.stock}};
-        }
-        if(created)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
       }
-      const receipt=db.row<{performed_at:string;observation_json:string|null}>('SELECT performed_at,observation_json FROM operation_manual_receipts WHERE account_id=? AND proposal_kind=? AND proposal_id=?',i.accountId,i.proposalKind,i.proposalId);
+      const receipt=apiRun?undefined:db.row<{performed_at:string;observation_json:string|null}>('SELECT performed_at,observation_json FROM operation_manual_receipts WHERE account_id=? AND proposal_kind=? AND proposal_id=?',i.accountId,i.proposalKind,i.proposalId);
       type ExecutionInterval={created_at:string;updated_at:string;result_json:string};
-      const assisted = receipt ? undefined : i.proposalKind==='CAMPAIGN'
+      const assisted = receipt||apiRun ? undefined : i.proposalKind==='CAMPAIGN'
         ? db.row<ExecutionInterval>("SELECT created_at,updated_at,result_json FROM campaign_budget_executions WHERE account_id=? AND proposal_id=? AND status='UI_READBACK_MATCHED'",i.accountId,i.proposalId)
         : db.row<ExecutionInterval>("SELECT created_at,updated_at,result_json FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND proposal_id=? AND status IN ('UI_READBACK_MATCHED','CANDIDATE_OBSERVED')",i.accountId,i.proposalKind,i.proposalId);
-      if(!receipt&&!assisted)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
-      const start=receipt?.performed_at??assisted!.created_at;
-      const end=receipt?.performed_at??assisted!.updated_at;
+      if(!receipt&&!assisted&&!apiRun)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
+      const start=apiRun?.started_at??receipt?.performed_at??assisted!.created_at;
+      const end=apiRun?.updated_at??receipt?.performed_at??assisted!.updated_at;
+      const finish=(result:Record<string,unknown>)=>apiState
+        ? {...result,measurementStatus:result.status,...apiState,remoteVerified:true,causalityVerified:false,measurementScope:'LISTING',executionEvidence:'REMOTE_VERIFIED'}
+        : result;
       type Observation={id:string;captured_at:string;source_class:string;metrics_json:string;evidence_json:string};
       let observations:Observation[]=[];
       let variationObservation: {externalId:string;before:{id:string;capturedAt:string;priceCents:number;stock:number};after:{id:string;capturedAt:string;priceCents:number;stock:number}}|undefined;
@@ -3414,7 +3414,7 @@ export class LocalService {
 
         observations=db.rows<Observation>(`SELECT id,captured_at,source_class,metrics_json,evidence_json FROM listing_snapshots WHERE account_id=? AND listing_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.listing_id);
       }
-      if(observations.length>500)return {status:'LIMIT_REACHED',metrics:null,variationObservation,remoteVerified:false};
+      if(observations.length>500)return finish({status:'LIMIT_REACHED',metrics:null,variationObservation,remoteVerified:false});
       const now=nowIso();
       const eligible=observations.flatMap(snapshot=>{
         if(snapshot.source_class!=='A_PRIMARY_UI'||snapshot.captured_at>now)return [];
@@ -3428,13 +3428,13 @@ export class LocalService {
       }
       const followup=eligible.find(row=>row.snapshot.captured_at>end&&row.window.from+'T00:00:00.000Z'>end&&baselines.has(row.key));
       const baseline=followup&&baselines.get(followup.key);
-      if(!baseline||!followup)return {status:variationObservation?'VARIATION_STATE_OBSERVED':'INSUFFICIENT_COMPATIBLE_WINDOWS',metrics:null,variationObservation,remoteVerified:false,causalityVerified:false};
+      if(!baseline||!followup)return finish({status:variationObservation?'VARIATION_STATE_OBSERVED':'INSUFFICIENT_COMPATIBLE_WINDOWS',metrics:null,variationObservation,remoteVerified:false,causalityVerified:false});
       const {snapshot:before,window:bw}=baseline,{snapshot:after,window:aw}=followup;
       const a=parseJsonObject(before.metrics_json),b=parseJsonObject(after.metrics_json),metrics:Record<string,{before:number;after:number;delta:number;deltaPct:number|null}>={};
       for(const k of ['gmv','orders','units','visits','adSpend','adAttributedRevenue','adClicks','paidImpressions','adAttributedOrders','stockAvailable']){
         const v=knownNumber(a,k),w=knownNumber(b,k);if(v!==null&&w!==null)metrics[k]={before:v,after:w,delta:w-v,deltaPct:v>0?(w-v)/v*100:null};
       }
-      return {status:Object.keys(metrics).length?'OBSERVED_CHANGE':'NO_COMMON_METRICS',metrics,variationObservation,executionEvidence:receipt?'HUMAN_REPORTED':'UI_READBACK_MATCHED',measurementScope:i.proposalKind==='CAMPAIGN'?'CAMPAIGN':'LISTING',before:{id:before.id,window:bw,capturedAt:before.captured_at},after:{id:after.id,window:aw,capturedAt:after.captured_at},remoteVerified:false,causalityVerified:false};
+      return finish({status:Object.keys(metrics).length?'OBSERVED_CHANGE':'NO_COMMON_METRICS',metrics,variationObservation,executionEvidence:receipt?'HUMAN_REPORTED':'UI_READBACK_MATCHED',measurementScope:i.proposalKind==='CAMPAIGN'?'CAMPAIGN':'LISTING',before:{id:before.id,window:bw,capturedAt:before.captured_at},after:{id:after.id,window:aw,capturedAt:after.captured_at},remoteVerified:false,causalityVerified:false});
     });
 
     const defaultOperationPolicy = { readCapture: true, prepareDrafts: true, editListings: false, publish: false, changeCampaigns: false, changeOffers: false, requireHumanApproval: true, requirePostSaveVerification: true };
