@@ -585,7 +585,8 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5,options={}
         const base={page:index+1,url:info.url,spaPage:info.spaPagination?.page,pageKind:'seller_listings',filterSignature:info.filterSignature,listingFingerprint,listingIds:ids,ok:false};
         pages[index]=base;
         if(!await persist())break;
-        const captureKey=options.logicalBatchId?await digest(JSON.stringify([options.logicalBatchId,info.accountId,info.url,info.spaPagination?.page??null,info.filterSignature])):undefined;
+        const canonicalUrl=new URL(info.url);canonicalUrl.searchParams.sort();canonicalUrl.hash='';
+        const captureKey=options.logicalBatchId?await digest(JSON.stringify([options.logicalBatchId,info.accountId,canonicalUrl.href,info.spaPagination?.page??null,info.filterSignature])):undefined;
         const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint,virtualized:true,excludedListingIds:seenIds,...(captureKey?{captureKey,bindPageIdentity:true}:{})});
         const observedIds=(captured.snapshot?.listings??preview.listings).map(row=>String(row.listingId));
         pages[index]={...base,ok:Boolean(captured.ok),listingIds:observedIds,listings:observedIds.length,error:captured.error,coverageWarnings:captured.snapshot?.coverageWarnings??info.coverageWarnings};
@@ -608,7 +609,7 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5,options={}
         if(!moved?.ok){stoppedReason='controle de paginação não confirmado';break;}
         expectedPage=info.spaPagination.page+1;
       }else{
-        complete=index+1===pages.length&&(Boolean(info.spaPagination&&!info.spaPagination.canAdvance)||!info.paginationUnsupported);
+        complete=index+1===pages.length&&!info.paginationUnsupported;
         stoppedReason=complete?'fim dos controles de paginação reconhecidos':'paginação não reconhecida; revisão manual necessária';
         break;
       }
@@ -1029,7 +1030,8 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
       notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, status, message: 'Não há aba autenticada correspondente.' });
       continue;
     }
-    const scan = await (advanced?captureListingPages:captureAuthorizedAreas)(matched.tab.id, requestedMaxPages, {
+    const scanFn=advanced?captureListingPages:captureAuthorizedAreas;
+    const scan = await scanFn(matched.tab.id, requestedMaxPages, {
       resumeState,
       logicalBatchId: batch.result.batch?.logical_batch_id || batchId,
       expectedAccountId: account.account_id,
