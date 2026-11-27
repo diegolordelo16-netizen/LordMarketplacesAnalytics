@@ -1247,15 +1247,25 @@ function operationReceiptAction(kind,id){
 async function viewProductOperations(){
   const accountId=state.accountId;
   if(!accountId)return card('Anúncios e variações','<p class="muted">Selecione uma loja.</p>');
-  const [proposals,variants,media,receipts,attempts,limitsResult]=await Promise.all([api('listing.change.list',{accountId}),api('offer.variation.list',{accountId}),api('media.list',{accountId}),api('operation.receipt.list',{accountId}),api('listing.browser.list',{accountId}),api('operation.limits.get',{accountId})]);
+  const [proposals,variants,media,receipts,attempts,limitsResult,apiAttempts]=await Promise.all([api('listing.change.list',{accountId}),api('offer.variation.list',{accountId}),api('media.list',{accountId}),api('operation.receipt.list',{accountId}),api('listing.browser.list',{accountId}),api('operation.limits.get',{accountId}),api('variation.api.list',{accountId})]);
   const limits=limitsResult.limits||{};
   const limitFields=[['maxCampaignDailyBudgetCents','Teto diário por campanha (centavos)'],['minVariationPriceCents','Preço mínimo da variação (centavos)'],['maxVariationPriceCents','Preço máximo da variação (centavos)'],['maxVariationStock','Estoque máximo da variação'],['maxVariationPriceChangePct','Variação máxima do preço (%)']];
-  const reviewed=(kind,row)=>row.status==='DRAFT'?'<button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="REJECTED">Rejeitar</button>':row.status==='APPROVED'&&!receipts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)&&!attempts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)?operationReceiptAction(kind,row.id):'—';
+  const apiReady=variants.filter(p=>p.status==='APPROVED'&&p.options?.length===1&&Array.isArray(p.options[0]?.attributeCombinations)&&
+    Array.isArray(p.options[0]?.pictureIds)&&!apiAttempts.some(a=>a.proposal_id===p.id)&&
+    !attempts.some(a=>a.proposal_kind==='VARIATION'&&a.proposal_id===p.id)&&!receipts.some(a=>a.proposal_kind==='VARIATION'&&a.proposal_id===p.id));
+  const reviewed=(kind,row)=>row.status==='DRAFT'?'<button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="APPROVED">Aprovar</button> <button class="btn tiny" data-act="product-review" data-kind="'+kind+'" data-id="'+esc(row.id)+'" data-decision="REJECTED">Rejeitar</button>':row.status==='APPROVED'&&!receipts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)&&!attempts.some(r=>r.proposal_kind===kind&&r.proposal_id===row.id)&&(kind!=='VARIATION'||!apiAttempts.some(r=>r.proposal_id===row.id))?operationReceiptAction(kind,row.id):'—';
   return card('Limites de execução assistida por loja','<p class="muted small">Confirme os limites antes de executar orçamento ou variações. O teto é por campanha, não orçamento total da conta. Nenhuma ação automática em segundo plano.</p><div class="form-grid">'+limitFields.map(([k,label])=>'<label>'+esc(label)+'<input id="assisted-'+k+'" type="number" min="0" step="'+(k.endsWith('Pct')?'0.1':'1')+'" value="'+esc(limits[k]??'')+'"></label>').join('')+'</div><button class="btn" data-act="assisted-limits-save">Confirmar limites</button>')
     +card('Preparar capa ou duplicação','<p class="muted small">Propostas locais. Duplicação assistida somente na extensão do Mercado Livre quando o controle explícito estiver visível e autorizado. Troca de capa permanece manual. Confira se a plataforma permite duplicar.</p><div class="form-grid"><label>ID interno do anúncio<input id="product-listing"></label><label>Operação<select id="product-kind"><option value="COVER">Troca de capa</option><option value="DUPLICATE">Duplicação</option></select></label><label>Imagem da loja<select id="product-media"><option value="">Nenhuma</option>'+media.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.filename)+'</option>').join('')+'</select></label><label>Motivo<input id="product-reason" maxlength="2000"></label></div><button class="btn" data-act="product-preview">Prévia da imagem</button> <button class="btn" data-act="product-prepare">Salvar rascunho</button><div id="product-preview-out" class="out" aria-live="polite"></div><p><button class="btn" data-act="nav" data-view="media">Biblioteca de imagens</button></p>')
     +card('Propostas de anúncios',table(['Anúncio','Tipo','Imagem','Estado','Revisão'],proposals.map(p=>'<tr><td>'+esc(p.title||p.external_id)+'<div class="muted small">Proposta: '+esc(p.id)+' · ID externo: '+esc(p.external_id)+'</div></td><td>'+esc(p.kind)+'</td><td>'+esc(p.filename||'—')+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('LISTING_CHANGE',p)+'</td></tr>'),'Nenhuma proposta.'))
     +card('Gerenciar variações e ofertas','<p class="muted small">Rascunhos locais. Executor assistido experimental: criação simples com uma opção {&quot;name&quot;:&quot;Azul&quot;}; edição com {&quot;externalId&quot;:&quot;ID&quot;,&quot;beforePriceCents&quot;:1000,&quot;beforeStock&quot;:5}. Para edição, use o nome observado da variação; preço e estoque finais são obrigatórios.</p><div class="form-grid"><label>ID do rascunho para edição (opcional)<input id="variation-id"></label><label>ID interno do anúncio<input id="variation-listing"></label><label>Nome da variação<input id="variation-name" maxlength="120"></label><label>Opções (JSON: lista de objetos)<textarea id="variation-options" rows="4">[]</textarea></label><label>Preço (centavos, opcional)<input type="number" min="0" step="1" id="variation-price"></label><label>Estoque (opcional)<input type="number" min="0" step="1" id="variation-stock"></label></div><button class="btn" data-act="variation-save">Salvar rascunho</button>')
     +card('Propostas de variações',table(['ID','Anúncio','Nome','Opções','Status','Ações'],variants.map(p=>'<tr><td>'+esc(p.id)+'</td><td>'+esc(p.listing_id)+'</td><td>'+esc(p.variation_name)+'</td><td>'+esc(JSON.stringify(p.options))+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('VARIATION',p)+(p.status==='DRAFT'?' <button class="btn tiny" data-act="variation-delete" data-id="'+esc(p.id)+'">Excluir</button>':'')+'</td></tr>'),'Nenhum rascunho.'))
+    +card('Criação pela API oficial do Mercado Livre','<p class="muted small">Para anúncios legados ativos. Prepare e aprove uma proposta com uma opção contendo attributeCombinations (lista de objetos id e value_id) e pictureIds (IDs de imagens do anúncio). Use um token OAuth da mesma loja.</p>'+
+      '<div class="form-grid"><label>Proposta aprovada<select id="variation-api-proposal"><option value="">Selecione</option>'+apiReady.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.variation_name)+' · '+esc(p.id)+'</option>').join('')+
+      '</select></label><label>Token OAuth<input id="variation-api-token" type="password" maxlength="4096" autocomplete="off"></label></div>'+
+      '<button class="btn" data-act="variation-api-create" '+(apiReady.length?'':'disabled')+'>Criar variação aprovada</button>'+
+      table(['Proposta','Anúncio','Variação','Estado','Conferência'],apiAttempts.map(p=>'<tr><td>'+esc(p.proposal_id)+'</td><td>'+esc(p.item_id)+'</td><td>'+esc(p.variation_id||'—')+'</td><td>'+esc(p.status)+'</td><td>'+
+        (p.status==='REMOTE_VERIFIED'?'<button class="btn tiny" data-act="operation-measure" data-kind="VARIATION" data-id="'+esc(p.proposal_id)+'">Ver estado confirmado</button>':
+          p.variation_id?'<button class="btn tiny" data-act="variation-api-verify" data-id="'+esc(p.proposal_id)+'">Conferir na API</button>':'—')+'</td></tr>'),'Nenhuma execução pela API.'))
     +card('Tentativas assistidas e conferência',table(['Proposta','Anúncio','Ação','Estado','Conferência'],attempts.map(r=>'<tr><td>'+esc(r.proposal_id)+'</td><td>'+esc(r.external_listing_id)+'</td><td>'+esc(r.action)+'</td><td>'+esc(r.status)+'</td><td>'+(['CLAIMED','NEEDS_VERIFICATION'].includes(r.status)?'<button class="btn tiny" data-act="listing-browser-verify" data-id="'+esc(r.proposal_id)+'">Conferir captura posterior</button>':['UI_READBACK_MATCHED','CANDIDATE_OBSERVED'].includes(r.status)?operationMeasureAction(r.proposal_kind,r.proposal_id):'—')+'</td></tr>'),'Nenhuma tentativa.')+'<p class="muted small">CANDIDATE_OBSERVED é uma nova entidade compatível observada, não prova de duplicação/criação. UI_READBACK_MATCHED indica campos observados correspondentes. Não repita cliques.</p>')
     +card('Execuções relatadas e medição',table(['Tipo','Proposta','Data','Referência','Conferência','Medição'],receipts.map(r=>{
       const canVerify=r.proposal_kind==='VARIATION'||proposals.some(p=>p.id===r.proposal_id&&p.kind==='DUPLICATE');
@@ -1702,6 +1712,24 @@ const ACTIONS = {
     const payload={accountId:state.accountId,variationName:$('#variation-name').value.trim(),options,proposedPriceCents:optionalInt('variation-price'),proposedStock:optionalInt('variation-stock')};
     await run(()=>api(id?'offer.variation.update':'offer.variation.prepare',id?{...payload,id}:{...payload,listingId:$('#variation-listing').value.trim()}),'Rascunho salvo.');await renderView();
   },
+  'variation-api-create': async()=>{
+    const accountId=state.accountId,proposalId=$('#variation-api-proposal').value,field=$('#variation-api-token');
+    const accessToken=field.value.trim();
+    if(!proposalId||!accessToken)throw Error('Selecione a proposta e informe o token da loja.');
+    if(!confirm('Confirma criar a variação aprovada no anúncio do Mercado Livre?'))return;
+    field.value='';
+    const result=await api('variation.api.create',{accountId,proposalId,accessToken,confirmed:true});
+    toast(result.remoteVerified?'Variação criada e conferida.':'Envio registrado. Confira o resultado antes de nova ação.');
+    await renderView();
+  },
+  'variation-api-verify': async d=>{
+    const accountId=state.accountId,field=$('#variation-api-token'),accessToken=field.value.trim();
+    if(!accessToken)throw Error('Informe o token OAuth da mesma loja.');
+    field.value='';
+    const result=await api('variation.api.verify',{accountId,proposalId:d.id,accessToken});
+    toast(result.remoteVerified?'Criação conferida pela API.':'Conferência ainda pendente.');
+    await renderView();
+  },
   'variation-delete': async d=>{if(!confirm('Excluir este rascunho local?'))return;await run(()=>api('offer.variation.delete',{accountId:state.accountId,id:d.id}),'Rascunho excluído.');await renderView();},
   'operation-receipt': async d=>{
     const accountId=state.accountId;
@@ -1722,6 +1750,13 @@ const ACTIONS = {
     const generation=viewRenderSequence,host=$('#operation-measure-out');
     const result=await api('operation.measure',{accountId:state.accountId,proposalKind:d.kind,proposalId:d.id});
     if(generation!==viewRenderSequence||host!==$('#operation-measure-out')||!host)return;
+    const created=result.createdVariation;
+    if(created){
+      host.innerHTML='<h4>Variação '+esc(created.externalId)+' confirmada pela API</h4><p>'+dt(created.confirmedAt)+
+        ' · Preço '+brl(created.priceCents)+' · Estoque '+num(created.stock)+'</p>';
+      host.scrollIntoView({block:'nearest'});
+      return;
+    }
     const v=result.variationObservation;
     const variation=v?'<h4>Variação '+esc(v.externalId)+'</h4><p>'+dt(v.before.capturedAt)+' → '+dt(v.after.capturedAt)+'</p>'+
       table(['Estado observado','Antes','Depois'],[
