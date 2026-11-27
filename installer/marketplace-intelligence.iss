@@ -62,6 +62,7 @@ Source: "{#SourceRoot}\dist\local-agent\main.js"; DestDir: "{app}\local-agent"; 
 Source: "{#SourceRoot}\dist\local-agent\package.json"; DestDir: "{app}\local-agent"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\local-agent\migrations\*.sql"; DestDir: "{app}\local-agent\migrations"; Flags: ignoreversion
 ; Host nativo
+Source: "{#SourceRoot}\installer\scripts\native-host.cmd"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\native-host.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\register.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\package.json"; DestDir: "{app}\native-host"; Flags: ignoreversion

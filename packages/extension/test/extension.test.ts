@@ -537,7 +537,11 @@ describe('extensão: a conta é registrada antes da captura', () => {
 describe('extensão: o worker executa de verdade', () => {
   it('preserva a fila restante se o serviço cai no meio do envio', async () => {
     const source = readFileSync(join(ext, 'service-worker.js'), 'utf8');
-    const queueCode = source.slice(source.indexOf('let queueWork ='), source.indexOf('/**\n * Garante que a conta'));
+    const queueStart = source.indexOf('let queueWork =');
+    const queueEnd = source.search(/\/\*\*\r?\n \* Garante que a conta/);
+    expect(queueStart).toBeGreaterThanOrEqual(0);
+    expect(queueEnd).toBeGreaterThan(queueStart);
+    const queueCode = source.slice(queueStart, queueEnd);
     const items = ['primeiro', 'interrompido', 'restante'].map((id) => ({ method: 'capture.ingest', payload: { id } }));
     let stored = structuredClone(items);
     const context = vm.createContext({
