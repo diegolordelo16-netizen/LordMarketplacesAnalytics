@@ -314,5 +314,24 @@
     }
     const value=parseNumberPtBr(whole);return value!==null&&value>=0?{value,text:whole}:null;
   }
-  window.MI_DOM = { visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  // Only a single, explicitly identified pagination region and button. No form submits.
+  function spaPaginationState(root){
+    const regions=Array.from(root.querySelectorAll('nav[aria-label],[role="navigation"][aria-label],[data-testid="pagination"]')).filter(el=>isVisible(el)&&(/^(pagination|paginação|paginacao)$/i.test(String(el.getAttribute('aria-label')||''))||el.getAttribute('data-testid')==='pagination'));
+    if(regions.length!==1)return null;
+    const region=regions[0],current=Array.from(region.querySelectorAll('[aria-current="page"]')).filter(isVisible);
+    if(current.length!==1)return null;
+    const raw=String(current[0].innerText??current[0].textContent??'').trim();
+    if(!/^\d{1,4}$/.test(raw)||Number(raw)<1)return null;
+    const next=Array.from(region.querySelectorAll('button[type="button"]')).filter(el=>isVisible(el)&&!el.closest('form')&&/^(next|next page|próxima|proxima|próxima página|proxima pagina|seguinte)$/i.test(String(el.getAttribute('aria-label')||el.innerText||'').trim()));
+    if(next.length!==1)return null;
+    return {page:Number(raw),canAdvance:!next[0].disabled&&!next[0].hasAttribute('disabled')&&next[0].getAttribute('aria-disabled')!=='true',button:next[0]};
+  }
+  function advanceSpaPage(root,expectedPage){
+    if(hasChallenge(root)||root.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]'))return false;
+    const state=spaPaginationState(root);
+    if(!state||!state.canAdvance||state.page!==expectedPage)return false;
+    state.button.click();
+    return true;
+  }
+  window.MI_DOM = { spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

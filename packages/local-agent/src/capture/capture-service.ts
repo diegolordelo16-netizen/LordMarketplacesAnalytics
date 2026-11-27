@@ -144,6 +144,8 @@ export class CaptureService {
             .run(skuId, new Date().toISOString(), listingId, data.accountId);
         }
 
+        this.db.db.prepare('UPDATE customer_voice_items SET listing_id=? WHERE account_id=? AND external_listing_id=? AND listing_id IS NULL').run(listingId,data.accountId,listing.listingId);
+
         // Snapshot é imutável: histórico nunca é sobrescrito (§8).
         const snapshotId = randomUUID();
         const metrics = {

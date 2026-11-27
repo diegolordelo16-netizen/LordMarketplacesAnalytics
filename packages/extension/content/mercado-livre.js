@@ -530,6 +530,7 @@
         observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
         const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
         observed.filterSignature=filters.signature;
+        observed.spaPage=observed.pageKind==='seller_listings'?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;
         observed.coverageWarnings=[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])];
         if(filters.signature) observed.evidence={...observed.evidence,filtersAndPeriod:filters.signature};
         sendResponse({ok:true,snapshot:observed});
@@ -537,11 +538,19 @@
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
       return true;
     }
+    if(message?.type==='MI_CAPTURE_ADVANCE_SPA'){
+      const kind=currentPageKind();
+      const identity=visibleAccountIdentity();
+      const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
+      const ok=kind==='seller_listings'&&identity.accountId===message.accountId&&location.href===message.url&&filters.signature===message.filterSignature&&!filters.warnings.length&&Boolean(window.MI_DOM.advanceSpaPage?.(document,message.page));
+      sendResponse({ok});return false;
+    }
     if (message?.type === 'MI_CAPTURE_PAGE_INFO') {
       const currentKind = currentPageKind();
       const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
       sendResponse({
         filterSignature:filters.signature,
+        spaPagination: (()=>{const state=currentKind==='seller_listings'?window.MI_DOM.spaPaginationState?.(document):null;return state?{page:state.page,canAdvance:state.canAdvance}:null;})(),
         coverageWarnings:[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])],
         ok: true,
         marketplace: 'mercado_livre',

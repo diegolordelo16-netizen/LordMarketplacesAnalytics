@@ -415,7 +415,8 @@ async function captureTab(tabId, expected = {}) {
     return { ok: false, error: response?.error ?? 'página sem captura disponível' };
   }
   const snapshot = response.snapshot;
-  if ((expected.accountId && snapshot.accountId !== expected.accountId) ||
+  const listingFingerprint=JSON.stringify((snapshot.listings??[]).map(row=>String(row.listingId)).sort());
+  if ((expected.spaPage!==undefined&&snapshot.spaPage!==expected.spaPage)||(expected.listingFingerprint!==undefined&&listingFingerprint!==expected.listingFingerprint)||(expected.accountId && snapshot.accountId !== expected.accountId) ||
       (expected.url && snapshot.url !== expected.url) || (expected.filterSignature!==undefined && snapshot.filterSignature!==expected.filterSignature)) {
     return { ok: false, error: 'a conta, página ou filtros mudaram antes da captura' };
   }
@@ -514,84 +515,68 @@ async function readCapturePageInfo(tabId) {
  * Limite rígido de cinco páginas; CAPTCHA/login interrompem a operação.
  */
 async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
-  const source = await chrome.tabs.get(sourceTabId);
-  const marketplace = marketplaceOf(source.url || '');
-  if (!marketplace) return { ok: false, error: 'aba não pertence a um marketplace suportado' };
-  const initialInfo = await chrome.tabs.sendMessage(sourceTabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
-  if (!initialInfo?.ok) return { ok: false, error: 'content script indisponível nesta página' };
-  if (initialInfo.pageKind !== 'seller_listings') return { ok: false, error: 'a coleta paginada só é habilitada na lista de anúncios do vendedor' };
-  if (initialInfo.loginRequired || initialInfo.challenge) return { ok: false, error: 'login ou verificação de segurança detectado; faça a verificação manual antes de continuar' };
-
-  const maxPages = Math.max(1, Math.min(5, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 5));
-  const temporary = await chrome.tabs.create({ url: source.url, active: false, windowId: source.windowId });
-  const seen = new Set();
-  const pageResults = [];
-  let currentUrl = source.url;
-  let stoppedReason = 'limite de páginas atingido';
-  try {
-    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-      const tab = await chrome.tabs.get(temporary.id);
-      currentUrl = tab.url || currentUrl;
-      if (marketplaceOf(currentUrl) !== marketplace || new URL(currentUrl).origin !== new URL(source.url).origin) {
-        stoppedReason = 'a navegação saiu do domínio/origem inicial';
+  const source=await chrome.tabs.get(sourceTabId);
+  const marketplace=marketplaceOf(source.url||'');
+  if(!marketplace)return {ok:false,error:'aba não pertence a marketplace suportado'};
+  const origin=new URL(source.url).origin;
+  const initialInfo=await chrome.tabs.sendMessage(sourceTabId,{type:'MI_CAPTURE_PAGE_INFO'}).catch(()=>null);
+  if(!initialInfo?.ok||initialInfo.pageKind!=='seller_listings'||!initialInfo.accountId||initialInfo.loginRequired||initialInfo.challenge)return {ok:false,error:'abra uma lista de anúncios autenticada com conta identificada'};
+  const valid=info=>info?.ok&&info.marketplace===marketplace&&info.pageKind==='seller_listings'&&info.accountId===initialInfo.accountId&&info.filterSignature===initialInfo.filterSignature&&!info.loginRequired&&!info.challenge&&!info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO');
+  const maxPages=Math.max(1,Math.min(5,Number.isInteger(requestedMaxPages)?requestedMaxPages:5));
+  const temporary=await chrome.tabs.create({url:source.url,active:false,windowId:source.windowId});
+  const pages=[],seenIds=new Set(),seenPages=new Set();
+  let stoppedReason='limite de páginas atingido',complete=false;
+  const filterQuery=url=>JSON.stringify([...new URL(url).searchParams.entries()].filter(([key])=>!/^(page|page_number|p|offset|limit)$/i.test(key)).sort());
+  try{
+    let expectedPage=initialInfo.spaPagination?.page,previousFingerprint=null;
+    for(let index=0;index<maxPages;index++){
+      let info,preview,fingerprint;
+      // Wait until page marker and rendered listing identities agree twice.
+      for(let attempt=0;attempt<12;attempt++){
+        info=await readCapturePageInfo(temporary.id);
+        if(!valid(info)){stoppedReason='conta, filtros, login ou área divergentes';break;}
+        const url=normalizeAuthorizedAreaUrl(info.url,origin,marketplace);
+        if(!url||filterQuery(url.href)!==filterQuery(source.url)){stoppedReason='URL ou filtros divergentes';break;}
+        if(expectedPage!==undefined&&info.spaPagination?.page!==expectedPage){await new Promise(resolve=>setTimeout(resolve,400));continue;}
+        const response=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REQUEST'}).catch(()=>null);
+        preview=response?.ok?response.snapshot:null;
+        const ids=(preview?.listings??[]).map(row=>String(row.listingId));
+        const candidate=JSON.stringify(ids.sort());
+        if(preview?.accountId!==info.accountId||preview?.url!==info.url||preview?.filterSignature!==info.filterSignature||!ids.length||candidate===previousFingerprint||new Set(ids).size!==ids.length){await new Promise(resolve=>setTimeout(resolve,400));continue;}
+        if(fingerprint===candidate)break;
+        fingerprint=candidate;preview=null;
+        await new Promise(resolve=>setTimeout(resolve,400));
+      }
+      if(!preview||!valid(info)||JSON.stringify(preview.listings.map(row=>String(row.listingId)).sort())!==fingerprint){stoppedReason='não foi possível confirmar uma página estável da mesma loja e filtro';break;}
+      const ids=preview.listings.map(row=>String(row.listingId));
+      const key=JSON.stringify([info.url,info.spaPagination?.page??null,fingerprint]);
+      if(seenPages.has(key)||ids.some(id=>seenIds.has(id))){stoppedReason='ciclo ou anúncios repetidos: coleta interrompida';break;}
+      const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint});
+      pages.push({page:index+1,url:info.url,spaPage:info.spaPagination?.page,ok:Boolean(captured.ok),listings:captured.snapshot?.listings?.length??0,error:captured.error});
+      if(!captured.ok){stoppedReason='captura não confirmada: '+(captured.error??'erro');break;}
+      seenPages.add(key);ids.forEach(id=>seenIds.add(id));previousFingerprint=fingerprint;
+      if(info.coverageWarnings?.length||captured.snapshot?.coverageWarnings?.length){stoppedReason='cobertura parcial da interface';break;}
+      if(info.nextPageUrl){
+        const next=normalizeAuthorizedAreaUrl(info.nextPageUrl,origin,marketplace);
+        if(!next||next.pathname!==new URL(info.url).pathname||filterQuery(next.href)!==filterQuery(info.url)||next.href===info.url){stoppedReason='link de próxima página ou filtro divergente';break;}
+        if(index+1>=maxPages)break;
+        expectedPage=undefined;
+        const loaded=waitForTabComplete(temporary.id,next.href);
+        await Promise.all([loaded,chrome.tabs.update(temporary.id,{url:next.href})]);
+      }else if(info.spaPagination?.canAdvance){
+        if(index+1>=maxPages)break;
+        const moved=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_ADVANCE_SPA',accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,page:info.spaPagination.page}).catch(()=>null);
+        if(!moved?.ok){stoppedReason='controle de paginação não confirmado';break;}
+        expectedPage=info.spaPagination.page+1;
+      }else{
+        complete=Boolean(info.spaPagination&&!info.spaPagination.canAdvance)||!info.paginationUnsupported;
+        stoppedReason=complete?'fim dos controles de paginação reconhecidos':'paginação não reconhecida; revisão manual necessária';
         break;
       }
-      if (seen.has(currentUrl)) {
-        stoppedReason = 'ciclo de paginação detectado';
-        break;
-      }
-      seen.add(currentUrl);
-
-      const info = await readCapturePageInfo(temporary.id);
-      if (!info || info.marketplace !== marketplace || info.pageKind !== 'seller_listings') {
-        stoppedReason = 'a próxima página não é uma lista de anúncios reconhecida';
-        break;
-      }
-      if (info.loginRequired || info.challenge) {
-        stoppedReason = 'login/CAPTCHA ou verificação de segurança detectado; coleta interrompida para ação manual';
-        break;
-      }
-
-      const captured = await captureTab(temporary.id);
-      pageResults.push({ page: pageIndex + 1, url: currentUrl, ok: Boolean(captured.ok), listings: captured.snapshot?.listings?.length ?? 0, error: captured.ok ? undefined : captured.error });
-
-      const nextUrl = typeof info.nextPageUrl === 'string' ? info.nextPageUrl : '';
-      if (!nextUrl) {
-        stoppedReason = 'não há link de próxima página visível';
-        break;
-      }
-      let next;
-      try { next = new URL(nextUrl); } catch { stoppedReason = 'link de próxima página inválido'; break; }
-      const initial = new URL(source.url);
-      if (next.protocol !== 'https:' || next.origin !== initial.origin || marketplaceOf(next.href) !== marketplace || next.pathname !== new URL(currentUrl).pathname) {
-        stoppedReason = 'link de próxima página recusado por segurança';
-        break;
-      }
-      if (seen.has(next.href)) {
-        stoppedReason = 'ciclo de paginação detectado';
-        break;
-      }
-      if (pageIndex + 1 >= maxPages) break;
-      await new Promise((resolve) => setTimeout(resolve, 1800));
-      const loaded = waitForTabComplete(temporary.id, next.href);
-      await chrome.tabs.update(temporary.id, { url: next.href });
-      await loaded;
     }
-  } finally {
-    await chrome.tabs.remove(temporary.id).catch(() => undefined);
-  }
-
-  const totalListings = pageResults.reduce((sum, page) => sum + page.listings, 0);
-  const pagesSucceeded = pageResults.filter((page) => page.ok).length;
-  return {
-    ok: pagesSucceeded > 0,
-    marketplace,
-    pagesScanned: pageResults.length,
-    pagesSucceeded,
-    totalListings,
-    stoppedReason,
-    pages: pageResults,
-  };
+  }catch(error){stoppedReason=String(error?.message??error).slice(0,300);}
+  finally{await chrome.tabs.remove(temporary.id).catch(()=>undefined);}
+  return {ok:pages.some(page=>page.ok),complete,marketplace,pagesScanned:pages.length,pagesSucceeded:pages.filter(page=>page.ok).length,totalListings:seenIds.size,stoppedReason,pages};
 }
 
 /**

@@ -147,6 +147,8 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(rows.find(row=>row.kind==='REVIEW').linked_external_id).toBe('MLB123456');
     expect(rows.find(row=>row.kind==='QUESTION').listing_id).toBeNull();
     expect((await call('voc.items',{accountId:'acct-voc-other'})).result).toEqual([]);
+    expect((await call('capture.ingest',{...base,listings:[{listingId:'MLB999999',price:10}]})).ok).toBe(true);
+    expect(((await call('voc.items',{accountId:base.accountId})).result as any[]).find(row=>row.kind==='QUESTION').linked_external_id).toBe('MLB999999');
     expect((await call('voc.ingestBatch',{accountId:base.accountId,items:[{...payload.items[0],externalListingId:'MLB999999'}]})).ok).toBe(false);
   });
 

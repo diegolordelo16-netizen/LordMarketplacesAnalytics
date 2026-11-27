@@ -765,3 +765,31 @@ describe('identidade do anúncio no feedback',()=>{
     expect(window.MI_DOM.visibleCustomerVoice({querySelectorAll:()=>rows},'seller_reputation','mercado_livre')).toEqual([{kind:'REVIEW',text:'Ótimo produto',externalRef:'A',externalListingId:'MLB123456'},{kind:'REVIEW',text:'Boa compra',externalRef:'B'}]);
   });
 });
+
+
+describe('paginação SPA com controle explícito',()=>{
+  it('clica somente no botão de paginação único, fora de formulários, com número esperado',()=>{
+    class E{
+      clicked=0;disabled=false;
+      constructor(public innerText:string,public attrs:Record<string,string>={},public nodes:E[]=[],public inForm=false){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      hasAttribute(n:string){return n in this.attrs}
+      closest(){return this.inForm?this:null}
+      querySelectorAll(sel:string){return this.nodes.filter(x=>sel.includes('aria-current')?x.attrs['aria-current']==='page':x.attrs.type==='button')}
+      click(){this.clicked++}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const marker=new E('2',{'aria-current':'page'}),next=new E('Próxima',{type:'button'});
+    const nav=new E('',{'aria-label':'Paginação'},[marker,next]);
+    const root={querySelectorAll:()=>[nav],querySelector:()=>null,body:{innerText:''}};
+    expect(window.MI_DOM.advanceSpaPage(root,1)).toBe(false);
+    expect(window.MI_DOM.advanceSpaPage(root,2)).toBe(true);
+    expect(next.clicked).toBe(1);
+    next.disabled=true;expect(window.MI_DOM.advanceSpaPage(root,2)).toBe(false);
+    next.disabled=false;next.inForm=true;expect(window.MI_DOM.advanceSpaPage(root,2)).toBe(false);
+    expect(next.clicked).toBe(1);
+  });
+});

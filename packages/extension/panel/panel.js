@@ -152,7 +152,7 @@ async function capturePages() {
     return;
   }
   const r = res.result;
-  hint.textContent = `${r.pagesSucceeded}/${r.pagesScanned} páginas capturadas · ${r.totalListings} anúncios encontrados. Parada: ${r.stoppedReason}`;
+  hint.textContent = `${r.complete?'Fim reconhecido':'Coleta parcial'} · ${r.pagesSucceeded}/${r.pagesScanned} páginas capturadas · ${r.totalListings} anúncios encontrados. Parada: ${r.stoppedReason}`;
 }
 
 async function captureAreas() {

@@ -175,3 +175,17 @@ test('concorrência consulta o produto da loja atual, nunca o produto selecionad
   assert.deepEqual(calls, [['competitor.ownProduct.list', { accountId: 'loja-b' }], ['competitor.stats', { accountId: 'loja-b', ownProductId: 'produto-b' }]]);
   assert.equal(state.ownProductId, 'produto-b');
 });
+
+
+test('coleta de anúncios SPA confirma conta, filtros, número de página e mudança de IDs',async()=>{
+  const source='https://seller.shopee.com.br/portal/product/list';
+  let page=1,closed=false;
+  const info=()=>({ok:true,marketplace:'shopee',pageKind:'seller_listings',accountId:'store-a',url:source,filterSignature:'period=last 7 days',spaPagination:{page,canAdvance:page<2}});
+  const snapshots=()=>({accountId:'store-a',url:source,filterSignature:'period=last 7 days',spaPage:page,listings:[{listingId:'L'+page}]});
+  const captures=[];
+  const ctx=vm.createContext({URL,URLSearchParams,setTimeout:fn=>fn(),marketplaceOf:()=> 'shopee',readCapturePageInfo:async()=>info(),captureTab:async(id,expected)=>{captures.push(expected);return {ok:true,snapshot:snapshots()}},chrome:{tabs:{get:async()=>({url:source,windowId:1}),create:async()=>({id:2}),remove:async()=>{closed=true},sendMessage:async(_,msg)=>{if(msg.type==='MI_CAPTURE_ADVANCE_SPA'){page++;return {ok:true}}if(msg.type==='MI_CAPTURE_REQUEST')return {ok:true,snapshot:snapshots()};return info()}}}});
+  vm.runInContext(worker.slice(worker.indexOf('async function captureListingPages'),worker.indexOf('async function captureAuthorizedAreas')),ctx);
+  const result=await vm.runInContext('captureListingPages(1,5)',ctx);
+  assert.equal(result.pagesSucceeded,2);assert.equal(result.complete,true);assert.equal(result.totalListings,2);
+  assert.equal(captures[1].spaPage,2);assert.equal(closed,true);
+});
