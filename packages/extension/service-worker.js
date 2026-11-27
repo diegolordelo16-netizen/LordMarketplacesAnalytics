@@ -785,6 +785,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   };
 
   const rootSpa=Boolean(initialInfo.spaPagination&&!initialInfo.nextPageUrl);
+  if(prior?.spaPage!==undefined&&!rootSpa)return {ok:false,error:'marcador SPA anterior não está disponível para retomada segura'};
   if(rootSpa&&!seen.has(keyOf(currentUrl))&&!queue.some(item=>item.key===keyOf(currentUrl)))queue.unshift({key:keyOf(currentUrl),url:currentUrl.href,label:'paginação SPA inicial',filterSignature:initialInfo.filterSignature});
   if(rootSpa&&seen.has(keyOf(currentUrl))&&prior?.spaPage===undefined)unsupportedLinks=true;
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
@@ -845,14 +846,16 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         break;
       }
       if(item.filterSignature!==undefined&&item.filterSignature!==info.filterSignature){stoppedReason='filtros da próxima página diferem da página anterior; confirme manualmente';break;}
+      if(pages.some(p=>p.spaPage!==undefined&&keyOf(new URL(p.url))===item.key)&&(!info.spaPagination||info.nextPageUrl)){unsupportedLinks=true;stoppedReason='marcador SPA anterior não está disponível';break;}
       if(info.spaPagination&&!info.nextPageUrl){
         const history=pages.filter(p=>keyOf(new URL(p.url))===item.key);
         if(history.some(p=>p.spaPage===undefined)){unsupportedLinks=true;stoppedReason='histórico anterior sem identidade SPA; inicie novo lote';break;}
-        let state=info,expectedPage=history[0]?.spaPage??state.spaPagination.page;
+        let state=info,expectedPage=history[0]?.spaPage??1;
+        if(expectedPage!==1||(item.key===keyOf(currentUrl)&&rootSpa&&initialInfo.spaPagination.page!==1)){unsupportedLinks=true;stoppedReason='abra a primeira página SPA para iniciar ou retomar';break;}
         const observedIds=new Set();
         let finished=false,failed=false;
         const digest=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(v=>v.toString(16).padStart(2,'0')).join('');
-        const contextOk=s=>s?.ok&&s.accountId===expectedAccountId&&s.pageKind===info.pageKind&&s.url===info.url&&s.filterSignature===info.filterSignature&&!s.loginRequired&&!s.challenge&&!s.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')&&s.spaPagination?.page===expectedPage;
+        const contextOk=s=>s?.ok&&s.marketplace===marketplace&&s.accountId===expectedAccountId&&s.pageKind===info.pageKind&&s.url===info.url&&s.filterSignature===info.filterSignature&&!s.loginRequired&&!s.challenge&&!s.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')&&s.spaPagination?.page===expectedPage;
         for(let step=0;step<500;step++){
           let fingerprint=null,ids=null,stable=false;
           for(let attempt=0;attempt<12;attempt++){
@@ -861,12 +864,13 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
             const response=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REQUEST'}).catch(()=>null);
             const snap=response?.ok?response.snapshot:null;
             ids=spaRecordIds(snap);
-            if(!ids||snap.accountId!==expectedAccountId||snap.pageKind!==info.pageKind||snap.url!==info.url||snap.filterSignature!==info.filterSignature||snap.spaPage!==expectedPage){fingerprint=null;await new Promise(resolve=>setTimeout(resolve,400));continue;}
+            if(!ids||snap.marketplace!==marketplace||snap.accountId!==expectedAccountId||snap.pageKind!==info.pageKind||snap.url!==info.url||snap.filterSignature!==info.filterSignature||snap.spaPage!==expectedPage){fingerprint=null;await new Promise(resolve=>setTimeout(resolve,400));continue;}
             const candidate=JSON.stringify(ids);
             if(candidate===fingerprint){stable=true;break;}
             fingerprint=candidate;await new Promise(resolve=>setTimeout(resolve,400));
           }
           if(!stable||!ids||ids.some(id=>observedIds.has(id))){stoppedReason='registros SPA ausentes, instáveis ou repetidos';unsupportedLinks=true;failed=true;break;}
+          enqueueLinks(state.authorizedAreaLinks);
           const hash=await digest(fingerprint);
           const existing=pages.findIndex(p=>keyOf(new URL(p.url))===item.key&&p.spaPage===expectedPage);
           const previous=existing>=0?pages[existing]:null;
