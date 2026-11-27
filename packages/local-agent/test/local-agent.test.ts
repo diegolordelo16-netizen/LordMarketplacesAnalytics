@@ -1597,6 +1597,25 @@ describe('analytics, keyword intelligence and bundle simulation', () => {
     expect(result.missingValues).toBe('null_not_zero');
   });
 
+  it('aggregates daily history by account before combining stores, without cross-account overrides', async () => {
+    const a='history-multi-a',b='history-multi-b';
+    const day=new Date(Date.now()-20*86400000).toISOString().slice(0,10);
+    const at=day+'T12:00:00.000Z';
+    const account=db.db.prepare('INSERT INTO accounts (id,marketplace,external_ref,display_name,handle,detection_confidence,verified_by_user,is_active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    account.run(a,'amazon',a,a,a,1,1,1,at,at);
+    account.run(b,'amazon',b,b,b,1,1,1,at,at);
+    for(const id of [a,b]){
+      db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id+'-listing',id,'amazon',id+'-external',id,'ACTIVE',at,at);
+      db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class) VALUES (?,?,?,?,?,?,?)').run(id+'-snapshot',id+'-listing',id,at,at,JSON.stringify(id===a?{gmv:10,orders:1}:{gmv:20,orders:2}),'A_PRIMARY_UI');
+    }
+    const observed=await call('capture.ingest',{marketplace:'amazon',accountId:a,pageKind:'seller_dashboard',url:'https://sellercentral.amazon.com.br/home',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',accountMetrics:{gmv:100,visits:90}});
+    expect(observed.ok).toBe(true);
+    const result=await call('kpi.history',{marketplace:'amazon',days:30});
+    expect(result.ok).toBe(true);
+    const point=(result.result as {points:Array<Record<string,unknown>>}).points.find(p=>p.date===day);
+    expect(point).toMatchObject({gmv:120,orders:3,visits:null,accountsCaptured:2,gmvCoverage:2,visitsCoverage:1});
+  });
+
   it('suggests local title phrases without claiming search volume', async () => {
     const now = new Date().toISOString();
     seedImportAccount('acct-keywords');
