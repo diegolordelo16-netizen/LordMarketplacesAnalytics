@@ -98,6 +98,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'capture.chartPoints':'view_reports',
   'navigation.observe': 'execute_task',
   'navigation.list': 'execute_task',
+  'navigation.graph': 'execute_task',
   'navigation.clear': 'execute_task',
   'kpi.listing': 'view_reports',
   'kpi.dashboard': 'view_reports',
@@ -749,7 +750,7 @@ export class LocalService {
       return account;
     };
     this.register('navigation.observe',(payload,auth)=>{
-      const i=navigationContext.extend({route:z.string().max(160).regex(/^\/(?:[a-z][a-z_-]{0,39}\/)*[a-z][a-z_-]{0,39}\/?$/i),pageKind:z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'])}).strict().parse(payload);
+      const i=navigationContext.extend({route:z.string().max(160).regex(/^\/(?:[a-z][a-z_-]{0,39}\/)*[a-z][a-z_-]{0,39}\/?$/i),pageKind:z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']) ,fromRoute:z.string().max(160).optional()}).strict().parse(payload);
       navigationAccount(i);
       const segments=i.route.toLowerCase().split('/').filter(Boolean);
       const allowed=new Set('portal product list manage datacenter business-insights order orders sales dashboard home resumo summary metricas stats performance vendas anuncios publicaciones moderador mis-publicaciones itens items publicidade product_ads ads promocoes promociones perguntas preguntas questions question reputacao reputation avaliacoes reviews opinions rating ratings reclamacoes reclamaciones claims complaints disputas mediacoes devolucoes devoluciones returns return refund estoque inventario inventory stock produtos productos ventas pedidos marketing advertising campaignmanager myinventory manageinventory feedback complaint dispute'.split(' '));
@@ -760,6 +761,12 @@ export class LocalService {
         if(prior&&prior.page_kind!==i.pageKind)throw new Error('classificação da rota mudou; limpe a memória antes de ensinar novamente');
         if(!prior&&(db.row<{n:number}>('SELECT COUNT(*) n FROM navigation_memory WHERE account_id=?',i.accountId)?.n??0)>=100)throw new Error('limite de 100 rotas por conta atingido');
         db.db.prepare('INSERT INTO navigation_memory(account_id,origin,route,page_kind,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?) ON CONFLICT(account_id,origin,route) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.route,i.pageKind,now,now);
+        if(i.fromRoute&&i.fromRoute!==i.route){
+          if(!db.row('SELECT 1 FROM navigation_memory WHERE account_id=? AND origin=? AND route=?',i.accountId,i.origin,i.fromRoute))throw new Error('origem da transição não demonstrada');
+          const prior=db.row('SELECT 1 FROM navigation_transitions WHERE account_id=? AND origin=? AND from_route=? AND to_route=?',i.accountId,i.origin,i.fromRoute,i.route);
+          if(!prior&&(db.row<{n:number}>('SELECT COUNT(*) n FROM navigation_transitions WHERE account_id=?',i.accountId)?.n??0)>=500)throw new Error('limite de transições atingido');
+          db.db.prepare('INSERT INTO navigation_transitions(account_id,origin,from_route,to_route,last_seen_at) VALUES(?,?,?,?,?) ON CONFLICT(account_id,origin,from_route,to_route) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.fromRoute,i.route,now);
+        }
       });
       this.audit(auth,'NAVIGATION_OBSERVE','account',i.accountId,'OK','rota estrutural demonstrada');
       return {ok:true};
@@ -767,6 +774,10 @@ export class LocalService {
     this.register('navigation.list',(payload)=>{
       const i=navigationContext.strict().parse(payload);navigationAccount(i);
       return db.rows('SELECT route,page_kind,observations,first_seen_at,last_seen_at FROM navigation_memory WHERE account_id=? AND origin=? ORDER BY last_seen_at DESC,route LIMIT 100',i.accountId,i.origin);
+    });
+    this.register('navigation.graph',(payload)=>{
+      const i=navigationContext.strict().parse(payload);navigationAccount(i);
+      return db.rows('SELECT from_route,to_route,observations,last_seen_at FROM navigation_transitions WHERE account_id=? AND origin=? ORDER BY observations DESC,last_seen_at DESC LIMIT 500',i.accountId,i.origin);
     });
     this.register('navigation.clear',(payload,auth)=>{
       const i=navigationContext.strict().parse(payload);navigationAccount(i);
