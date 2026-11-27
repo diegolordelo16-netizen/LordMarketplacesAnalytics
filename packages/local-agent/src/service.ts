@@ -210,6 +210,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'listing.change.review': 'manage_accounts',
   'operation.receipt.record': 'manage_accounts',
   'operation.receipt.list': 'view_reports',
+  'operation.measure': 'view_reports',
   'offer.variation.update': 'manage_market_intelligence',
   'offer.variation.delete': 'manage_market_intelligence',
   'finance.profitability': 'view_reports',
@@ -2864,6 +2865,38 @@ export class LocalService {
     this.register('operation.receipt.list',(payload)=>{
       const i=z.object({accountId:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
       return db.rows('SELECT * FROM operation_manual_receipts WHERE account_id=? ORDER BY performed_at DESC,id LIMIT 200',i.accountId).map(row=>({...row,status:'HUMAN_REPORTED',remoteVerified:false}));
+    });
+
+    this.register('operation.measure',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),proposalKind:z.enum(['CAMPAIGN','VARIATION','LISTING_CHANGE']),proposalId:z.string().min(1)}).strict().parse(payload);
+      operationAccount(i.accountId);
+      const receipt=db.row<{performed_at:string}>('SELECT performed_at FROM operation_manual_receipts WHERE account_id=? AND proposal_kind=? AND proposal_id=?',i.accountId,i.proposalKind,i.proposalId);
+      if(!receipt)throw Error('registre primeiro o relato de execução manual');
+      type Observation={id:string;captured_at:string;source_class:string;metrics_json:string;evidence_json:string};
+      let observations:Observation[]=[];
+      if(i.proposalKind==='CAMPAIGN'){
+        const p=db.row<{campaign_ref:string}>('SELECT campaign_ref FROM campaign_change_proposals WHERE id=? AND account_id=? AND status=?',i.proposalId,i.accountId,'APPROVED');
+        if(!p)throw Error('proposta de campanha não disponível');
+        const rows=db.rows<Observation&{parent_external_id:string}>(`SELECT id,captured_at,source_class,metrics_json,context_json AS evidence_json,parent_external_id FROM capture_detail_snapshots WHERE account_id=? AND kind='AD_CAMPAIGN' AND external_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.campaign_ref);
+        if(new Set(rows.map(r=>r.parent_external_id)).size>1)return {status:'AMBIGUOUS_ENTITY',metrics:null,remoteVerified:false};
+        observations=rows;
+      }else{
+        const table=i.proposalKind==='VARIATION'?'offer_variation_proposals':'listing_change_proposals';
+        const p=db.row<{listing_id:string;kind?:string}>(`SELECT listing_id${i.proposalKind==='LISTING_CHANGE'?',kind':''} FROM ${table} WHERE id=? AND account_id=? AND status='APPROVED'`,i.proposalId,i.accountId);
+        if(!p)throw Error('proposta de anúncio não disponível');
+        if(p.kind==='DUPLICATE')return {status:'NEW_LISTING_ID_NOT_VERIFIED',metrics:null,remoteVerified:false};
+        observations=db.rows<Observation>(`SELECT id,captured_at,source_class,metrics_json,evidence_json FROM listing_snapshots WHERE account_id=? AND listing_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.listing_id);
+      }
+      if(observations.length>500)return {status:'LIMIT_REACHED',metrics:null,remoteVerified:false};
+      const before=observations.find(r=>r.captured_at<receipt.performed_at&&r.source_class==='A_PRIMARY_UI');
+      const after=observations.find(r=>r.captured_at>receipt.performed_at&&r.source_class==='A_PRIMARY_UI');
+      const bw=before?observedWindow(parseJsonObject(before.evidence_json)):null,aw=after?observedWindow(parseJsonObject(after.evidence_json)):null;
+      if(!before||!after||!bw||!aw||bw.days!==aw.days||bw.filters!==aw.filters||bw.to+'T23:59:59.999Z'>=receipt.performed_at||aw.from+'T00:00:00.000Z'<=receipt.performed_at||bw.to>=aw.from)return {status:'INSUFFICIENT_COMPATIBLE_WINDOWS',metrics:null,remoteVerified:false};
+      const a=parseJsonObject(before.metrics_json),b=parseJsonObject(after.metrics_json),metrics:Record<string,{before:number;after:number;delta:number;deltaPct:number|null}>={};
+      for(const k of ['gmv','orders','units','visits','adSpend','adAttributedRevenue','adClicks','paidImpressions','stockAvailable']){
+        const v=knownNumber(a,k),w=knownNumber(b,k);if(v!==null&&w!==null)metrics[k]={before:v,after:w,delta:w-v,deltaPct:v>0?(w-v)/v*100:null};
+      }
+      return {status:Object.keys(metrics).length?'OBSERVED_CHANGE':'NO_COMMON_METRICS',metrics,before:{id:before.id,window:bw,capturedAt:before.captured_at},after:{id:after.id,window:aw,capturedAt:after.captured_at},remoteVerified:false,causalityVerified:false};
     });
 
     const defaultOperationPolicy = { readCapture: true, prepareDrafts: true, editListings: false, publish: false, changeCampaigns: false, changeOffers: false, requireHumanApproval: true, requirePostSaveVerification: true };
