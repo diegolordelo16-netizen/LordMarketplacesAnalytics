@@ -430,6 +430,7 @@ async function captureTab(tabId, expected = {}) {
     collectedAt: now,
     method: 'content_script_dom',
     ...(expected.captureKey ? { captureKey: expected.captureKey } : {}),
+    ...(typeof snapshot.filterSignature==='string'?{filterSignature:snapshot.filterSignature}:{}),
     listings: snapshot.listings ?? [],
     details: Array.isArray(snapshot.details) ? snapshot.details.slice(0,100) : [],
     ...(snapshot.accountMetrics ? { accountMetrics: snapshot.accountMetrics } : {}),
@@ -450,7 +451,7 @@ async function captureTab(tabId, expected = {}) {
   if (payload.listings.length || payload.accountMetrics || payload.details.length) pending.push({ method: 'capture.ingest', payload, account, queuedAt: now });
   if (customerVoice.length) pending.push({
     method: 'voc.ingestBatch',
-    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url } : {}) },
+    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature } : {}) },
     account, queuedAt: now,
   });
   try {
@@ -463,7 +464,7 @@ async function captureTab(tabId, expected = {}) {
     }
     let voiceResult = null;
     if (customerVoice.length) {
-      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url } : {}) });
+      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature } : {}) });
       if (!captureAccepted(voiceResult)) return { ok: false, error: voiceResult.error?.message ?? 'falha ao registrar avaliações/reclamações', res: voiceResult };
       pending.shift();
     }

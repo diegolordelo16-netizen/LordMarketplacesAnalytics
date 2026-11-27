@@ -147,10 +147,18 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?','acct-receipt')?.total).toBe(1);
     expect((await call('capture.ingest',{...payload,url:'https://vendedores.mercadolivre.com.br/pedidos'})).ok).toBe(false);
     expect((await call('capture.ingest',{...payload,marketplace:'shopee'})).ok).toBe(false);
+    const filtered={...payload,captureKey:'f'.repeat(64),filterSignature:'period=last 7 days',collectedAt:'2026-11-27T12:03:00.000Z'};
+    const filteredResult=await call('capture.ingest',filtered);
+    expect(filteredResult.ok).toBe(true);
+    expect((await call('capture.ingest',filtered)).result).toEqual(filteredResult.result);
+    expect((await call('capture.ingest',{...filtered,filterSignature:'period=last 30 days'})).ok).toBe(false);
+    expect((await call('capture.ingest',{...payload,filterSignature:'period=last 7 days'})).ok).toBe(false);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?','acct-receipt')?.total).toBe(2);
     const voice={captureKey:'a'.repeat(64),sourceUrl:payload.url,accountId:payload.accountId,items:[{kind:'QUESTION',text:'O produto está disponível?'}]};
     expect((await call('voc.ingestBatch',voice)).ok).toBe(true);
     expect((await call('voc.ingestBatch',voice)).ok).toBe(true);
     expect(db.row<{total:number}>('SELECT COUNT(*) total FROM customer_voice_items WHERE account_id=?','acct-receipt')?.total).toBe(1);
+    expect((await call('voc.ingestBatch',{...voice,filterSignature:'period=last 30 days'})).ok).toBe(false);
   });
 
   it('entrega à extensão apenas lotes solicitados pelo dashboard e protege a retomada', async () => {

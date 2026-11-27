@@ -411,12 +411,13 @@ export class LocalService {
     function captureOnce<T extends { ok: boolean }>(method: string, payload: unknown, work: () => T): T {
       const raw = payload as Record<string, unknown> | null | undefined;
       if (raw?.captureKey === undefined) return work();
-      const parsed = z.object({ captureKey: z.string().regex(/^[a-f0-9]{64}$/), accountId: z.string().min(1) }).passthrough().parse(payload);
+      const parsed = z.object({ captureKey: z.string().regex(/^[a-f0-9]{64}$/), accountId: z.string().min(1), filterSignature:z.string().max(512).optional() }).passthrough().parse(payload);
       const { captureKey, accountId } = parsed;
       const source = new URL(z.string().url().max(2048).parse(method === 'capture.ingest' ? parsed.url : parsed.sourceUrl));
       if (source.protocol !== 'https:' || source.username || source.password) throw new Error('URL do recibo inválida');
       source.hash = ''; source.searchParams.sort();
-      const identity = createHash('sha256').update(source.href).digest('hex');
+      // Keep receipts with no filter compatible with the previous protocol; a different visible filter must never be acknowledged as the same capture.
+      const identity = createHash('sha256').update(parsed.filterSignature ? JSON.stringify([source.href,parsed.filterSignature]) : source.href).digest('hex');
       let rejected: T | undefined;
       const abort = new Error('captura não confirmada');
       try {
@@ -427,7 +428,7 @@ export class LocalService {
           if (!hosts[active.marketplace]?.test(source.hostname) || (method === 'capture.ingest' && parsed.marketplace !== active.marketplace)) throw new Error('recibo não pertence ao marketplace da conta');
           const receipt = db.row<{ result_json: string; identity_hash: string }>('SELECT result_json,identity_hash FROM capture_receipts WHERE account_id=? AND method=? AND capture_key=?', accountId, method, captureKey);
           if (receipt) {
-            if (receipt.identity_hash !== identity) throw new Error('chave de captura reutilizada para outra página');
+            if (receipt.identity_hash !== identity) throw new Error('chave de captura reutilizada para outra página ou seleção de filtros');
             return JSON.parse(receipt.result_json) as T;
           }
           const result = work();
@@ -2059,7 +2060,7 @@ export class LocalService {
 
     this.register('voc.ingestBatch', (payload, auth) => {
       const i = z.object({
-        accountId: z.string().min(1), captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), sourceUrl: z.string().url().max(2048).optional(),
+        accountId: z.string().min(1), captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), sourceUrl: z.string().url().max(2048).optional(), filterSignature:z.string().max(512).optional(),
         sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']).default('A_PRIMARY_UI'),
         items: z.array(z.object({
           listingId: z.string().nullable().optional(),
