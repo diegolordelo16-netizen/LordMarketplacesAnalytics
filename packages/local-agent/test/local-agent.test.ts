@@ -466,6 +466,46 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(rows).toHaveLength(2);expect(rows.every(row=>row.token_hash===undefined)).toBe(true);
   });
 
+  it('confere relatos de variação e duplicação com capturas posteriores da mesma loja',async()=>{
+    const accountId='receipt-shop',other='receipt-other';
+    seedImportAccount(accountId);seedImportAccount(other);
+    const before='2025-01-07T12:00:00.000Z',performedAt='2025-01-08T12:00:00.000Z',after='2025-01-09T12:00:00.000Z';
+    const parent='MLB1234567',listingId='receipt-original';
+    const insertListing=db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)');
+    insertListing.run(listingId,accountId,'mercado_livre',parent,'Produto','ACTIVE',before,before);
+    const prepared=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Azul',options:[{externalId:'V1',beforePriceCents:1000,beforeStock:2}],proposedPriceCents:1200,proposedStock:5})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:prepared.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    db.db.prepare('UPDATE offer_variation_proposals SET updated_at=? WHERE id=?').run(before,prepared.id);
+    const receipt={accountId,proposalKind:'VARIATION',proposalId:prepared.id,performedAt,evidenceReference:'Relatório do vendedor',confirmedManualExecution:true};
+    expect((await call('operation.receipt.record',receipt)).ok).toBe(true);
+    const verify={accountId,proposalKind:'VARIATION',proposalId:prepared.id,observedExternalId:'V1'};
+    const capture=(shop:string,externalId:string,parentExternalId:string,at:string,price:number,stockAvailable:number)=>call('capture.ingest',{
+      marketplace:'mercado_livre',accountId:shop,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',
+      sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+      details:[{kind:'LISTING_VARIANT',externalId,parentExternalId,label:'Azul',metrics:{price,stockAvailable},evidence:{price:'Preço: R$ '+price,stockAvailable:'Estoque: '+stockAvailable}}],
+    });
+    expect((await capture(accountId,'V1',parent,before,10,2)).ok).toBe(true);
+    expect((await capture(other,'V1',parent,after,12,5)).ok).toBe(true);
+    expect((await capture(accountId,'V1','MLB7654321',after,12,5)).ok).toBe(true);
+    expect((await call('operation.receipt.verify',verify)).ok).toBe(false);
+    expect((await capture(accountId,'V1',parent,after,12,5)).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{...verify,accountId:other})).ok).toBe(false);
+    expect((await call('operation.receipt.verify',verify)).result).toMatchObject({status:'UI_READBACK_MATCHED',observedExternalId:'V1',remoteVerified:false});
+    expect((await call('operation.receipt.verify',verify)).ok).toBe(false);
+    expect((await call('operation.receipt.list',{accountId})).result).toMatchObject([{status:'HUMAN_REPORTED',observation:{status:'UI_READBACK_MATCHED'}}]);
+
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)').run('receipt-original-snapshot',listingId,accountId,before,before,'{}','A_PRIMARY_UI','{}');
+    const duplicate=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Teste de duplicação'})).result as {id:string};
+    expect((await call('listing.change.review',{accountId,id:duplicate.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    db.db.prepare('UPDATE listing_change_proposals SET updated_at=? WHERE id=?').run(before,duplicate.id);
+    const duplication={...receipt,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id};
+    expect((await call('operation.receipt.record',duplication)).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:parent})).ok).toBe(false);
+    const copy='MLB3456789';
+    expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:after,collectedAt:after,method:'content_script_dom',listings:[{listingId:copy,title:'Produto',price:12}]})).ok).toBe(true);
+    expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:copy})).result).toMatchObject({status:'CANDIDATE_OBSERVED',observedExternalId:copy,remoteVerified:false});
+  });
+
   it('protege propostas de capa e variação por conta, aprovação e relato humano sem simular execução',async()=>{
     const accountId='acct-ops-5',other='acct-ops-other-5';seedImportAccount(accountId);seedImportAccount(other);
     const listingId='listing-ops-5',at='2025-01-07T23:59:59.999Z';

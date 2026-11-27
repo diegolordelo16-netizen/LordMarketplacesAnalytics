@@ -504,8 +504,10 @@
     });
     if(fields.length!==1)throw Error('orçamento diário numérico explícito não encontrado');
     const field=fields[0],form=field.closest('form');
-    if(!form||!row.contains(form)||new URL(form.action||location.href,location.href).origin!==location.origin||form.querySelectorAll('input[type="number"],input:not([type]),select,textarea,[contenteditable="true"],input[type="checkbox"],input[type="radio"],input[type="text"]').length!==1)throw Error('formulário dedicado de orçamento não comprovado');
-    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&!el.getAttribute('formaction')&&!el.getAttribute('form')&&/^(salvar|salvar alteracoes|atualizar orcamento|save|save changes|update budget)$/.test(norm(el.getAttribute('aria-label')||el.textContent)));
+    if(!form||!row.contains(form)||field.form!==form||new URL(form.action||location.href,location.href).origin!==location.origin||!['_self',''].includes(form.target)||form.querySelector('[contenteditable]:not([contenteditable="false"])'))throw Error('formulário dedicado de orçamento não comprovado');
+    const fieldsInForm=Array.from(form.elements).filter(el=>!['hidden','button','submit','reset'].includes(el.type));
+    if(fieldsInForm.length!==1||fieldsInForm[0]!==field)throw Error('formulário dedicado de orçamento não comprovado');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&el.form===form&&!['formaction','form','formtarget','formmethod'].some(attr=>el.hasAttribute(attr))&&/^(salvar|salvar alteracoes|atualizar orcamento|save|save changes|update budget)$/.test(norm(el.getAttribute('aria-label')||el.textContent)));
     if(buttons.length!==1)throw Error('botão exclusivo de salvar orçamento não localizado');
     const raw=String(field.value);
     if(!/^\d+(?:\.\d{1,2})?$/.test(raw)||!Number.isSafeInteger(Math.round(Number(raw)*100)))throw Error('orçamento monetário inválido');

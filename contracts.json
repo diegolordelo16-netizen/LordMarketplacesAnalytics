@@ -371,6 +371,13 @@
   "operation.receipt.list": {
     "accountId": "string"
   },
+  "operation.receipt.verify": {
+    "accountId": "string",
+    "proposalKind": "VARIATION|LISTING_CHANGE",
+    "proposalId": "string",
+    "observedExternalId": "string",
+    "result": "UI_READBACK_MATCHED|CANDIDATE_OBSERVED, remoteVerified=false"
+  },
   "offer.variation.update": {
     "accountId": "string",
     "id": "string",

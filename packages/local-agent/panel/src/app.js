@@ -1254,7 +1254,12 @@ async function viewProductOperations(){
     +card('Gerenciar variações e ofertas','<p class="muted small">Rascunhos locais. Executor assistido experimental: criação simples com uma opção {&quot;name&quot;:&quot;Azul&quot;}; edição com {&quot;externalId&quot;:&quot;ID&quot;,&quot;beforePriceCents&quot;:1000,&quot;beforeStock&quot;:5}. Para edição, use o nome observado da variação; preço e estoque finais são obrigatórios.</p><div class="form-grid"><label>ID do rascunho para edição (opcional)<input id="variation-id"></label><label>ID interno do anúncio<input id="variation-listing"></label><label>Nome da variação<input id="variation-name" maxlength="120"></label><label>Opções (JSON: lista de objetos)<textarea id="variation-options" rows="4">[]</textarea></label><label>Preço (centavos, opcional)<input type="number" min="0" step="1" id="variation-price"></label><label>Estoque (opcional)<input type="number" min="0" step="1" id="variation-stock"></label></div><button class="btn" data-act="variation-save">Salvar rascunho</button>')
     +card('Propostas de variações',table(['ID','Anúncio','Nome','Opções','Status','Ações'],variants.map(p=>'<tr><td>'+esc(p.id)+'</td><td>'+esc(p.listing_id)+'</td><td>'+esc(p.variation_name)+'</td><td>'+esc(JSON.stringify(p.options))+'</td><td>'+esc(p.status)+'</td><td>'+reviewed('VARIATION',p)+(p.status==='DRAFT'?' <button class="btn tiny" data-act="variation-delete" data-id="'+esc(p.id)+'">Excluir</button>':'')+'</td></tr>'),'Nenhum rascunho.'))
     +card('Tentativas assistidas e conferência',table(['Proposta','Anúncio','Ação','Estado','Conferência'],attempts.map(r=>'<tr><td>'+esc(r.proposal_id)+'</td><td>'+esc(r.external_listing_id)+'</td><td>'+esc(r.action)+'</td><td>'+esc(r.status)+'</td><td>'+(['CLAIMED','NEEDS_VERIFICATION'].includes(r.status)?'<button class="btn tiny" data-act="listing-browser-verify" data-id="'+esc(r.proposal_id)+'">Conferir captura posterior</button>':'—')+'</td></tr>'),'Nenhuma tentativa.')+'<p class="muted small">CANDIDATE_OBSERVED é uma nova entidade compatível observada, não prova de duplicação/criação. UI_READBACK_MATCHED indica campos observados correspondentes. Não repita cliques.</p>')
-    +card('Execuções relatadas e medição',table(['Tipo','Proposta','Data','Referência','Medição'],receipts.map(r=>'<tr><td>'+esc(r.proposal_kind)+'</td><td>'+esc(r.proposal_id)+'</td><td>'+dt(r.performed_at)+'</td><td>'+esc(r.evidence_reference)+'</td><td><button class="btn tiny" data-act="operation-measure" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Medir antes/depois</button></td></tr>'),'Nenhum relato humano.')+'<p class="muted small">Relatos não comprovam execução remota. Medição exige observações com janelas compatíveis e não prova causalidade.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
+    +card('Execuções relatadas e medição',table(['Tipo','Proposta','Data','Referência','Conferência','Medição'],receipts.map(r=>{
+      const canVerify=r.proposal_kind==='VARIATION'||proposals.some(p=>p.id===r.proposal_id&&p.kind==='DUPLICATE');
+      const observationLabels={UI_READBACK_MATCHED:'Captura corresponde à proposta',CANDIDATE_OBSERVED:'Nova entidade compatível observada'};
+      const check=r.observation?esc(observationLabels[r.observation.status]||r.observation.status)+'<div class="muted small">'+esc(r.observation.observedExternalId)+'</div>':canVerify?'<button class="btn tiny" data-act="operation-receipt-verify" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Conferir captura</button>':'—';
+      return '<tr><td>'+esc(r.proposal_kind)+'</td><td>'+esc(r.proposal_id)+'</td><td>'+dt(r.performed_at)+'</td><td>'+esc(r.evidence_reference)+'</td><td>'+check+'</td><td><button class="btn tiny" data-act="operation-measure" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Medir antes/depois</button></td></tr>';
+    }),'Nenhum relato humano.')+'<p class="muted small">A conferência registra o que a loja exibe após a operação. A medição exige janelas compatíveis.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
 }
 const VIEWS = {
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
@@ -1702,6 +1707,13 @@ const ACTIONS = {
     const evidenceReference=prompt('Referência da confirmação ou relatório real, sem credenciais:');if(!evidenceReference)return;
     if(!confirm('Confirma que você executou manualmente a proposta aprovada na loja? O sistema não verificou o marketplace.'))return;
     await run(()=>api('operation.receipt.record',{accountId,proposalKind:d.kind,proposalId:d.id,performedAt:date.toISOString(),evidenceReference,confirmedManualExecution:true}),'Relato humano registrado.');await renderView();
+  },
+  'operation-receipt-verify': async d=>{
+    const accountId=state.accountId;
+    const observedExternalId=prompt('ID externo que aparece na captura feita após a operação');
+    if(!observedExternalId?.trim())return;
+    await run(()=>api('operation.receipt.verify',{accountId,proposalKind:d.kind,proposalId:d.id,observedExternalId:observedExternalId.trim()}),'Conferência registrada.');
+    await renderView();
   },
   'operation-measure': async d=>{
     const generation=viewRenderSequence,host=$('#operation-measure-out');

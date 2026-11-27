@@ -343,18 +343,20 @@ test('publicidade distingue receita ausente de zero e protege divisões',()=>{
 test('executor orçamento exige formulário exclusivo, confirmação e autorização sem replay',async()=>{
   const src=readFileSync(new URL('../packages/extension/content/mercado-livre.js',import.meta.url),'utf8');
   const snippet=src.slice(src.indexOf('let budgetDocumentNonce='),src.indexOf('async function publishApprovedChange'));
-  let clicks=0,consent=true,ambiguous=false,challenge=false,accountId='store-a',extraField=false;
+  let clicks=0,consent=true,ambiguous=false,challenge=false,accountId='store-a',extraField=false,target='',buttonOverride=false;
   class Input {
     constructor(){this.raw='10.00';}
     get value(){return this.raw;}
     set value(v){this.raw=v;}
     getAttribute(n){return n==='aria-label'?'Orçamento diário (R$)':null;}
     closest(){return form;}
+    get form(){return form;}
+    get type(){return 'number';}
     dispatchEvent(){}
     checkValidity(){return true;}
   }
-  const field=new Input(),button={textContent:'Salvar',disabled:false,getAttribute:()=>null,click:()=>clicks++};
-  const form={action:'https://vendedores.mercadolivre.com.br/publicidade',querySelectorAll:s=>s.startsWith('button')?[button]:extraField?[field,{}]:[field]};
+  const field=new Input(),button={textContent:'Salvar',disabled:false,getAttribute:()=>null,hasAttribute:name=>buttonOverride&&name==='formtarget',get form(){return form;},click:()=>clicks++};
+  const form={action:'https://vendedores.mercadolivre.com.br/publicidade',get target(){return target;},get elements(){return extraField?[field,{type:'email'}]:[field];},querySelector:()=>null,querySelectorAll:()=>[button]};
   const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:()=>[field],contains:el=>el===form};
   const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:()=>ambiguous?[row,row]:[row]};
   const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(form.action),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=> 'seller_ads',visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
@@ -364,6 +366,8 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   ambiguous=true;assert.equal((await apply('ambiguous')).outcome,'FAILED');ambiguous=false;
   challenge=true;assert.equal((await apply('challenge')).outcome,'FAILED');challenge=false;
   extraField=true;assert.equal((await apply('multiple')).outcome,'FAILED');extraField=false;
+  target='_blank';assert.equal((await apply('target')).outcome,'FAILED');target='';
+  buttonOverride=true;assert.equal((await apply('override')).outcome,'FAILED');buttonOverride=false;
   accountId='other';assert.equal((await apply('wrong')).outcome,'FAILED');accountId='store-a';
   consent=false;assert.equal((await apply('cancel')).outcome,'CANCELLED');consent=true;
   assert.equal(clicks,0);assert.equal(field.value,'10.00');
