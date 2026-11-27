@@ -286,6 +286,16 @@
   }
   // A assinatura usa somente controles explícitos de período e estado, não campos de busca,
   // credenciais, identificadores de cliente ou valores de sessão.
+  function safeCustomFilterValue(control){
+    if(!isVisible(control)||control.disabled||control.getAttribute('aria-disabled')==='true'||control.closest?.('form'))return null;
+    const value=String(control.getAttribute('aria-valuetext')||'').trim();
+    const selected=Array.from(control.querySelectorAll?.('[role="option"][aria-selected="true"]')??[]).filter(isVisible);
+    if(selected.length>1)return null;
+    const option=selected.length===1?String(selected[0].innerText??selected[0].textContent??'').trim():'';
+    if(value&&option&&normalizeLabel(value)!==normalizeLabel(option))return null;
+    const raw=value||option;
+    return /^(?:\d{4}-\d{2}-\d{2}|(?:últimos|ultimos|last) \d{1,3} (?:dias|days)|hoje|ontem|today|yesterday|este mês|this month|mês passado|last month|todos|todas|all|ativo|ativa|active|inativo|inactive|pendente|pending|pago|paid|cancelado|cancelled|enviado|shipped|concluído|completed)$/i.test(raw)?normalizeLabel(raw):null;
+  }
   function collectionFilterState(root){
     const entries=[],warnings=[];
     const selector='input[type="date"],input[type="month"],input[type="week"],select,[role="tab"][aria-selected="true"],button[aria-pressed="true"]';
@@ -307,8 +317,13 @@
     for(const el of root.querySelectorAll('[role="combobox"],[role="listbox"]')){
       if(!isVisible(el)||el.disabled||String(el.tagName||'').toUpperCase()==='SELECT')continue;
       const label=normalizeLabel(el.getAttribute('aria-label')||el.getAttribute('name')||el.getAttribute('title')||'');
-      if(/^(period|período|periodo|date range|intervalo|status|situação|situacao|start_date|end_date|data inicial|data final|start date|end date|date_from|date_to)$/.test(label))warnings.push('FILTRO_NAO_RECONHECIDO');
+      if(/^(period|período|periodo|date range|intervalo|status|situação|situacao|start_date|end_date|data inicial|data final|start date|end date|date_from|date_to)$/.test(label)){
+        const value=safeCustomFilterValue(el);
+        if(value===null)warnings.push('FILTRO_NAO_RECONHECIDO');else entries.push(label+'='+value);
+      }
     }
+    const byLabel=new Map();
+    for(const entry of entries){const i=entry.indexOf('='),label=entry.slice(0,i),value=entry.slice(i+1);if(byLabel.has(label)&&byLabel.get(label)!==value)warnings.push('FILTRO_NAO_RECONHECIDO');byLabel.set(label,value);}
     const signature=[...new Set(entries)].sort().join('|');
     if(signature.length>512){warnings.push('FILTRO_NAO_RECONHECIDO');return {signature:'',warnings:[...new Set(warnings)]};}
     return {signature,warnings:[...new Set(warnings)]};
