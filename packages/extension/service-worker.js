@@ -181,7 +181,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'mi.heartbeat') void pingPrestart();
   if (alarm.name === 'mi.tasks') { void processDraftTasks(); void processPublishTasks(); }
-  if (alarm.name === 'mi.sync') void processScheduledSyncs();
+  if (alarm.name === 'mi.sync') { void processScheduledSyncs(); void runDueCompetitorSchedule().catch(()=>{}); }
 });
 
 // Rede de segurança: mesmo sem onInstalled (extensão já instalada), garante o alarme.
@@ -1352,22 +1352,28 @@ function collectPublicCompetitorCards(){
   return {marketplace:mp,sourceUrl:page.href,observedAt:new Date().toISOString(),candidates};
 }
 /** Ponte para o painel lateral e para o popup. */
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || message.type !== 'MI_CALL') return false;
-  const extensionOrigin = `chrome-extension://${chrome.runtime.id}/`;
-  if (
-    sender.id !== chrome.runtime.id ||
-    typeof sender.url !== 'string' ||
-    !sender.url.startsWith(extensionOrigin)
-  ) {
-    sendResponse({ ok: false, error: { code: 'SENDER', message: 'origem não autorizada' } });
-    return false;
-  }
-  void (async () => {
-    try {
-      if(message.method==='competitor.executePublicPlan'){
-        const input=message.payload??{};
+
+const COMP_PLAN_KEY='mi.competitor.public.schedule.v1';
+let publicPlanBusy=false;
+let scheduleWork=Promise.resolve();
+function withCompetitorSchedule(fn){
+  const work=scheduleWork.then(fn);
+  scheduleWork=work.catch(()=>{});
+  return work;
+}
+async function competitorSessionFingerprint(){
+  const token=await sessionToken();
+  if(!token)throw Error('Sessão local necessária.');
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,'0')).join('');
+}
+async function executePublicCompetitorPlan(input){
+  if(publicPlanBusy)throw Error('Já existe uma busca pública em andamento.');
+  publicPlanBusy=true;
+  try{
         if(input.confirmed!==true||!Array.isArray(input.marketplaces)||input.marketplaces.length<1||input.marketplaces.length>3||!['TITLE','BRAND_MODEL','SKU','ATTRIBUTES'].includes(input.kind))throw Error('Confirme o critério e os marketplaces.');
+        if(typeof input.accountId!=='string'||!input.accountId||typeof input.ownProductId!=='string'||!input.ownProductId||input.marketplaces.some(m=>!['mercado_livre','shopee','amazon'].includes(m)))throw Error('Escopo inválido.');
+        if(input.marketplaces.includes('amazon')&&!await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']}))throw Error('Permissão Amazon ausente.');
         const plan=await callService('competitor.searchPlan',{accountId:input.accountId,ownProductId:input.ownProductId,marketplaces:input.marketplaces});
         if(!plan?.ok)throw Error(plan?.error?.message||'Plano indisponível.');
         const links=(plan.result?.links??[]).filter(row=>row.kind===input.kind).slice(0,3),outcomes=[];
@@ -1393,7 +1399,63 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }catch(error){outcomes.push({marketplace:row.marketplace,status:'NOT_VERIFIED',reason:String(error?.message||error)});}
           finally{if(temporary?.id)await chrome.tabs.remove(temporary.id).catch(()=>{});}
         }
-        sendResponse({ok:true,result:{outcomes,coverageVerified:false}});return;
+
+    if(!outcomes.length)throw Error('Nenhuma busca disponível para o critério.');
+    return {outcomes,coverageVerified:false};
+  }finally{publicPlanBusy=false;}
+}
+async function competitorSchedule(action,input={}){
+  return withCompetitorSchedule(async()=>{
+    const existing=(await chrome.storage.local.get(COMP_PLAN_KEY))[COMP_PLAN_KEY];
+    if(action==='status')return existing?{enabled:existing.enabled,remaining:existing.remaining,nextAt:existing.nextAt,last:existing.last,accountId:existing.accountId,ownProductId:existing.ownProductId}:null;
+    if(action==='stop'){await chrome.storage.local.remove(COMP_PLAN_KEY);return {enabled:false};}
+    if(action!=='start'||input.confirmed!==true||!Number.isInteger(input.runs)||input.runs<1||input.runs>30||typeof input.accountId!=='string'||!input.accountId||typeof input.ownProductId!=='string'||!input.ownProductId||!['TITLE','BRAND_MODEL','SKU','ATTRIBUTES'].includes(input.kind)||!Array.isArray(input.marketplaces)||input.marketplaces.length<1||input.marketplaces.length>3||input.marketplaces.some(m=>!['mercado_livre','shopee','amazon'].includes(m)))throw Error('Plano ou limite inválido.');
+    const fingerprint=await competitorSessionFingerprint();
+    if(input.marketplaces.includes('amazon')&&!await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']}))throw Error('Permissão Amazon ausente.');
+    const marketplaces=[...new Set(input.marketplaces)];
+    const plan=await callService('competitor.searchPlan',{accountId:input.accountId,ownProductId:input.ownProductId,marketplaces});
+    if(!plan?.ok||!plan.result?.links?.some(r=>r.kind===input.kind))throw Error('Plano indisponível.');
+    const state={enabled:true,remaining:input.runs,nextAt:Date.now()+86400000,last:null,accountId:input.accountId,ownProductId:input.ownProductId,kind:input.kind,marketplaces,fingerprint};
+    await chrome.storage.local.set({[COMP_PLAN_KEY]:state});
+    return {enabled:true,remaining:state.remaining,nextAt:state.nextAt};
+  });
+}
+async function runDueCompetitorSchedule(){
+  return withCompetitorSchedule(async()=>{
+    const state=(await chrome.storage.local.get(COMP_PLAN_KEY))[COMP_PLAN_KEY];
+    if(!state?.enabled||state.remaining<1||state.nextAt>Date.now()||publicPlanBusy)return;
+    try{
+      if(await competitorSessionFingerprint()!==state.fingerprint)throw Error('Sessão mudou; autorize novamente.');
+      // Reserve a run before opening tabs. A restart cannot replay this run.
+      state.remaining--;state.nextAt=Date.now()+86400000;state.enabled=false;state.last={status:'DISPATCHED',at:Date.now()};
+      await chrome.storage.local.set({[COMP_PLAN_KEY]:state});
+      const result=await executePublicCompetitorPlan({...state,confirmed:true});
+      const ok=result.outcomes.every(r=>r.status==='OBSERVED');
+      state.last={status:ok?'OBSERVED':'NOT_VERIFIED',at:Date.now(),outcomes:result.outcomes};
+      state.enabled=ok&&state.remaining>0;
+    }catch(e){state.enabled=false;state.last={status:'NOT_VERIFIED',at:Date.now(),reason:String(e?.message||e).slice(0,500)};}
+    await chrome.storage.local.set({[COMP_PLAN_KEY]:state});
+  });
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || message.type !== 'MI_CALL') return false;
+  const extensionOrigin = `chrome-extension://${chrome.runtime.id}/`;
+  if (
+    sender.id !== chrome.runtime.id ||
+    typeof sender.url !== 'string' ||
+    !sender.url.startsWith(extensionOrigin)
+  ) {
+    sendResponse({ ok: false, error: { code: 'SENDER', message: 'origem não autorizada' } });
+    return false;
+  }
+  void (async () => {
+    try {
+      if(message.method==='competitor.executePublicPlan'){
+        sendResponse({ok:true,result:await executePublicCompetitorPlan(message.payload??{})});return;
+      }
+      if(['competitor.schedule.start','competitor.schedule.stop','competitor.schedule.status'].includes(message.method)){
+        sendResponse({ok:true,result:await competitorSchedule(message.method.split('.').pop(),message.payload??{})});return;
       }
       if(message.method==='competitor.captureCurrentPublicSearch'){
         const input=message.payload??{};
