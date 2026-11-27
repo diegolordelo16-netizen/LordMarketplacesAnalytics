@@ -398,7 +398,7 @@
     "accountId": "string",
     "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
     "proposalId": "string",
-    "method": "compatible before/after source windows following human-reported action; not remote verification or causality"
+    "method": "compatible source windows before and after a human-reported action or an assisted operation with matching UI readback, plus the exact variant snapshots when available"
   },
   "ads.reconcile": {
     "accountId": "string",
@@ -470,7 +470,7 @@
     "accountId": "string",
     "proposalId": "string",
     "observedExternalId": "string",
-    "result": "UI_READBACK_MATCHED or CANDIDATE_OBSERVED; remoteVerified=false"
+    "result": "UI_READBACK_MATCHED or CANDIDATE_OBSERVED; remoteVerified=false; variant edits include baselineSnapshotId"
   },
   "listing.browser.list": {
     "accountId": "string"

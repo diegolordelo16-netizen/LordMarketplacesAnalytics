@@ -477,6 +477,27 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('campaign.budget.verify',{...reload,budgetCents:999})).result).toMatchObject({status:'NEEDS_VERIFICATION',remoteVerified:false});
     expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false,uiReadbackMatched:true});
     expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).ok).toBe(false);
+    const measure={accountId,proposalKind:'CAMPAIGN',proposalId:proposal.id};
+    expect((await call('operation.measure',{...measure,accountId:other})).result).toMatchObject({status:'EXECUTION_EVIDENCE_REQUIRED'});
+    db.db.prepare('UPDATE campaign_budget_executions SET created_at=?,updated_at=? WHERE id=?')
+      .run('2025-01-08T12:00:00.000Z','2025-01-09T12:00:00.000Z',grant.id);
+    const capture=async (from:string,to:string,at:string,adClicks:number,coverageWarnings?:string)=>{
+      const response=await call('capture.ingest',{accountId,marketplace:'mercado_livre',url:ctx.sourcePath,
+        pageKind:'seller_ads',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+        evidence:{filtersAndPeriod:`start_date=${from}|end_date=${to}|status=all`,...(coverageWarnings?{coverageWarnings}:{})},
+        details:[{kind:'AD_CAMPAIGN',externalId:campaignRef,metrics:{adClicks},evidence:{adClicks:`Cliques: ${adClicks}`}}],
+      });
+      expect(response.ok).toBe(true);
+    };
+    await capture('2025-01-01','2025-01-07','2025-01-08T10:00:00.000Z',10);
+    await capture('2025-01-09','2025-01-15','2025-01-16T10:00:00.000Z',99);
+    expect((await call('operation.measure',measure)).result).toMatchObject({status:'INSUFFICIENT_COMPATIBLE_WINDOWS'});
+    await capture('2025-01-10','2025-01-16','2025-01-17T10:00:00.000Z',12);
+    await capture('2025-01-11','2025-01-17','2025-01-18T10:00:00.000Z',99,'COBERTURA_PARCIAL');
+    expect((await call('operation.measure',measure)).result).toMatchObject({
+      status:'OBSERVED_CHANGE',executionEvidence:'UI_READBACK_MATCHED',measurementScope:'CAMPAIGN',
+      metrics:{adClicks:{before:10,after:12,delta:2}},remoteVerified:false,causalityVerified:false,
+    });
     const items=(await call('campaign.budget.list',{accountId})).result as any[];
     expect(items).toHaveLength(1);expect(items[0].status).toBe('UI_READBACK_MATCHED');expect(items[0].token_hash).toBeUndefined();
     expect((await call('campaign.budget.list',{accountId:other})).result).toEqual([]);
@@ -544,6 +565,14 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('operation.receipt.verify',verify)).ok).toBe(false);
     expect((await call('operation.receipt.list',{accountId})).result).toMatchObject([{status:'HUMAN_REPORTED',observation:{status:'UI_READBACK_MATCHED'}}]);
 
+    const measurement={accountId,proposalKind:'VARIATION',proposalId:prepared.id};
+    expect((await call('operation.measure',measurement)).result).toMatchObject({
+      status:'VARIATION_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,
+      variationObservation:{externalId:'V1',before:{priceCents:1000,stock:2},after:{priceCents:1200,stock:5}},
+    });
+    expect((await capture(accountId,'V1',parent,'2025-01-10T12:00:00.000Z',13,9)).ok).toBe(true);
+    expect((await call('operation.measure',measurement)).result).toMatchObject({variationObservation:{after:{priceCents:1200,stock:5}}});
+
     db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)').run('receipt-original-snapshot',listingId,accountId,before,before,'{}','A_PRIMARY_UI','{}');
     const duplicate=(await call('listing.change.prepare',{accountId,listingId,kind:'DUPLICATE',reason:'Teste de duplicação'})).result as {id:string};
     expect((await call('listing.change.review',{accountId,id:duplicate.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
@@ -554,6 +583,58 @@ describe('capacidades adicionais 3.10.3', () => {
     const copy='MLB3456789';
     expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:after,collectedAt:after,method:'content_script_dom',listings:[{listingId:copy,title:'Produto',price:12}]})).ok).toBe(true);
     expect((await call('operation.receipt.verify',{accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id,observedExternalId:copy})).result).toMatchObject({status:'CANDIDATE_OBSERVED',observedExternalId:copy,remoteVerified:false});
+    const candidateMeasure={accountId,proposalKind:'LISTING_CHANGE',proposalId:duplicate.id};
+    expect((await call('operation.measure',candidateMeasure)).result).toMatchObject({
+      status:'CANDIDATE_STATE_OBSERVED',metrics:null,remoteVerified:false,causalityVerified:false,
+      candidateObservation:{externalId:copy,priceCents:1200,stock:null},
+    });
+    expect((await call('operation.measure',{...candidateMeasure,accountId:other})).result)
+      .toMatchObject({status:'EXECUTION_EVIDENCE_REQUIRED'});
+
+  });
+
+  it('persiste a captura exata antes e depois de uma edição assistida de variação',async()=>{
+    const accountId='assisted-variation-edit';
+    seedImportAccount(accountId);
+    const listingId='assisted-variation-parent',externalListingId='MLB1234567',variationId='V1';
+    const sourcePath='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+externalListingId;
+    const capture=(at:string,price:number,stock:number,coverageWarnings?:string)=>call('capture.ingest',{
+      accountId,marketplace:'mercado_livre',url:sourcePath,pageKind:'seller_listing_edit',sourceClass:'A_PRIMARY_UI',
+      referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+      evidence:coverageWarnings?{coverageWarnings}:{},
+      details:[{kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:'Azul',
+        metrics:{price,stockAvailable:stock},evidence:{price:'Preço: '+price,stockAvailable:'Estoque: '+stock}}],
+    });
+    const at='2025-01-01T12:00:00.000Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(listingId,accountId,'mercado_livre',externalListingId,'Anúncio','ACTIVE',at,at);
+    const prepared=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Azul',
+      options:[{externalId:variationId,beforePriceCents:1000,beforeStock:3}],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:prepared.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    const limits={maxCampaignDailyBudgetCents:1500,minVariationPriceCents:100,maxVariationPriceCents:100000,maxVariationStock:100,maxVariationPriceChangePct:25};
+    expect((await call('operation.limits.set',{accountId,limits,confirmed:true})).ok).toBe(true);
+    const context={accountId,externalListingId,action:'EDIT_VARIATION',variationId,variationLabel:'Azul',beforePriceCents:1000,beforeStock:3,
+      sourcePath,documentNonce:'11111111-1111-4111-8111-111111111111',proposalId:prepared.id,confirmed:true};
+    expect((await capture(at,10,3,'COBERTURA_PARCIAL')).ok).toBe(true);
+    expect((await call('listing.browser.claim',context)).ok).toBe(false);
+    const baselineAt='2025-01-02T12:00:00.000Z';
+    expect((await capture(baselineAt,10,3)).result).toMatchObject({detailRowsIngested:1});
+    const claim=await call('listing.browser.claim',context);
+    expect(claim.ok).toBe(true);
+    const grant=claim.result as {id:string;token:string;plan:{baselineSnapshotId:string}};
+    expect(grant.plan.baselineSnapshotId).toBeTruthy();
+    expect((await call('listing.browser.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Salvamento acionado'})).ok).toBe(true);
+    db.db.prepare('UPDATE listing_browser_executions SET created_at=?,updated_at=? WHERE id=?')
+      .run('2025-01-04T12:00:00.000Z','2025-01-05T12:00:00.000Z',grant.id);
+    expect((await capture('2025-01-03T12:00:00.000Z',9,8)).ok).toBe(true);
+    const observedAt='2025-01-06T12:00:00.000Z';
+    expect((await capture(observedAt,12,0)).result).toMatchObject({detailRowsIngested:1});
+    expect((await call('listing.browser.verify',{accountId,proposalId:prepared.id,observedExternalId:variationId})).result)
+      .toMatchObject({status:'UI_READBACK_MATCHED',baselineSnapshotId:grant.plan.baselineSnapshotId,remoteVerified:false});
+    expect((await call('operation.measure',{accountId,proposalId:prepared.id,proposalKind:'VARIATION'})).result)
+      .toMatchObject({status:'VARIATION_STATE_OBSERVED',variationObservation:{
+        externalId:variationId,before:{capturedAt:baselineAt,priceCents:1000,stock:3},after:{capturedAt:observedAt,priceCents:1200,stock:0},
+      }});
   });
 
   it('protege propostas de capa e variação por conta, aprovação e relato humano sem simular execução',async()=>{

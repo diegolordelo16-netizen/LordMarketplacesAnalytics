@@ -17,12 +17,12 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 | 174 | Orçamento sem resultado | Gasto positivo e receita atribuída explicitamente zero em janela reconhecida; dado ausente não é zero. |
 | 178 | Preparar alterações de campanha | Rascunho local com baseline, alterações, motivo e revisão por super_admin. |
 | 179 | Executar alterações autorizadas | **PARCIAL**: execução assistida de orçamento diário no Mercado Livre com autorização única, confirmação na aba e conferência automática em uma nova aba da mesma campanha, com conferência manual disponível se o valor ainda não estiver visível. Outros tipos de alteração e comprovação independente ainda pendentes. |
-| 182 | Gestão de variações | **PARCIAL**: edição assistida de preço e estoque de variação simples no Mercado Livre, com comparação entre capturas da mesma loja. Os demais campos, remoção e outros marketplaces dependem de adaptadores. |
+| 182 | Gestão de variações | **PARCIAL**: edição assistida de preço e estoque de variação simples no Mercado Livre, com captura inicial vinculada à tentativa e conferência automática em novo documento da mesma loja. Os demais campos, remoção e outros marketplaces dependem de adaptadores. |
 | 185 | Sugestões de imagens | Prévia de arquivo local decodificado, resolução, enquadramento, texto alternativo e checklist de revisão; não certifica adequação às regras do marketplace. |
 | 187 | Preparar troca de capa | Rascunho vinculado a anúncio, snapshot inicial e hash da imagem da mesma conta; prévia e aprovação. Upload remoto não implementado. |
 | 194 | Duplicar anúncios quando permitido | **PARCIAL**: acionamento assistido quando há controle dedicado reconhecido no Mercado Livre. A captura identifica um novo anúncio compatível; a origem da duplicação depende de evidência do marketplace. |
 | 195 | Criar variações de ofertas | **PARCIAL**: envio assistido de formulário dedicado para uma opção simples no Mercado Livre. A captura identifica uma nova opção compatível; a confirmação de publicação depende de evidência do marketplace. |
-| 196 | Medir resultados | operation.measure: antes/depois após relato manual, janelas encerradas, não sobrepostas, iguais e filtros compatíveis; não prova causalidade ou execução. Duplicação não tem ID novo verificável. |
+| 196 | Medir resultados | operation.measure: antes/depois após relato manual ou conferência de orçamento e edição assistida de variação. Usa janelas encerradas de mesma duração e filtros, fora de todo o intervalo entre a autorização e a conferência. A edição mostra preço e estoque da própria variação pela dupla exata de capturas, além das métricas do anúncio inteiro quando há janelas comparáveis. Duplicação e criação ainda precisam de identificação confirmada da nova entidade; impacto causal ainda não é medido. |
 | 197 | Monitorar estoque | inventory.dashboard, recência, histórico e armazéns; sem somar SKU compartilhado. |
 | 198 | Risco de ruptura | Estoque zero ou cobertura observada <=7 dias, somente com janela de vendas explícita para calcular cobertura. |
 | 203 | Cruzar estoque e Ads | Sinal de estoque zero e gasto positivo no mesmo snapshot, sem afirmar simultaneidade. |
@@ -39,3 +39,10 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - Não se efetuou nenhuma alteração real em campanhas ou anúncios. A aprovação do desenvolvimento não autoriza alterações financeiras remotas. Homologação real dispensada como portão em etapas anteriores, não executada nesta etapa.
 - Não declarar os 24 requisitos integralmente concluídos: 179, 182, 194 e 195 permanecem parcialmente implementados no que se refere à escrita remota. Nenhum seletor ou resultado de execução será simulado.
 - Master 3.13.0 preservada. Não iniciar etapa 06 sem concluir/aceitar limitações da etapa 05.
+
+## Changelog da candidata 3.14.0
+
+- O painel permite medir alterações assistidas de orçamento e edição de variação com leitura posterior correspondente. Capturas parciais, futuras ou com janelas ainda em curso quando coletadas ficam fora da comparação. Uma captura recente incompatível não esconde pares anteriores elegíveis.
+- A edição assistida de variação confere preço e estoque em nova aba sem repetir a gravação. A tentativa guarda os IDs das capturas e o painel mostra o antes/depois da própria variação. Uma captura incompleta ou com contexto divergente mantém a conferência pendente.
+- O executor recusa o botão de outro anúncio ou formulário aninhado. A conferência de duplicação rejeita um anúncio que já tinha capturas anteriores à tentativa.
+- A medição consulta o snapshot exato do candidato de criação ou duplicação. O painel exibe seu estado observado e mantém a confirmação da operação pendente. A homologação em conta real fica para depois da implementação técnica, conforme autorização do usuário.

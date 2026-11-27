@@ -1,0 +1,144 @@
+CONTINUAÇÃO DO LORDMARKETPLACESANALYTICS
+Atualizado em 27 de novembro de 2026, horário de São Paulo
+
+PROJETO E PONTO DE RETOMADA
+
+Repositório
+https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics
+Ramo de trabalho
+validation/3.14.0-etapa-05
+PR da candidata 3.14.0
+https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/pull/5
+CI da branch, consulte o resultado do SHA atual
+https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/actions?query=branch%3Avalidation%2F3.14.0-etapa-05
+
+No momento em que este arquivo foi escrito, master estava na 3.13.0, commit
+b439433583946afa0c6dae0f3d2923023b198ef6. As etapas 00–04 estão integradas.
+A etapa 03 foi integrada na 3.12.0 com limites de cobertura conhecidos.
+O PR #5 segue em revisão. A Etapa 05 precede o avanço da Etapa 06. O usuário
+autorizou avançar depois da conclusão técnica. Valide o SHA e os PRs atuais
+no GitHub antes de usar este estado histórico.
+
+TRABALHO JÁ ENTREGUE NA ETAPA 05
+
+- 161 e 165. Rentabilidade por produto e sinais de margem negativa.
+- 166–174. Análise de publicidade e orçamento, ROAS, ACoS, TACoS, gastos,
+  cliques, impressões, déficits e oportunidades com evidência compatível.
+- 178. Rascunhos de campanha, revisão por conta e autorização explícita.
+- 185 e 187. Orientações sobre imagens e preparação da troca de capa.
+- 197, 198, 203, 205 e 206. Estoque, risco de ruptura, cruzamento com Ads,
+  perguntas pendentes e sinais operacionais.
+- 179, parcial. Orçamento diário do Mercado Livre tem clique assistido de
+  uso único, limite por conta e conferência em nova aba.
+- 182, parcial. Edição de preço e estoque de uma variação simples no
+  Mercado Livre. A tentativa guarda o snapshot de origem e tenta a leitura
+  em nova aba depois do clique. A captura posterior é rejeitada se loja,
+  anúncio pai, ID de variação, rótulo, preço, estoque ou documento divergir.
+- 194 e 195, parciais. Há acionamento assistido de duplicação e criação
+  simples em formulários reconhecíveis do Mercado Livre. Um ID compatível
+  observado no histórico é candidato. O sistema ainda precisa do retorno
+  inequívoco da operação para vincular a criação ou duplicação à tentativa.
+- 196, parcial. Compara indicadores da campanha ou do anúncio quando as
+  janelas são fechadas, de mesma duração e filtros e inteiramente fora do
+  intervalo da operação. Para edições de variação conferidas após esta
+  revisão, compara preço e estoque da própria variação usando os IDs exatos
+  dos dois snapshots. O cálculo guarda o escopo e a fonte da evidência.
+  As métricas de resultado continuam observacionais. Criação e duplicação
+  ainda precisam de vínculo confirmado para medir a nova entidade.
+
+MATRIZ, CÓDIGO E EVIDÊNCIAS
+
+- docs/ETAPA-05-AUDITORIA.md contém a matriz de 24 requisitos e o changelog.
+- packages/local-agent/src/service.ts contém proposals, campaign.budget,
+  listing.browser, operation.receipt, operation.measure e escopo por loja.
+- packages/local-agent/migrations/032_campaign_budget_execution.sql e
+  033_listing_browser_execution.sql registram as tentativas assistidas.
+  Consulte os nomes atuais com ls. A migração 034 vincula evidências a
+  relatos manuais. A revisão atual reutiliza JSON de evidência já existente.
+- packages/extension/service-worker.js abre o documento de conferência,
+  registra a captura e trata o caso pendente sem repetir a gravação.
+- packages/extension/content/mercado-livre.js resolve contexto e formulários.
+  packages/extension/panel/panel.js controla o acionamento no painel lateral.
+- packages/local-agent/panel/src/app.js expõe o histórico e o comparativo.
+- packages/local-agent/test/local-agent.test.ts e
+  scripts/regression-3109.test.mjs testam isolamento, expiração e replay,
+  autorização, janela de comparação, estoque zero e leitura em documento novo.
+- O commit 4d78044 e a CI #182 registraram leitura automática de orçamento.
+  https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/actions/runs/46028217439
+- O commit 3daef16 e a CI #187 registraram a medição assistida por janelas.
+  https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/actions/runs/46034801935
+- O commit que contém este TXT acrescenta os snapshots vinculados de
+  variação e a conferência automática de edição. Use a CI da branch acima
+  para confirmar o resultado do commit mais recente. Até 3daef16 a Etapa 05
+  tinha 34 migrações. Esta revisão mantém esse total.
+
+PENDÊNCIAS TÉCNICAS E CRITÉRIO DE ENTREGA
+
+1. 179. Identificar e implementar outras configurações de campanha cuja
+   escrita tenha contrato oficial ou interface comprovada. Manter escopo
+   de conta e campanha, limite financeiro quando aplicável, autorização de
+   uso único e leitura posterior para cada alteração.
+2. 182 e 195. Diferenciar variações de anúncios legados e ofertas no
+   modelo User Products. A documentação de preço por variação descreve
+   restrições ao uso do POST/PUT de itens para criação no novo modelo.
+   Validar a capacidade por marketplace, categoria e modelo de anúncio.
+3. 194. Vincular a duplicação a um ID gerado pela operação via resposta
+   oficial ou confirmação inequívoca da interface. Não confundir
+   republicação de anúncio encerrado com duplicação de anúncio ativo.
+4. 196. Medir a entidade criada quando seu vínculo estiver confirmado.
+   Manter o comparativo de estado e o desempenho econômico em escopos
+   explícitos. Não inferir causalidade a partir de dois snapshots.
+5. Nenhuma conta de teste autenticada de marketplace foi usada nestas
+   rodadas. Nenhuma alteração real foi executada. A homologação necessita
+   de ambiente autorizado e casos que possam ser exercitados com segurança.
+   O código para cenários demonstrados pode continuar evoluindo em paralelo.
+6. Etapa 05 segue em revisão até a entrega técnica e a CI do SHA exato.
+   Fazer merge e oficializar 3.14.0 somente depois de atender os critérios.
+   Manter etapas anteriores e avançar no PR #6 depois de fechar a Etapa 05.
+
+Referências oficiais de implementação
+https://developers.mercadolivre.com.br/pt_br/api-docs-pt-br/variacoes
+https://developers.mercadolivre.com.br/pt_br/guia-para-produtos/preco-variacao
+https://developers.mercadolivre.com.br/pt_br/product-ads-para-catalogo-e-user-products-leitura
+https://developers.mercadolivre.com.br/pt_br/publicacao-de-produtos/publique-seus-anuncios-novamente
+
+REVISÕES PARALELAS EXISTENTES
+
+- PR #6, Etapa 06. Histórico de reputação, pós-venda e devoluções. SEO
+  ignora SERPs vazias ou ambíguas. Painel mostra diferenças de preço,
+  frete e prazo. Última CI conhecida #186.
+  https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/pull/6
+- PR #7, Windows. Corrigiu registro e remoção do host. O runner instalou,
+  verificou serviço e registros Chrome/Edge e desinstalou. Este teste não
+  abriu a extensão nos navegadores.
+  https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/pull/7
+  https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/actions/runs/46030241980
+- PR #8, revisão da Etapa 03. A captura passa a vincular marketplace e
+  área ao contexto original. CI #185 aprovada.
+  https://github.com/diegolordelo16-netizen/LordMarketplacesAnalytics/pull/8
+- Etapas 07–08 ainda exigem auditoria por requisito, Etapa 09 exige
+  validação interativa, e Etapa 10/4.0.0 ainda está pendente.
+
+COMANDOS DE VALIDAÇÃO
+
+Use Node.js >= 22.13 e acompanhe o workflow .github/workflows/ci.yml.
+npm ci
+npm audit --audit-level=low
+npm run typecheck
+npm run agent:build
+npm run host:build
+npm run ext:build
+npm test
+node --test scripts/regression-3109.test.mjs
+npm run audit
+npm run smoke:local
+npm run audit:publish
+npm run db:generate -- --check
+git diff --check
+
+Continue pela branch da Etapa 05, em ciclos de implementação, debug,
+regressão e CI. Atualize a matriz e preserve o que já foi publicado.
+
+Atualização posterior. O painel já consulta preço e estoque do snapshot
+exato de candidatos de criação e duplicação, sem atribuir a origem.
+A homologação real foi adiada por autorização do usuário.
