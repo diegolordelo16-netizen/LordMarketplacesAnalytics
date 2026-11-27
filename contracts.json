@@ -342,5 +342,45 @@
     "kind": "AD|AD_CAMPAIGN?",
     "externalId": "string?",
     "method": "latest observations per entity; TACoS only for compatible account source windows"
+  },
+  "listing.change.prepare": {
+    "accountId": "string",
+    "listingId": "string",
+    "kind": "COVER|DUPLICATE",
+    "mediaId": "string?",
+    "reason": "string"
+  },
+  "listing.change.list": {
+    "accountId": "string"
+  },
+  "listing.change.review": {
+    "accountId": "string",
+    "id": "string",
+    "decision": "APPROVED|REJECTED",
+    "reason": "string"
+  },
+  "operation.receipt.record": {
+    "accountId": "string",
+    "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
+    "proposalId": "string",
+    "performedAt": "ISO datetime",
+    "evidenceReference": "string",
+    "confirmedManualExecution": true,
+    "result": "HUMAN_REPORTED, remoteVerified=false"
+  },
+  "operation.receipt.list": {
+    "accountId": "string"
+  },
+  "offer.variation.update": {
+    "accountId": "string",
+    "id": "string",
+    "variationName": "string",
+    "options": "object[]",
+    "proposedPriceCents": "number?",
+    "proposedStock": "number?"
+  },
+  "offer.variation.delete": {
+    "accountId": "string",
+    "id": "string"
   }
 }
