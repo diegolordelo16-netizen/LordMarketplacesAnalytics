@@ -205,7 +205,14 @@ describe('capacidades adicionais 3.10.3', () => {
     for(const invalid of [{...payload,route:'/reputacao/editar'},{...payload,route:'/reputacao?token=secret'},{...payload,route:'/reputacao/cliente'},{...payload,origin:'https://example.com'},{...payload,pageKind:'seller_listing_edit'},{...payload,rawText:'secret'}]){
       expect((await call('navigation.observe',invalid)).ok).toBe(false);
     }
+    expect((await call('navigation.observe',{...payload,route:'/orders',pageKind:'seller_orders',fromRoute:'/reputacao'})).ok).toBe(true);
+    expect((await call('navigation.observe',{...payload,route:'/stock',pageKind:'seller_inventory',fromRoute:'/unknown'})).ok).toBe(false);
+    expect((await call('navigation.graph',{accountId,origin})).result).toEqual([expect.objectContaining({from_route:'/reputacao',to_route:'/orders',observations:1})]);
+    expect((await call('navigation.graph',{accountId:'acct-learn-b',origin})).result).toEqual([]);
+    const summary=(await call('navigation.summary',{accountId})).result as any;
+    expect(summary.routes).toHaveLength(2);expect(summary.transitions).toHaveLength(1);
     expect((await call('navigation.clear',{accountId,origin})).result).toEqual({ok:true});
+    expect((await call('navigation.graph',{accountId,origin})).result).toEqual([]);
     expect((await call('navigation.list',{accountId,origin})).result).toEqual([]);
   });
 
