@@ -1172,14 +1172,27 @@ export class LocalService {
           return starts.length===1&&ends.length===1&&starts[0]?.[1]===from&&ends[0]?.[1]===to;
         });
         const sourceWindowsVerified=windowMatches(group.periods.primary,i.primaryFrom,i.primaryTo)&&windowMatches(group.periods.comparison,i.comparisonFrom,i.comparisonTo);
-        const comparable=equalDuration&&sameListings&&sourceWindowsVerified&&primary.end<nowIso()&&comparison.end<nowIso();
+        const contextSignature=(item:RecordItem)=>{
+          const evidence=parseJsonObject(item.evidence_json??'{}');
+          if(typeof evidence.filtersAndPeriod!=='string'||evidence.coverageWarnings)return null;
+          const entries=evidence.filtersAndPeriod.split('|').map(entry=>entry.split('='));
+          if(entries.some(entry=>entry.length!==2)||new Set(entries.map(entry=>entry[0])).size!==entries.length)return null;
+          return JSON.stringify(entries.filter(([key])=>!/^(start_date|date_from|data inicial|start date|end_date|date_to|data final|end date)$/.test(key??'')).sort((a,b)=>(a[0]??'').localeCompare(b[0]??'')));
+        };
+        const previousById=new Map(group.periods.comparison.map(item=>[item.listing_id,item]));
+        const sameFilters=sameListings&&group.periods.primary.every(item=>{
+          const prior=previousById.get(item.listing_id);
+          const signature=contextSignature(item);
+          return prior&&signature!==null&&signature===contextSignature(prior);
+        });
+        const comparable=equalDuration&&sameListings&&sameFilters&&sourceWindowsVerified&&primary.end<nowIso()&&comparison.end<nowIso();
         const deltaPct:Record<string,number|null>={},verifiedDeltaPct:Record<string,number|null>={};
         for (const key of [...metricKeys,'cvr','aov','returnRate','roas','acos']) {
           const a=current.metrics[key],b=previous.metrics[key];
           deltaPct[key]=sameListings&&typeof a==='number'&&typeof b==='number'&&b!==0?(a-b)/Math.abs(b)*100:null;
           verifiedDeltaPct[key]=comparable?deltaPct[key]??null:null;
         }
-        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,comparisonQuality:{equalDuration,sameListings,sourceWindowsVerified,comparable} };
+        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
       return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,method:'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
     });
