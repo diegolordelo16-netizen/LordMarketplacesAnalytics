@@ -225,6 +225,7 @@ async function viewExec() {
     ['Lucro de contribuição', k ? brl(k.contributionCents) : '—', null],
     ['Margem de contribuição', k ? pct(k.contributionMarginPct) : '—', null],
     ['GMV', k ? brl(k.gmvCents) : '—', 'gmv'],
+    ['Unidades vendidas', k ? num(k.units) : '—', null],
     ['Pedidos', k ? num(k.orders) : '—', 'orders'],
     ['Visitas', k ? num(k.visits) : '—', 'visits'],
     ['CVR', k ? pct(k.cvr) : '—', 'cvr'],
@@ -242,6 +243,7 @@ async function viewExec() {
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
+    ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
     ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
@@ -832,22 +834,38 @@ async function viewAccounts() {
     + card('SKUs cadastrados', table(['SKU','EAN','GTIN','UPC'], (skus || []).map(x => `<tr><td>${esc(x.sku_code)}</td><td>${esc(x.ean || '—')}</td><td>${esc(x.gtin || '—')}</td><td>${esc(x.upc || '—')}</td></tr>`), 'Nenhum SKU cadastrado.'));
 }
 
+function comparisonPreset(preset,now=new Date()){
+  const today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
+  const day=(offset)=>new Date(today.getTime()+offset*86400000).toISOString().slice(0,10);
+  if(preset==='today')return [day(0),day(0),day(-1),day(-1)];
+  if(preset==='7')return [day(-7),day(-1),day(-14),day(-8)];
+  if(preset==='30')return [day(-30),day(-1),day(-60),day(-31)];
+  if(preset==='month'){
+    const year=today.getUTCFullYear(),month=today.getUTCMonth(),completed=today.getUTCDate()-1;
+    if(completed===0)return null;
+    const previousDays=new Date(Date.UTC(year,month,0)).getUTCDate();
+    const count=Math.min(completed,previousDays);
+    const date=(m,d)=>new Date(Date.UTC(year,m,d)).toISOString().slice(0,10);
+    return [date(month,1),date(month,count),date(month-1,1),date(month-1,count)];
+  }
+  return null;
+}
 async function viewCompare() {
   const [comparison, accounts] = await Promise.all([
     api('kpi.compare', {}).catch(e => ({ error: e.message })),
     api('account.list', {}).catch(() => []),
   ]);
   if (comparison?.error) return card('Comparação indisponível', `<p>${esc(comparison.error)}</p>`);
-  const today = new Date();
-  const day = (offset) => { const local = new Date(today.getTime() + offset * 86400000); local.setMinutes(local.getMinutes() - local.getTimezoneOffset()); return local.toISOString().slice(0,10); }
-  const primaryTo = day(0), primaryFrom = day(-29), comparisonTo = day(-30), comparisonFrom = day(-59);
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('30');
   return card('Comparação entre lojas e marketplaces', `
     <p class="muted small">Os totais ficam como indisponíveis quando existe anúncio sem captura — não tratamos dado ausente como zero.</p>
     ${table(['Loja','Marketplace','Anúncios','Capturados','GMV','Receita líquida','Comissão','Tarifa fixa','Pedidos','CVR','ROAS'], (comparison.accounts || []).map(a => `<tr><td>${esc(a.display_name)}</td><td>${esc(a.marketplace)}</td><td>${num(a.coverage.totalListings)}</td><td>${num(a.coverage.capturedListings)}</td><td>${brl(a.totals.gmvCents)}</td><td>${brl(a.totals.netRevenueCents)}</td><td>${brl(a.totals.commissionCents)}</td><td>${brl(a.totals.fixedFeeCents)}</td><td>${num(a.totals.orders)}</td><td>${pct(a.totals.cvr)}</td><td>${num(a.totals.roas,2)}</td></tr>`), 'Cadastre contas e capture anúncios para comparar.')}`)
     + card('Comparação por período, produto ou anúncio', `
       <div class="form-grid">
         <label>Conta<select id="cmp-account"><option value="">Todas as contas</option>${(accounts || []).filter(a=>a.is_active!==0).map(a=>`<option value="${esc(a.id)}" ${a.id===state.accountId?'selected':''}>${esc(a.display_name)} · ${esc(a.marketplace)}</option>`).join('')}</select></label>
+        <label>Janela de captura (UTC)<select id="cmp-preset"><option value="30">30 dias completos vs anteriores</option><option value="7">7 dias completos vs anteriores</option><option value="today">Hoje vs ontem (hoje parcial)</option><option value="month">Mês até ontem vs dias equivalentes</option><option value="custom">Personalizada</option></select></label>
         <label>Marketplace<select id="cmp-marketplace"><option value="">Todos</option><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label>
+        <label>ID interno do anúncio (opcional)<input id="cmp-listing-id" maxlength="200"></label><label>ID interno do SKU (opcional)<input id="cmp-sku-id" maxlength="200"></label>
         <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option></select></label>
         <label>Período atual — início<input id="cmp-primary-from" type="date" value="${primaryFrom}"></label>
         <label>Período atual — fim<input id="cmp-primary-to" type="date" value="${primaryTo}"></label>
@@ -1802,6 +1820,8 @@ const ACTIONS = {
     const payload = {
       accountId: value('cmp-account') || undefined,
       marketplace: value('cmp-marketplace') || undefined,
+      listingId: value('cmp-listing-id').trim() || undefined,
+      skuId: value('cmp-sku-id').trim() || undefined,
       groupBy: value('cmp-group'),
       primaryFrom: value('cmp-primary-from'), primaryTo: value('cmp-primary-to'),
       comparisonFrom: value('cmp-previous-from'), comparisonTo: value('cmp-previous-to'),
@@ -2076,6 +2096,12 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if(e.target?.id==='cmp-preset'&&e.target.value!=='custom'){
+    const dates=comparisonPreset(e.target.value);
+    if(!dates){e.target.value='custom';toast('Ainda não há dia completo neste mês. Selecione datas manualmente.','bad');return;}
+    ['cmp-primary-from','cmp-primary-to','cmp-previous-from','cmp-previous-to'].forEach((id,i)=>{const input=$('#'+id);if(input)input.value=dates[i];});
+  }
+  if(['cmp-primary-from','cmp-primary-to','cmp-previous-from','cmp-previous-to'].includes(e.target?.id)&&$('#cmp-preset'))$('#cmp-preset').value='custom';
   if (e.target?.id === 'history-metric') {
     const host = $('#history-chart');
     if (host) host.innerHTML = renderHistoryChart(state.historyPoints, e.target.value);
