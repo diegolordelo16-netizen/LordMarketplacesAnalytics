@@ -641,6 +641,27 @@ describe('comparação de períodos e entidades', () => {
     expect(result.rows[0]!.deltaPct.gmv).toBe(25);
     expect(result.rows[0]!.current.metrics.roas).toBe(3);
   });
+
+  it('only verifies equivalent closed source windows with the same listing and filters', async () => {
+    seedImportAccount('acct-compare-verified');
+    const accountId='acct-compare-verified',listingId='listing-compare-verified';
+    const at='2025-01-01T00:00:00.000Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre','ML-VERIFIED','Comparável','ACTIVE',at,at);
+    const insert=db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)');
+    const evidence=(from:string,to:string,status:string)=>JSON.stringify({filtersAndPeriod:'start_date='+from+'|end_date='+to+'|status='+status});
+    insert.run('verified-a',listingId,accountId,'2025-01-14T23:00:00.000Z','2025-01-14T23:00:00.000Z',JSON.stringify({gmv:120,orders:3}),'A_PRIMARY_UI',evidence('2025-01-08','2025-01-14','all'));
+    insert.run('verified-b',listingId,accountId,'2025-01-07T23:00:00.000Z','2025-01-07T23:00:00.000Z',JSON.stringify({gmv:100,orders:2}),'A_PRIMARY_UI',evidence('2025-01-01','2025-01-07','all'));
+    const payload={accountId,listingId,primaryFrom:'2025-01-08',primaryTo:'2025-01-14',comparisonFrom:'2025-01-01',comparisonTo:'2025-01-07'};
+    const verified=await call('kpi.compare.detail',payload);
+    expect(verified.ok).toBe(true);
+    expect(verified.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:20},comparisonQuality:{comparable:true}}]});
+    db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(evidence('2025-01-01','2025-01-07','active'),'verified-b');
+    const incompatible=await call('kpi.compare.detail',payload);
+    expect(incompatible.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:null},comparisonQuality:{sameFilters:false,comparable:false}}]});
+    const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
+    expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
+    expect((await call('kpi.compare.detail',{...payload,listingId:'nonexistent'})).result).toMatchObject({rows:[]});
+  });
 });
 
 describe('banco local', () => {
