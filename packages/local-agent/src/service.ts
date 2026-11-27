@@ -2830,7 +2830,7 @@ export class LocalService {
     const budgetContext=z.object({accountId:z.string().min(1),campaignRef:z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/),sourcePath:z.string().min(1).max(1000),documentNonce:z.string().uuid(),budgetCents:z.number().int().min(0).max(100000000)});
     const budgetSource=(path:string)=>{
       const url=new URL(path);
-      if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.port||!/(^|\.)mercadolivre\.com\.br$/.test(url.hostname)||!/(publicidade|product-ads|advertising|\/ads(?:\/|$))/.test(url.pathname))throw Error('página de publicidade não reconhecida');
+      if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.port||url.hostname!=='vendedores.mercadolivre.com.br'||!/(?:^|\/)(?:publicidade|product_ads|product-ads|ads)(?:\/|$)/.test(url.pathname))throw Error('página de publicidade não reconhecida');
       return url.origin+url.pathname;
     };
     this.register('campaign.budget.claim',(payload,auth)=>db.transaction(()=>{
@@ -2958,6 +2958,7 @@ export class LocalService {
       const tables={CAMPAIGN:'campaign_change_proposals',VARIATION:'offer_variation_proposals',LISTING_CHANGE:'listing_change_proposals'} as const;
       const p=db.row<{status:string;updated_at:string}>(`SELECT status,updated_at FROM ${tables[i.proposalKind]} WHERE id=? AND account_id=?`,i.proposalId,i.accountId);
       if(!p||p.status!=='APPROVED'||i.performedAt<p.updated_at||i.performedAt>nowIso())throw Error('proposta aprovada da mesma conta e data posterior à revisão são obrigatórias');
+      if(i.proposalKind==='CAMPAIGN'&&db.row('SELECT id FROM campaign_budget_executions WHERE proposal_id=?',i.proposalId))throw Error('existe tentativa de execução assistida; use a verificação de orçamento');
       const id=randomUUID();
       db.db.prepare('INSERT INTO operation_manual_receipts(id,account_id,proposal_kind,proposal_id,performed_at,evidence_reference,reported_by,reported_at) VALUES(?,?,?,?,?,?,?,?)').run(id,i.accountId,i.proposalKind,i.proposalId,i.performedAt,i.evidenceReference,auth.userId,nowIso());
       this.audit(auth,'OPERATION_MANUAL_RECEIPT','operation_manual_receipt',id,'OK','relato humano; não comprova alteração no marketplace');
