@@ -84,6 +84,23 @@ describe('Plano de busca competitiva',()=>{
     const relation=db.row<{id:string}>('SELECT id FROM competitor_relations WHERE own_product_id=?',id)!;
     expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId})).result).toMatchObject({publicObservations:[{observed_order:1,price_cents:29900}]});
     expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId:other})).ok).toBe(false);
+    expect((await call('competitor.approve',{relationId:relation.id})).ok).toBe(true);
+    const latest={...capture,observedAt:new Date(Date.now()+1000).toISOString(),candidates:[{...capture.candidates[0],priceCents:28900}]};
+    // Public observations are only eligible after their timestamp, so use historical timestamps.
+    latest.observedAt=new Date(Date.now()-1000).toISOString();
+    expect((await call('competitor.capturePublicSearch',latest)).ok).toBe(true);
+    expect((await call('competitor.capturePublicSearch',latest)).ok).toBe(true);
+    expect(db.row('SELECT COUNT(*) n FROM competitor_monitoring_points WHERE relation_id=?',relation.id)).toMatchObject({n:1});
+    expect((await call('competitor.monitoring.record',{relationId:relation.id,capturedAt:'2025-01-01T00:00:00.000Z',priceCents:1})).ok).toBe(true);
+    expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId,limit:1})).result).toMatchObject({points:[{price_cents:28900}]});
+    expect((await call('competitor.monitoring.set',{relationId:relation.id,state:'PAUSADO'})).ok).toBe(true);
+    expect((await call('competitor.monitoring.record',{relationId:relation.id,priceCents:2})).ok).toBe(false);
+    expect((await call('competitor.capturePublicSearch',{...latest,observedAt:new Date().toISOString()})).ok).toBe(true);
+    expect(db.row('SELECT COUNT(*) n FROM competitor_monitoring_points WHERE relation_id=?',relation.id)).toMatchObject({n:2});
+    expect((await call('competitor.approve',{relationId:relation.id})).ok).toBe(true);
+    expect((await call('competitor.monitoring.record',{relationId:relation.id,priceCents:3,promotions:['Cupom observado']})).ok).toBe(true);
+    expect((await call('competitor.evidence.compare',{relationId:relation.id,accountId})).result).toMatchObject({promotions:['Cupom observado']});
+
   });
 });
 describe('Pós-venda lexical por conta',()=>{
