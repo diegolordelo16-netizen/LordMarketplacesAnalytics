@@ -75,9 +75,10 @@ function renderHistoryChart(points, metric = 'gmvCents') {
   const values = valid.map((p) => p[selected]);
   const min = Math.min(0, ...values), max = Math.max(...values);
   const span = Math.max(1, max - min);
-  const x = (index) => left + index * ((width - left - right) / Math.max(1, valid.length - 1));
+  const start=Date.parse(valid[0].date+'T00:00:00Z'),end=Date.parse(valid[valid.length-1].date+'T00:00:00Z');
+  const x=(index)=>left+(Date.parse(valid[index].date+'T00:00:00Z')-start)/Math.max(86400000,end-start)*(width-left-right);
   const y = (value) => top + (max - value) / span * (height - top - bottom);
-  const path = valid.map((p, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(p[selected]).toFixed(2)}`).join(' ');
+  const path = valid.map((p, index) => `${index&&Date.parse(p.date+'T00:00:00Z')-Date.parse(valid[index-1].date+'T00:00:00Z')===86400000 ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(p[selected]).toFixed(2)}`).join(' ');
   const ticks = [0, .25, .5, .75, 1].map((fraction) => {
     const value = min + span * fraction;
     const yy = top + (height - top - bottom) * (1 - fraction);
@@ -85,7 +86,7 @@ function renderHistoryChart(points, metric = 'gmvCents') {
   }).join('');
   const dots = valid.map((p,index) => `<circle class="trend-dot" cx="${x(index)}" cy="${y(p[selected])}" r="3.5"><title>${esc(p.date)} · ${esc(meta.format(p[selected]))}</title></circle>`).join('');
   const first = valid[0].date, last = valid[valid.length-1].date;
-  return `<div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução de ${esc(meta.label)} de ${esc(first)} a ${esc(last)}">${ticks}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}<text class="trend-axis" x="${left}" y="${height-10}">${esc(first)}</text><text class="trend-axis" x="${width-right}" y="${height-10}" text-anchor="end">${esc(last)}</text></svg></div><p class="muted small">${valid.length} dias com dado · soma do último snapshot diário por anúncio · valores ausentes preservados como nulos.</p>`;
+  return `<div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução de ${esc(meta.label)} de ${esc(first)} a ${esc(last)}">${ticks}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}<text class="trend-axis" x="${left}" y="${height-10}">${esc(first)}</text><text class="trend-axis" x="${width-right}" y="${height-10}" text-anchor="end">${esc(last)}</text></svg></div><p class="muted small">${valid.length} dias com dado · observações por conta e anúncio · lacunas não são interpoladas.</p>`;
 }
 
 function dt(iso) {
@@ -209,11 +210,13 @@ function qualityBadge(q) {
 // ------------------------------------------------------------------ VISÃO EXECUTIVA
 async function viewExec() {
   const generation = viewRenderSequence;
-  const [kpis, missions, alerts, history] = await Promise.all([
+  const selectedAccount=state.accountId;
+  const [kpis, missions, alerts, history, realized] = await Promise.all([
     api('kpi.dashboard', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
     api('alerts.list', {}).catch((e) => ({ error: e.message })),
     api('kpi.history', { ...(state.accountId ? { accountId: state.accountId } : {}), days: 30 }).catch((e) => ({ error: e.message })),
+    selectedAccount?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
   ]);
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   if (generation === viewRenderSequence) state.historyPoints = historyPoints;
@@ -222,6 +225,7 @@ async function viewExec() {
   const k = kpis && !kpis.error ? (kpis.totals || kpis) : null;
   const kpiCards = [
     ['Receita líquida', k ? brl(k.netRevenueCents) : '—', 'netRevenue'],
+    ['Lucro realizado registrado', realized&&!realized.error ? brl(realized.realizedProfitCents) : '—', null],
     ['Lucro de contribuição', k ? brl(k.contributionCents) : '—', null],
     ['Margem de contribuição', k ? pct(k.contributionMarginPct) : '—', null],
     ['GMV', k ? brl(k.gmvCents) : '—', 'gmv'],
@@ -243,6 +247,7 @@ async function viewExec() {
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
+    ${card('Lucro realizado — evidências', !selectedAccount?'<p class="muted">Selecione uma loja para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
     ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
     ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
