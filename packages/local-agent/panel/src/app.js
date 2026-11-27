@@ -1407,7 +1407,7 @@ async function viewRevenueRadar() {
   const accountId = state.accountId;
   if (!accountId) return card('Radar de vendas perdidas', '<p>Selecione uma loja para comparar seus anúncios.</p>');
   const [primaryFrom,primaryTo,comparisonFrom,comparisonTo] = comparisonPreset('7');
-  const result = await api('kpi.compare.detail', { accountId, groupBy:'listing', primaryFrom,primaryTo,comparisonFrom,comparisonTo });
+  const result = await api('kpi.compare.detail', { accountId, groupBy:'listing',sourceWindows:true, primaryFrom,primaryTo,comparisonFrom,comparisonTo });
   const rows = Array.isArray(result?.rows) ? result.rows : [];
   const comparable = rows.filter(r => r.accountId === accountId && r.comparisonQuality?.comparable === true && Number.isSafeInteger(r.revenueDrivers?.deltaCents));
   const losses = comparable.filter(r => r.revenueDrivers.observedDeclineCents > 0).sort((a,b) => b.revenueDrivers.observedDeclineCents - a.revenueDrivers.observedDeclineCents);
@@ -1425,7 +1425,7 @@ async function viewRevenueRadar() {
   const details = table(['Anúncio','GMV anterior','GMV atual','Queda observada','Tráfego','Conversão','Ticket médio','Investigar primeiro'], losses.slice(0,100).map(r=>{
     const g=r.revenueDrivers,d=g.drivers;
     return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+brl(r.previous.metrics.gmv*100)+'</td><td>'+brl(r.current.metrics.gmv*100)+'</td><td>'+format(g.observedDeclineCents)+'</td><td>'+format(d?.trafficCents)+'</td><td>'+format(d?.conversionCents)+'</td><td>'+format(d?.ticketCents)+'</td><td>'+esc(investigations(d))+'</td></tr>';
-  }), comparable.length ? 'Nenhuma queda observada entre os anúncios comparáveis.' : 'Nenhum anúncio com evidência suficiente. Capture períodos comerciais explícitos e equivalentes.');
+  }), comparable.length ? 'Nenhuma queda observada entre os anúncios comparáveis.' : 'Nenhum anúncio com evidência suficiente. Na extensão, capture os dois períodos comerciais encerrados e com os mesmos filtros.');
   return card('Radar de vendas perdidas — diagnóstico histórico',summary+details+'<p class="muted small">A decomposição usa GMV = visitas × pedidos/visitas × GMV/pedidos e a média das seis ordens de substituição. Contribuições positivas compensam negativas; não há inferência causal. Sem denominadores positivos, somente a queda total é exibida.</p><button class="btn" data-act="nav" data-view="compare">Comparar outros períodos</button>');
 }
 
@@ -1433,7 +1433,7 @@ async function viewGrowthOpportunities() {
   const accountId = state.accountId;
   if (!accountId) return card('Oportunidades de crescimento', '<p>Selecione uma loja para analisar seus anúncios.</p>');
   const [primaryFrom,primaryTo,comparisonFrom,comparisonTo] = comparisonPreset('7');
-  const result = await api('kpi.compare.detail', { accountId,groupBy:'listing',primaryFrom,primaryTo,comparisonFrom,comparisonTo });
+  const result = await api('kpi.compare.detail', { accountId,groupBy:'listing',sourceWindows:true,primaryFrom,primaryTo,comparisonFrom,comparisonTo });
   const rows = (Array.isArray(result?.rows)?result.rows:[]).filter(r=>r.accountId===accountId);
   const eligible = rows.filter(r=>r.comparisonQuality?.comparable===true && r.growthOpportunity);
   const candidates = eligible.filter(r=>r.growthOpportunity.best).sort((a,b)=>b.growthOpportunity.best.incrementalGmvCents-a.growthOpportunity.best.incrementalGmvCents);
@@ -1441,7 +1441,7 @@ async function viewGrowthOpportunities() {
   const scenarioRows = eligible.flatMap(r=>(r.growthOpportunity.scenarios||[]).map(s=>({r,s})));
   const type = k=>k==='TRAFFIC'?'Tráfego':'Conversão';
   const format = n=>Number.isSafeInteger(n)?brl(n):'—';
-  const period = '<p>Períodos UTC: '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+'.</p>';
+  const period = '<p>Janelas comerciais encerradas (UTC): '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+'.</p>';
   const intro = period+'<p class="muted small">Cenários de recuperação de 25%, 50% e 100% da diferença para o desempenho anterior do próprio anúncio; ticket atual constante, no mesmo intervalo de duração. Exige 100 visitas e 10 pedidos em cada período. Não é previsão nem lucro realizado. Estoque observado é histórico, não garantia de disponibilidade atual.</p>';
   const radar = table(['Anúncio','Alavanca','Pedidos adicionais','GMV adicional simulado','Estoque observado','Sinal'],candidates.slice(0,100).map(r=>{
     const g=r.growthOpportunity,s=g.best;
