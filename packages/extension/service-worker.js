@@ -512,9 +512,9 @@ async function verifyCampaignInFreshTab(tab, grant, proposalId) {
     verificationTab = await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
     if (!Number.isInteger(verificationTab.id)) return null;
     await waitForTabComplete(verificationTab.id,tab.url,8000);
-    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef});
+    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef,changeKind:grant.targetStatus?'STATUS':'BUDGET'});
     if (!info?.ok || info.accountId!==grant.accountId || info.campaignRef!==grant.campaignRef ||
-        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents) return null;
+        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents || info.campaignStatus!==grant.targetStatus) return null;
     const {ok,...context}=info;
     const verified=await callService('campaign.budget.verify',{...context,proposalId});
     return verified?.ok && verified.result?.status==='UI_READBACK_MATCHED' ? verified : null;
@@ -533,28 +533,75 @@ async function verifyVariationInFreshTab(tab, grant, proposalId) {
     verificationTab=await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
     if (!Number.isInteger(verificationTab.id)) return null;
     await waitForTabComplete(verificationTab.id,tab.url,8000);
-    const observed=await chrome.tabs.sendMessage(verificationTab.id,{
-      type:'MI_LISTING_OPERATION_CONTEXT',action:'EDIT_VARIATION',externalListingId,variationId,
-    });
-    if (!observed?.ok||observed.action!=='EDIT_VARIATION'||observed.accountId!==accountId||
-        observed.externalListingId!==externalListingId||observed.variationId!==variationId||
-        observed.sourcePath!==sourcePath||!observed.documentNonce||observed.documentNonce===documentNonce||
-        observed.variationLabel!==name||observed.beforePriceCents!==priceCents||observed.beforeStock!==stock) return null;
+    const creating=grant.context.action==='CREATE_VARIATION';
+    let detail;
+    if(creating){
+      const response=await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAPTURE_REQUEST'});
+      const snapshot=response?.snapshot;
+      if(!response?.ok||snapshot?.marketplace!=='mercado_livre'||snapshot.accountId!==accountId||
+          snapshot.url!==tab.url||snapshot.pageKind!=='seller_listing_edit'||snapshot.coverageWarnings?.length||
+          !Array.isArray(snapshot.details))return null;
+      const matches=snapshot.details.filter(row=>row.kind==='LISTING_VARIANT'&&row.parentExternalId===externalListingId&&
+        row.label===grant.plan.option&&typeof row.metrics?.price==='number'&&Math.round(row.metrics.price*100)===priceCents&&row.metrics.stockAvailable===stock);
+      if(matches.length!==1)return null;
+      detail=matches[0];
+    }else{
+      const observed=await chrome.tabs.sendMessage(verificationTab.id,{
+        type:'MI_LISTING_OPERATION_CONTEXT',action:'EDIT_VARIATION',externalListingId,variationId,
+      });
+      if (!observed?.ok||observed.action!=='EDIT_VARIATION'||observed.accountId!==accountId||
+          observed.externalListingId!==externalListingId||observed.variationId!==variationId||
+          observed.sourcePath!==sourcePath||!observed.documentNonce||observed.documentNonce===documentNonce||
+          observed.variationLabel!==name||observed.beforePriceCents!==priceCents||observed.beforeStock!==stock) return null;
+      detail={kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:observed.variationLabel,
+        metrics:{price:observed.beforePriceCents/100,stockAvailable:observed.beforeStock},
+        evidence:{price:'Preço no editor: R$ '+(observed.beforePriceCents/100).toFixed(2),stockAvailable:'Estoque no editor: '+observed.beforeStock}};
+    }
     const now=new Date().toISOString();
     const capture=await callService('capture.ingest',{
       accountId,marketplace:'mercado_livre',pageKind:'seller_listing_edit',url:sourcePath,
-      sourceClass:'A_PRIMARY_UI',referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[],
-      details:[{kind:'LISTING_VARIANT',externalId:variationId,parentExternalId:externalListingId,label:observed.variationLabel,
-        metrics:{price:observed.beforePriceCents/100,stockAvailable:observed.beforeStock},
-        evidence:{price:'Preço no editor: R$ '+(observed.beforePriceCents/100).toFixed(2),stockAvailable:'Estoque no editor: '+observed.beforeStock}}],
+      sourceClass:'A_PRIMARY_UI',referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[],details:[detail],
     });
     if (!captureAccepted(capture)||capture.result?.detailRowsIngested!==1) return null;
-    const verified=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:variationId});
-    return verified?.ok&&verified.result?.status==='UI_READBACK_MATCHED'?verified:null;
+    const verified=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:detail.externalId});
+    return verified?.ok&&verified.result?.status===(creating?'CANDIDATE_OBSERVED':'UI_READBACK_MATCHED')?verified:null;
   } catch {
     return null;
   } finally {
     if (Number.isInteger(verificationTab?.id)) await chrome.tabs.remove(verificationTab.id).catch(()=>{});
+  }
+}
+
+async function observeDuplicateInFreshTab(tab, grant, proposalId, baseline) {
+  const {accountId,sourcePath,externalListingId}=grant.context;
+  const {originalTitle}=grant.plan;
+  if(!baseline?.listingIds?.includes(externalListingId)||typeof baseline.filterSignature!=='string'||!originalTitle)return null;
+  const before=new Set(baseline.listingIds);
+  let verificationTab;
+  try{
+    verificationTab=await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
+    if(!Number.isInteger(verificationTab.id))return null;
+    await waitForTabComplete(verificationTab.id,tab.url,8000);
+    const response=await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAPTURE_REQUEST'});
+    const snapshot=response?.snapshot;
+    if(!response?.ok||snapshot?.marketplace!=='mercado_livre'||snapshot.accountId!==accountId||
+        snapshot.url!==tab.url||snapshot.pageKind!=='seller_listings'||snapshot.coverageWarnings?.length||
+        snapshot.filterSignature!==baseline.filterSignature||snapshot.spaPage!==baseline.spaPage||
+        !Array.isArray(snapshot.listings)||!snapshot.listings.some(row=>row.listingId===externalListingId&&row.title===originalTitle))return null;
+    const candidates=snapshot.listings.filter(row=>/^MLB-?\d{5,}$/i.test(row.listingId)&&!before.has(row.listingId)&&row.title===originalTitle);
+    if(candidates.length!==1)return null;
+    const listing=candidates[0],now=new Date().toISOString();
+    const capture=await callService('capture.ingest',{
+      accountId,marketplace:'mercado_livre',pageKind:'seller_listings',url:sourcePath,sourceClass:'A_PRIMARY_UI',
+      referenceAt:now,collectedAt:now,method:'content_script_dom',listings:[listing],
+    });
+    if(!captureAccepted(capture)||capture.result?.listingsIngested!==1)return null;
+    const candidate=await callService('listing.browser.verify',{accountId,proposalId,observedExternalId:listing.listingId});
+    return candidate?.ok&&candidate.result?.status==='CANDIDATE_OBSERVED'?candidate:null;
+  }catch{
+    return null;
+  }finally{
+    if(Number.isInteger(verificationTab?.id))await chrome.tabs.remove(verificationTab.id).catch(()=>{});
   }
 }
 
@@ -1316,8 +1363,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
         const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
         const recorded=await callService('listing.browser.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
-        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true&&input.action==='EDIT_VARIATION'
-          ? await verifyVariationInFreshTab(tab,grant,input.proposalId)
+        const verified=recorded?.ok&&outcome==='NEEDS_VERIFICATION'&&result?.clicked===true
+          ? input.action==='DUPLICATE'
+            ? await observeDuplicateInFreshTab(tab,grant,input.proposalId,result.baseline)
+            : await verifyVariationInFreshTab(tab,grant,input.proposalId)
           : null;
         sendResponse(verified??recorded);return;
       }
@@ -1326,7 +1375,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if(typeof input.proposalId!=='string'||typeof input.campaignRef!=='string'||input.confirmed!==true)throw Error('proposta, campanha e confirmação explícitas necessárias');
         const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
         if(!tab?.id||marketplaceOf(tab.url)!=='mercado_livre')throw Error('abra a publicidade do Mercado Livre');
-        const info=await chrome.tabs.sendMessage(tab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:input.campaignRef});
+        const info=await chrome.tabs.sendMessage(tab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:input.campaignRef,changeKind:input.changeKind});
         if(!info?.ok)throw Error(info?.error||'contexto não reconhecido');
         const {ok,...ctx}=info;
         const payload={...ctx,proposalId:input.proposalId};

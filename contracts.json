@@ -428,6 +428,7 @@
     "sourcePath": "HTTPS public seller route",
     "documentNonce": "uuid",
     "budgetCents": "integer",
+    "campaignStatus": "ACTIVE|PAUSED, optional",
     "confirmed": true
   },
   "campaign.budget.result": {
@@ -442,7 +443,8 @@
     "campaignRef": "string",
     "sourcePath": "string",
     "documentNonce": "new uuid",
-    "budgetCents": "integer"
+    "budgetCents": "integer",
+    "campaignStatus": "ACTIVE|PAUSED, optional"
   },
   "campaign.budget.list": {
     "accountId": "string"

@@ -514,30 +514,67 @@
     budgetDocumentNonce??=crypto.randomUUID();
     return {field,button:buttons[0],accountId:identity.accountId,campaignRef,sourcePath:location.origin+location.pathname,documentNonce:budgetDocumentNonce,budgetCents:Math.round(Number(raw)*100)};
   }
-  function budgetPublicContext(campaignRef){
-    const {field,button,...ctx}=campaignBudgetContext(campaignRef);return ctx;
+  function campaignStatusContext(campaignRef){
+    const budget=campaignBudgetContext(campaignRef);
+    const row=budget.field.closest('[data-campaign-id]');
+    if(!row||row.getAttribute('data-campaign-id')!==campaignRef)throw Error('campanha não comprovada');
+    const fields=Array.from(row.querySelectorAll('select')).filter(el=>el.closest('[data-campaign-id]')===row&&
+      window.MI_DOM.isVisible(el)&&isEditableVisible(el)&&!el.multiple&&!el.hasAttribute('form')&&
+      /^(status da campanha|estado da campanha|campaign status)$/.test(operationLabel(el)));
+    if(fields.length!==1)throw Error('seletor dedicado ao estado da campanha não encontrado');
+    const field=fields[0],form=field.form;
+    if(!form||field.closest('form')!==form||!row.contains(form)||form===budget.field.form||
+        new URL(form.action||location.href,location.href).origin!==location.origin||!['_self',''].includes(form.target)||
+        form.querySelector('[contenteditable]:not([contenteditable="false"])'))throw Error('formulário dedicado de status não comprovado');
+    const fieldsInForm=Array.from(form.elements).filter(el=>!['hidden','button','submit','reset'].includes(el.type));
+    if(fieldsInForm.length!==1||fieldsInForm[0]!==field)throw Error('formulário de status contém outros campos');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&
+      el.form===form&&!['formaction','form','formtarget','formmethod'].some(attr=>el.hasAttribute(attr))&&
+      /^(salvar|salvar alteracoes|atualizar status|save|save changes|update status)$/.test(operationLabel(el)));
+    const options=Array.from(field.options);
+    const active=options.filter(el=>!el.disabled&&/^(ativo|ativa|active)$/.test(operationLabel(el)));
+    const paused=options.filter(el=>!el.disabled&&/^(pausado|pausada|paused)$/.test(operationLabel(el)));
+    if(buttons.length!==1||active.length!==1||paused.length!==1||active[0].value===paused[0].value)throw Error('controles de status ambíguos');
+    const statusValues={ACTIVE:active[0].value,PAUSED:paused[0].value};
+    const campaignStatus=Object.keys(statusValues).find(status=>statusValues[status]===field.value);
+    if(!campaignStatus)throw Error('estado da campanha não reconhecido');
+    return {...budget,field,button:buttons[0],campaignStatus,statusValues};
+  }
+  function budgetPublicContext(campaignRef,changeKind){
+    const {field,button,statusValues,...ctx}=changeKind==='STATUS'?campaignStatusContext(campaignRef):campaignBudgetContext(campaignRef);
+    return ctx;
   }
   async function applyCampaignBudget(grant){
     let touched=false;
     try{
       if(!grant||typeof grant.id!=='string'||consumedBudgetGrants.has(grant.id)||consumedBudgetGrants.size>=100)throw Error('autorização já utilizada ou limite atingido');
       consumedBudgetGrants.add(grant.id);
-      const ctx=campaignBudgetContext(grant.campaignRef);
+      const changingStatus=grant.targetStatus!==undefined;
+      const read=()=>changingStatus?campaignStatusContext(grant.campaignRef):campaignBudgetContext(grant.campaignRef);
+      const ctx=read();
       const same=c=>c.accountId===grant.accountId&&c.sourcePath===grant.sourcePath&&c.documentNonce===grant.documentNonce&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
-      if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||!Number.isSafeInteger(grant.targetCents)||grant.targetCents<=0||grant.targetCents>100000000||grant.beforeCents===grant.targetCents)throw Error('contexto ou orçamento mudou');
-      if(!window.confirm('Campanha '+grant.campaignRef+'\nOrçamento diário atual: R$ '+(grant.beforeCents/100).toFixed(2)+'\nNovo orçamento diário: R$ '+(grant.targetCents/100).toFixed(2)+'\nConfirma alterar e salvar agora?'))return {outcome:'CANCELLED',message:'cancelado antes de editar'};
-      const again=campaignBudgetContext(grant.campaignRef);
-      if(!same(again)||again.field!==ctx.field||again.button!==ctx.button||again.budgetCents!==grant.beforeCents)throw Error('contexto mudou antes da edição');
-      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+      const validBudget=Number.isSafeInteger(grant.targetCents)&&grant.targetCents>0&&grant.targetCents<=100000000;
+      const validChange=changingStatus?['ACTIVE','PAUSED'].includes(grant.targetStatus)&&['ACTIVE','PAUSED'].includes(grant.beforeStatus)&&
+        grant.beforeStatus!==grant.targetStatus&&grant.beforeCents===grant.targetCents:grant.beforeCents!==grant.targetCents;
+      if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||ctx.campaignStatus!==grant.beforeStatus||!validBudget||!validChange)throw Error('contexto ou alteração aprovada diverge');
+      const description=changingStatus
+        ? (grant.targetStatus==='PAUSED'?'Pausar':'Reativar')+' a campanha. Orçamento diário: R$ '+(grant.targetCents/100).toFixed(2)
+        : 'Orçamento diário atual: R$ '+(grant.beforeCents/100).toFixed(2)+'\nNovo orçamento diário: R$ '+(grant.targetCents/100).toFixed(2);
+      if(!window.confirm('Campanha '+grant.campaignRef+'\n'+description+'\nConfirma alterar e salvar agora?'))return {outcome:'CANCELLED',message:'cancelado antes de editar'};
+      const again=read();
+      if(!same(again)||again.field!==ctx.field||again.button!==ctx.button||again.budgetCents!==grant.beforeCents||again.campaignStatus!==grant.beforeStatus||
+          (changingStatus&&again.statusValues[grant.targetStatus]!==ctx.statusValues[grant.targetStatus]))throw Error('contexto mudou antes da edição');
+      const prototype=changingStatus?HTMLSelectElement.prototype:HTMLInputElement.prototype;
+      const setter=Object.getOwnPropertyDescriptor(prototype,'value')?.set;
       if(!setter)throw Error('campo não oferece setter nativo');
       touched=true;
-      setter.call(again.field,(grant.targetCents/100).toFixed(2));
+      setter.call(again.field,changingStatus?again.statusValues[grant.targetStatus]:(grant.targetCents/100).toFixed(2));
       again.field.dispatchEvent(new Event('input',{bubbles:true}));again.field.dispatchEvent(new Event('change',{bubbles:true}));
       await new Promise(resolve=>setTimeout(resolve,300));
-      const ready=campaignBudgetContext(grant.campaignRef);
-      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
+      const ready=read();
+      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||ready.campaignStatus!==grant.targetStatus||!ready.field.checkValidity()||ready.button.disabled||ready.button.getAttribute('aria-disabled')==='true')throw Error('valor ou controle não permaneceu verificável; revise manualmente');
       ready.button.click();
-      return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de salvar acionado. Confira o orçamento antes de qualquer nova tentativa.'};
+      return {outcome:'NEEDS_VERIFICATION',clicked:true,message:'controle de salvar acionado. Confira a campanha antes de qualquer nova tentativa.'};
     }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
   }
 
@@ -621,8 +658,17 @@
       const again=listingOperationContext(g.action,g.externalListingId,g.variationId);
       if(!baselineMatches(again)||again.button!==initial.button||Object.keys(initial.fields).some(k=>again.fields[k]!==initial.fields[k]))throw Error('formulário mudou antes da ação');
       if(g.action==='DUPLICATE'){
+        const before=captureListingList();
+        const filters=window.MI_DOM.collectionFilterState?.(document);
+        const warnings=window.MI_DOM.collectionCoverage?.(document)??[];
+        const sourceVisible=before.listings.some(row=>row.listingId===g.externalListingId&&row.title===p.originalTitle);
+        const baseline=sourceVisible&&before.accountId===g.accountId&&before.listings.length<MAX_LISTINGS&&
+          filters&&typeof filters.signature==='string'&&!filters.warnings.length&&!warnings.length
+          ? {listingIds:before.listings.map(row=>row.listingId),filterSignature:filters.signature,
+            spaPage:window.MI_DOM.spaPaginationState?.(document)?.page}
+          : null;
         touched=true;again.button.click();
-        return {outcome:'NEEDS_VERIFICATION',message:'controle de duplicação acionado; revise eventual diálogo e capture o novo anúncio. Não repetir automaticamente.'};
+        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
       }
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
       if(!setter)throw Error('setter nativo ausente');
@@ -755,7 +801,7 @@
       applyListingOperation(message.grant).then(sendResponse).catch(error=>sendResponse({outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)}));return true;
     }
     if(message?.type==='MI_CAMPAIGN_BUDGET_CONTEXT'){
-      try{sendResponse({ok:true,...budgetPublicContext(message.campaignRef)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
+      try{sendResponse({ok:true,...budgetPublicContext(message.campaignRef,message.changeKind)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
       return false;
     }
     if(message?.type==='MI_CAMPAIGN_BUDGET_APPLY'){

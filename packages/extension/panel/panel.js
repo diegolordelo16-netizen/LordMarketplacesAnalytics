@@ -543,7 +543,7 @@ async function listingOperationApply(){
   if(listingOperationBusy)return;
   const proposalId=$('listing-op-proposal').value.trim(),externalListingId=$('listing-op-external').value.trim(),action=$('listing-op-action').value,variationId=$('listing-op-variation').value.trim(),out=$('listing-op-out');
   if(!proposalId||!externalListingId||(action==='EDIT_VARIATION'&&!variationId)||(action!=='EDIT_VARIATION'&&variationId)){out.textContent='Informe proposta, anúncio e ID de variação somente para edição.';return;}
-  if(!window.confirm('Solicitar uma execução única da proposta aprovada? Confira a loja, o anúncio e os dados do formulário.'+(action==='EDIT_VARIATION'?' A extensão tentará conferir a edição em uma nova aba.':'')))return;
+  if(!window.confirm('Solicitar uma execução única da proposta aprovada? Confira a loja, o anúncio e os dados do formulário.'+' A extensão tentará conferir o resultado em uma nova aba.'))return;
   listingOperationBusy=true;$('listing-op-apply').disabled=true;
   try{
     const response=await call('listing.browser.apply',{proposalId,externalListingId,action,variationId:variationId||undefined,confirmed:true});
@@ -559,7 +559,7 @@ async function budgetAction(action){
   if(!window.confirm(action==='apply'?'Solicitar uma execução única da proposta aprovada? A extensão tentará conferir o valor em uma nova aba da mesma página.':'A página foi recarregada e corresponde à mesma campanha?'))return;
   budgetBusy=true;$('budget-apply').disabled=true;$('budget-verify').disabled=true;
   try{
-    const response=await call('campaign.browser.'+action,{proposalId,campaignRef,confirmed:true});
+    const response=await call('campaign.browser.'+action,{proposalId,campaignRef,changeKind:$('campaign-setting').value,confirmed:true});
     out.textContent=response?.ok?JSON.stringify(response.result):response?.error?.message||'Operação recusada. Não repetir sem conferir.';
   }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
   finally{budgetBusy=false;$('budget-apply').disabled=false;$('budget-verify').disabled=false;}
