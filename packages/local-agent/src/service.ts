@@ -2574,9 +2574,22 @@ export class LocalService {
     this.register('finance.realized.summary', (payload) => {
       const i = z.object({ accountId: z.string(), periodStart: z.string().datetime().optional(), periodEnd: z.string().datetime().optional() }).parse(payload ?? {});
       const rows = db.rows<Record<string, unknown>>(`SELECT * FROM realized_profit_snapshots WHERE account_id=? AND (? IS NULL OR period_start>=?) AND (? IS NULL OR period_end<=?)`, i.accountId, i.periodStart ?? null, i.periodStart ?? null, i.periodEnd ?? null, i.periodEnd ?? null);
+      if(i.periodStart&&i.periodEnd&&Date.parse(i.periodStart)>Date.parse(i.periodEnd))throw new Error('intervalo de datas inválido');
+      const invalidWindow=rows.some(row=>!Number.isFinite(Date.parse(String(row.period_start)))||!Number.isFinite(Date.parse(String(row.period_end)))||Date.parse(String(row.period_start))>Date.parse(String(row.period_end)));
+      const byEntity=new Map<string,Array<Record<string,unknown>>>();
+      for(const row of rows){
+        const key=row.listing_id==null?'ACCOUNT':'LISTING:'+String(row.listing_id);
+        const list=byEntity.get(key)??[];list.push(row);byEntity.set(key,list);
+      }
+      const mixedScope=byEntity.has('ACCOUNT')&&byEntity.size>1;
+      const overlap=[...byEntity.values()].some(list=>{
+        const sorted=[...list].sort((a,b)=>Date.parse(String(a.period_start))-Date.parse(String(b.period_start)));
+        return sorted.some((row,index)=>index>0&&Date.parse(String(row.period_start))<=Date.parse(String(sorted[index-1]?.period_end)));
+      });
+      const conflict=invalidWindow||mixedScope||overlap;
       const total = (field: string) => rows.reduce((sum, row) => sum + Number(row[field] ?? 0), 0);
       const realizedProfitCents = total('net_revenue_cents') - total('product_cost_cents') - total('packaging_cents') - total('shipping_cents') - total('marketplace_fees_cents') - total('taxes_cents') - total('ad_spend_cents') - total('refunds_cents') - total('return_logistics_cents') - total('cancellation_loss_cents') - total('other_costs_cents');
-      return { accountId: i.accountId, records: rows.length, realizedProfitCents, netRevenueCents: total('net_revenue_cents'), sourceClasses: [...new Set(rows.map((r) => String(r.source_class)))], confidence: rows.length ? 'SOURCE_CLASS_DEPENDENT' : 'NO_DATA', missingVsEstimate: rows.length === 0 };
+      return { accountId: i.accountId, records: rows.length, realizedProfitCents:rows.length&&!conflict?realizedProfitCents:null, netRevenueCents:rows.length&&!conflict?total('net_revenue_cents'):null, sourceClasses: [...new Set(rows.map((r) => String(r.source_class)))], confidence:conflict?'CONFLICTING_RECORDS':rows.length?'SOURCE_CLASS_DEPENDENT':'NO_DATA', missingVsEstimate: rows.length === 0, scope:!rows.length?'NONE':mixedScope?'MIXED':byEntity.has('ACCOUNT')?'ACCOUNT':'OBSERVED_LISTINGS', overlappingPeriods:overlap, mixedScope, coverageVerified:false };
     });
 
     this.register('competitor.evidence.record', (payload, auth) => {
