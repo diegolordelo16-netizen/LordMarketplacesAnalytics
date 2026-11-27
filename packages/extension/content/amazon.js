@@ -148,7 +148,7 @@
       ...visibleAccountIdentity(),
       url: location.href,
       listings,
-      customerVoice: window.MI_DOM.visibleCustomerVoice(document, pageKind),
+      customerVoice: window.MI_DOM.visibleCustomerVoice(document, pageKind, 'amazon'),
       evidence,
       missing: pageKind === 'seller_listings' ? ['sku_or_asin', 'title', 'price', 'stockAvailable'].filter((key) => {
         if (key === 'sku_or_asin') return listings.length === 0;

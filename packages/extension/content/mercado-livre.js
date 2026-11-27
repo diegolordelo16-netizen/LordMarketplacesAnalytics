@@ -103,7 +103,7 @@
   }
 
   function visibleCustomerVoice(pageKind) {
-    return window.MI_DOM.visibleCustomerVoice(document, pageKind);
+    return window.MI_DOM.visibleCustomerVoice(document, pageKind, 'mercado_livre');
   }
 
   const LABELS = {

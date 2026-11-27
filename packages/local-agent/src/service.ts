@@ -196,6 +196,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'sync.claimScheduled': 'execute_task',
   'sync.claimBrowserRequest': 'execute_task',
   'voc.ingestBatch': 'manage_market_intelligence',
+  'voc.items': 'view_reports',
   'finance.realized.upsert': 'manage_financial_limits',
   'finance.realized.list': 'view_reports',
   'finance.realized.summary': 'view_reports',
@@ -2064,6 +2065,7 @@ export class LocalService {
         sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']).default('A_PRIMARY_UI'),
         items: z.array(z.object({
           listingId: z.string().nullable().optional(),
+          externalListingId:z.string().trim().min(1).max(200).nullable().optional(),
           kind: z.enum(['REVIEW','QUESTION','COMPLAINT','RETURN_REASON','MESSAGE']),
           text: z.string().trim().min(3).max(5000),
           rating: z.number().int().min(1).max(5).nullable().optional(),
@@ -2079,25 +2081,40 @@ export class LocalService {
         if (!db.row('SELECT id FROM listings WHERE id=? AND account_id=?', listingId, i.accountId)) throw new Error(`anúncio ${listingId} não pertence à conta selecionada`);
       }
       const inserted: string[] = [];
+      let linked=0,unresolved=0;
       const duplicates: string[] = [];
       db.transaction(() => {
         for (const item of i.items) {
           const externalRef = item.externalRef ?? null;
+          const resolved=item.externalListingId?db.row<{id:string}>('SELECT id FROM listings WHERE account_id=? AND external_id=?',i.accountId,item.externalListingId)?.id:undefined;
+          if(item.listingId&&item.externalListingId&&item.listingId!==resolved)throw new Error('identificadores de anúncio divergentes');
+          const listingId=item.listingId??resolved??null;
           if (externalRef) {
-            const existing = db.row<{ id: string }>('SELECT id FROM customer_voice_items WHERE account_id=? AND external_ref=? AND kind=? LIMIT 1', i.accountId, externalRef, item.kind);
-            if (existing) { duplicates.push(existing.id); continue; }
+            const existing = db.row<{ id: string;listing_id:string|null;external_listing_id:string|null }>('SELECT id,listing_id,external_listing_id FROM customer_voice_items WHERE account_id=? AND external_ref=? AND kind=? LIMIT 1', i.accountId, externalRef, item.kind);
+            if (existing) {
+              if((existing.listing_id&&listingId&&existing.listing_id!==listingId)||(existing.external_listing_id&&item.externalListingId&&existing.external_listing_id!==item.externalListingId))throw new Error('feedback já associado a outro anúncio');
+              db.db.prepare('UPDATE customer_voice_items SET listing_id=COALESCE(listing_id,?),external_listing_id=COALESCE(external_listing_id,?) WHERE id=? AND account_id=?').run(listingId,item.externalListingId??null,existing.id,i.accountId);
+              duplicates.push(existing.id);continue;
+            }
           }
           const id = randomUUID();
           const redacted = redactPII(item.text);
-          db.db.prepare(`INSERT INTO customer_voice_items (id,account_id,listing_id,kind,source_class,observed_at,text_redacted,rating,verified_purchase,external_ref)
-                         VALUES (?,?,?,?,?,?,?,?,0,?)`)
-            .run(id, i.accountId, item.listingId ?? null, item.kind, i.sourceClass, item.observedAt ?? nowIso(), redacted, item.rating ?? null, externalRef);
+          db.db.prepare(`INSERT INTO customer_voice_items (id,account_id,listing_id,kind,source_class,observed_at,text_redacted,rating,verified_purchase,external_ref,external_listing_id)
+                         VALUES (?,?,?,?,?,?,?,?,0,?,?)`)
+            .run(id, i.accountId, listingId, item.kind, i.sourceClass, item.observedAt ?? nowIso(), redacted, item.rating ?? null, externalRef,item.externalListingId??null);
+          if(listingId)linked++;else if(item.externalListingId)unresolved++;
           inserted.push(id);
         }
       });
       this.audit(auth, 'VOC_INGEST_BATCH', 'customer_voice_item', null, 'OK', `${inserted.length} inseridos; ${duplicates.length} duplicados ignorados`);
-      return { ok: true, inserted: inserted.length, duplicates: duplicates.length, ids: inserted, duplicateIds: duplicates, piiRedacted: true };
+      return { ok: true, inserted: inserted.length, duplicates: duplicates.length, ids: inserted, duplicateIds: duplicates, piiRedacted: true, linked, unresolved };
       });
+    });
+
+    this.register('voc.items',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(50)}).parse(payload);
+      return db.rows(`SELECT v.id,v.kind,v.text_redacted,v.rating,v.observed_at,v.external_listing_id,v.listing_id,l.external_id AS linked_external_id,l.title AS listing_title
+        FROM customer_voice_items v LEFT JOIN listings l ON l.id=v.listing_id AND l.account_id=v.account_id WHERE v.account_id=? ORDER BY v.observed_at DESC,v.id LIMIT ?`,i.accountId,i.limit);
     });
 
     this.register('sync.createAll', (payload, auth) => {

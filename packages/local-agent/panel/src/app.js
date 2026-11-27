@@ -554,6 +554,7 @@ async function viewPricing() {
 // ------------------------------------------------------------------ VOZ DO CLIENTE
 async function viewVoc() {
   const topics = state.accountId ? await api('voc.topics', { accountId: state.accountId }).catch(() => []) : [];
+  const items=state.accountId?await api('voc.items',{accountId:state.accountId,limit:100}):[];
   return card('Registrar item da voz do cliente', `
     <div class="form-grid">
       <label>Tipo <select id="voc-type">
@@ -565,6 +566,7 @@ async function viewVoc() {
     <div class="actions"><button class="btn primary" data-act="voc-add">Registrar</button></div>
     <p class="muted small">Dados pessoais são removidos antes do armazenamento.</p>`)
   + (state.accountId ? '' : '<div class="note warn">Selecione uma conta no topo para ver os temas detectados.</div>')
+  + card('Feedback capturado por anúncio',table(['Tipo','Anúncio','Vínculo','Nota','Texto','Data'],items.map(item=>`<tr><td>${esc(item.kind)}</td><td>${esc(item.linked_external_id||item.external_listing_id||'—')}${item.listing_title?`<div class="muted small">${esc(item.listing_title)}</div>`:''}</td><td>${item.listing_id?'Vinculado':item.external_listing_id?'Aguardando anúncio':'Sem identificação'}</td><td>${esc(item.rating??'—')}</td><td>${esc(item.text_redacted)}</td><td>${dt(item.observed_at)}</td></tr>`),'Nenhum feedback capturado.'))
   + card('Temas detectados', table(['Tema', 'Ocorrências', 'Sentimento', 'Impacto'],
     (topics || []).map((t) => `<tr><td>${esc(t.topic || t.theme)}</td><td>${num(t.count)}</td>
       <td>${esc(t.sentiment || '—')}</td><td>${esc(t.impact || '—')}</td></tr>`),

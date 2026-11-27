@@ -276,5 +276,9 @@
   "capture.details": {
     "payload": "accountId | kind? | limit?",
     "permission": "view_reports"
+  },
+  "voc.items": {
+    "payload": "accountId | limit?",
+    "permission": "view_reports"
   }
 }

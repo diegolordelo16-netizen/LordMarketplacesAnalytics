@@ -748,3 +748,20 @@ describe('tabelas e centavos visíveis',()=>{
     expect(window.MI_DOM.visibleMoneyParts(fraction)).toBeNull();
   });
 });
+
+
+describe('identidade do anúncio no feedback',()=>{
+  it('reconhece ID explícito e rejeita identidade ambígua',()=>{
+    class E{
+      constructor(public innerText:string,public attrs:Record<string,string>){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      closest(){return this}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const rows=[new E('Ótimo produto',{'data-review-id':'A','data-item-id':'MLB123456'}),new E('Boa compra',{'data-review-id':'B','data-item-id':'MLB123456','data-listing-id':'MLB999999'})];
+    expect(window.MI_DOM.visibleCustomerVoice({querySelectorAll:()=>rows},'seller_reputation','mercado_livre')).toEqual([{kind:'REVIEW',text:'Ótimo produto',externalRef:'A',externalListingId:'MLB123456'},{kind:'REVIEW',text:'Boa compra',externalRef:'B'}]);
+  });
+});

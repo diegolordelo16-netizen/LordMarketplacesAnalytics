@@ -136,6 +136,20 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('capture.ingest',{...base,pageKind:'seller_listings',captureKey:'e'.repeat(64),details:[campaign]})).ok).toBe(false);
   });
 
+  it('vincula feedback somente a anúncio da mesma conta e preserva ID externo pendente',async()=>{
+    seedImportAccount('acct-voc-link');seedImportAccount('acct-voc-other');
+    const at='2026-11-27T12:00:00.000Z';
+    const base={marketplace:'mercado_livre',accountId:'acct-voc-link',pageKind:'seller_listings',url:'https://vendedores.mercadolivre.com.br/anuncios',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom'};
+    expect((await call('capture.ingest',{...base,listings:[{listingId:'MLB123456',price:20}]})).ok).toBe(true);
+    const payload={accountId:base.accountId,items:[{kind:'REVIEW',text:'Produto excelente',externalRef:'R1',externalListingId:'MLB123456'},{kind:'QUESTION',text:'Tem estoque?',externalRef:'Q1',externalListingId:'MLB999999'}]};
+    expect((await call('voc.ingestBatch',payload)).result).toMatchObject({linked:1,unresolved:1});
+    const rows=(await call('voc.items',{accountId:base.accountId})).result as any[];
+    expect(rows.find(row=>row.kind==='REVIEW').linked_external_id).toBe('MLB123456');
+    expect(rows.find(row=>row.kind==='QUESTION').listing_id).toBeNull();
+    expect((await call('voc.items',{accountId:'acct-voc-other'})).result).toEqual([]);
+    expect((await call('voc.ingestBatch',{accountId:base.accountId,items:[{...payload.items[0],externalListingId:'MLB999999'}]})).ok).toBe(false);
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';

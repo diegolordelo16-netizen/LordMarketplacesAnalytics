@@ -144,7 +144,7 @@
   }
 
   /** Only explicit, visible text fields. Never use a static test-id as an item identity. */
-  function visibleCustomerVoice(root, pageKind) {
+  function visibleCustomerVoice(root, pageKind, marketplace) {
     const spec = {
       seller_questions: ['QUESTION','question-text','question-content','question-description'],
       seller_reputation: ['REVIEW','review-text','review-content','feedback-comment'],
@@ -165,7 +165,19 @@
       const key = ref ? 'id:' + ref : 'text:' + text;
       if (seen.has(key)) continue;
       seen.add(key);
-      items.push({ kind, text, ...(ref ? { externalRef: ref } : {}) });
+      // Only identifiers exposed on the feedback row itself. Never match by title or customer text.
+      const idAttrs=marketplace==='mercado_livre'?['data-item-id','data-listing-id']:marketplace==='shopee'?['data-product-id','data-item-id']:marketplace==='amazon'?['data-sku','data-asin']:[];
+      const ids=[];
+      for(const attr of idAttrs){
+        const value=row?.getAttribute(attr);
+        if(!value)continue;
+        if(marketplace==='mercado_livre'&&/^MLB-?\d{5,}$/i.test(value))ids.push(value.toUpperCase());
+        if(marketplace==='shopee'&&/^\d+$/.test(value))ids.push(value);
+        if(marketplace==='amazon'&&attr==='data-sku'&&/^[A-Za-z0-9_.:-]{1,180}$/.test(value))ids.push('SKU:'+value);
+        if(marketplace==='amazon'&&attr==='data-asin'&&!row?.getAttribute('data-sku')&&/^[A-Z0-9]{10}$/.test(value))ids.push(value);
+      }
+      const unique=[...new Set(ids)];
+      items.push({ kind, text, ...(ref ? { externalRef: ref } : {}), ...(unique.length===1?{externalListingId:unique[0]}:{}) });
     }
     return items;
   }

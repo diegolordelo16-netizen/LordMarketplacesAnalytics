@@ -69,7 +69,7 @@
   }
 
   function visibleCustomerVoice(pageKind) {
-    return window.MI_DOM.visibleCustomerVoice(document, pageKind);
+    return window.MI_DOM.visibleCustomerVoice(document, pageKind, 'shopee');
   }
 
   const LABELS = {
