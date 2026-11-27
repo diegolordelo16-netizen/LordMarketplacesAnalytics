@@ -286,7 +286,7 @@
     "permission": "view_reports"
   },
   "navigation.observe": {
-    "payload": "accountId | origin | route | pageKind | fromRoute?",
+    "payload": "accountId | origin | route | pageKind | fromRoute? | actionKind? (SPA_NEXT/FILTER_CHANGE)",
     "permission": "execute_task",
     "behavior": "Record only whitelisted structural routes for a verified active account; no raw DOM or query parameters."
   },
