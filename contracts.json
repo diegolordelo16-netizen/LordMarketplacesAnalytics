@@ -388,5 +388,14 @@
     "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
     "proposalId": "string",
     "method": "compatible before/after source windows following human-reported action; not remote verification or causality"
+  },
+  "ads.reconcile": {
+    "accountId": "string",
+    "snapshotId": "string",
+    "netAttributedRevenueCents": "integer >=0",
+    "costs": "all 9 non-Ads cost categories in cents",
+    "sourceReference": "string",
+    "confirmedSameScope": true,
+    "result": "reported attributed profit, not audited or incremental"
   }
 }
