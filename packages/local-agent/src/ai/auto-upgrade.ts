@@ -191,7 +191,7 @@ export class AutoUpgradeEngine {
     runner: (diff: string) => Promise<{ passed: boolean; output: string }>,
   ): Promise<{ passed: boolean; output: string; stagingPath: string }> {
     const row = this.db.db
-      .prepare('SELECT diff_text, module FROM auto_upgrade_proposals WHERE id = ? AND status IN ('PROPOSTO','TESTANDO')')
+      .prepare("SELECT diff_text, module FROM auto_upgrade_proposals WHERE id = ? AND status IN ('PROPOSTO','TESTANDO')")
       .get(proposalId) as { diff_text: string; module: string } | undefined;
     if (!row) throw new Error(`proposta inexistente: ${proposalId}`);
 
