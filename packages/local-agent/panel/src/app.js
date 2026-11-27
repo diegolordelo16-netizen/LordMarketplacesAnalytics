@@ -1821,6 +1821,7 @@ const ACTIONS = {
     renderView();
   },
   'compare-detail': async () => {
+    const generation=viewRenderSequence,originalHost=$('#compare-detail-out');
     const value = (id) => $(`#${id}`).value;
     const payload = {
       accountId: value('cmp-account') || undefined,
@@ -1832,11 +1833,17 @@ const ACTIONS = {
       comparisonFrom: value('cmp-previous-from'), comparisonTo: value('cmp-previous-to'),
     };
     const result = await run(() => api('kpi.compare.detail', payload), 'Comparação calculada a partir dos snapshots disponíveis.');
+    if(generation!==viewRenderSequence||originalHost!==$('#compare-detail-out')||!result)return;
     const rows = result?.rows || [];
     const delta = (n) => n == null ? '—' : `${n >= 0 ? '+' : ''}${num(n,1)}%`;
     const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação observada','Compatibilidade dos filtros','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${row.comparisonQuality?.comparable ? delta(row.verifiedDeltaPct.gmv)+' · cobertura não comprovada' : 'Não comprovada'}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
-    $('#compare-detail-out').innerHTML = `<p class="muted small">${esc(result?.method || '')}</p>${output}`;
-    initializeTables($('#compare-detail-out'));
+    const host=$('#compare-detail-out');
+    if(!host||!result)return;
+    const signals=rows.flatMap(row=>(row.diagnostics||[]).map(d=>({label:row.label,...d})));
+    const diagnostics=card('Diagnósticos de desempenho', '<p class="muted small">'+esc(result.diagnosticPolicy||'')+'</p>'+table(['Item','Indicador','Atual','Anterior','Sinal observado'],signals.map(d=>'<tr><td>'+esc(d.label)+'</td><td>'+esc(d.metric)+'</td><td>'+num(d.current,2)+'</td><td>'+num(d.previous,2)+'</td><td>'+esc(d.note)+'</td></tr>'),'Nenhum sinal com evidência suficiente. Isso não comprova ausência de problemas.'));
+    const campaigns=card('Campanhas para revisar',table(['Campanha','Marketplace','Investimento','Receita atribuída','Evidência'],(result.campaigns||[]).map(d=>'<tr><td>'+esc(d.label||d.campaignId)+'</td><td>'+esc(d.marketplace)+'</td><td>'+brl(d.spend*100)+'</td><td>'+brl(d.attributedRevenue*100)+'</td><td>'+esc(d.note)+' · '+dt(d.capturedAt)+'</td></tr>'),'Nenhuma campanha com sinal e período comprováveis. Não equivale a lucro confirmado.'));
+    host.innerHTML = `<p class="muted small">${esc(result.method || '')}</p>${output}${diagnostics}${campaigns}`;
+    initializeTables(host);
   },
 
   'task-recover-draft': async (d) => {
