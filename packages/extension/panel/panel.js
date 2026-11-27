@@ -605,6 +605,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     try{const r=await call('competitor.executePublicPlan',{accountId,ownProductId,kind,marketplaces,confirmed:true});out.textContent=r?.ok?JSON.stringify(r.result.outcomes):r?.error?.message||'Busca não concluída.';}
     finally{button.disabled=false;}
   });
+  async function scheduleAction(action){
+    const out=$('comp-schedule-out'),buttons=['comp-schedule-start','comp-schedule-stop','comp-schedule-status'].map($);
+    const accountId=$('comp-account').value,ownProductId=$('comp-product').value,kind=$('comp-kind').value,runs=Number($('comp-runs').value);
+    const marketplaces=[['comp-ml','mercado_livre'],['comp-shopee','shopee'],['comp-amazon','amazon']].filter(([id])=>$(id).checked).map(([,value])=>value);
+    if(action==='start'){
+      if(!accountId||!ownProductId||!marketplaces.length||!Number.isInteger(runs)||runs<1||runs>30){out.textContent='Selecione o produto e de 1 a 30 ciclos.';return;}
+      if(!confirm('Substituir o plano diário anterior por '+runs+' ciclo(s) de leitura pública, até três abas por dia?'))return;
+    }
+    buttons.forEach(b=>b.disabled=true);
+    try{
+      const r=await call('competitor.schedule.'+action,{accountId,ownProductId,kind,runs,marketplaces,confirmed:action==='start'});
+      if(!r?.ok){out.textContent=r?.error?.message||'Agendamento recusado.';return;}
+      const plan=r.result;
+      out.textContent=!plan?'Nenhum plano.':(plan.enabled?'Ativo':'Inativo')+' · ciclos restantes: '+(plan.remaining??0)+(plan.enabled&&plan.nextAt?' · próximo: '+new Date(plan.nextAt).toLocaleString('pt-BR'):'')+(plan.last?' · último: '+JSON.stringify(plan.last):'');
+    }catch(e){out.textContent=String(e?.message||e);}
+    finally{buttons.forEach(b=>b.disabled=false);}
+  }
+  $('comp-schedule-start').addEventListener('click',()=>void scheduleAction('start'));
+  $('comp-schedule-stop').addEventListener('click',()=>void scheduleAction('stop'));
+  $('comp-schedule-status').addEventListener('click',()=>void scheduleAction('status'));
   $('comp-account').addEventListener('change',()=>void compProducts());
   $('comp-capture').addEventListener('click',()=>void compCapture());
   void compAccounts();
