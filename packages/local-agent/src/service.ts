@@ -3095,7 +3095,9 @@ export class LocalService {
           variationId=created;
           db.db.prepare("UPDATE listing_api_executions SET variation_id=?,updated_at=? WHERE proposal_id=? AND status='DISPATCHED'")
             .run(variationId,nowIso(),i.proposalId);
-          verified=await api.matches(item.id,variationId,option,p.priceCents,p.stock);
+          const after=await api.readOwner(item.id,p.handle);
+          verified=after.sellerId===sellerId&&after.item.variations.filter(row=>row.id===variationId).length===1&&
+            await api.matches(item.id,variationId,option,p.priceCents,p.stock);
         }
       }catch{
         // Uma falha de transporte depois da reserva pode ter ocorrido após a gravação.
@@ -3123,7 +3125,8 @@ export class LocalService {
       if(sellerId!==execution.seller_id||item.id!==execution.item_id)throw Error('a conta ou o anúncio diverge da execução');
       const verified=execution.action==='REMOVE_VARIATION'
         ? 'removeVariationId' in p.option&&p.option.removeVariationId===execution.variation_id&&!item.variations.some(row=>row.id===execution.variation_id)
-        : !('removeVariationId' in p.option)&&await api.matches(item.id,execution.variation_id,p.option,p.priceCents,p.stock);
+        : !('removeVariationId' in p.option)&&item.variations.filter(row=>row.id===execution.variation_id).length===1&&
+          await api.matches(item.id,execution.variation_id,p.option,p.priceCents,p.stock);
       if(verified)db.transaction(()=>{
         db.db.prepare("UPDATE listing_api_executions SET status='REMOTE_VERIFIED',updated_at=? WHERE proposal_id=? AND status<>'REMOTE_VERIFIED'")
           .run(nowIso(),i.proposalId);
