@@ -370,3 +370,38 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   assert.equal((await apply('valid')).outcome,'NEEDS_VERIFICATION');assert.equal(field.value,'12.00');assert.equal(clicks,1);
   assert.equal((await apply('valid')).outcome,'FAILED');assert.equal(clicks,1);
 });
+
+test('variação simples e duplicação assistidas recusam ambiguidade e repetição',async()=>{
+  const src=readFileSync(new URL('../packages/extension/content/mercado-livre.js',import.meta.url),'utf8');
+  const snippet=src.slice(src.indexOf('let budgetDocumentNonce='),src.indexOf('async function publishApprovedChange'));
+  const listing='MLB1234567',editUrl='https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/'+listing,listUrl='https://vendedores.mercadolivre.com.br/vendas/anuncios';
+  let clicks=0,consent=true,ambiguous=false,kind='seller_listing_edit',accountId='store-a',challenge=false;
+  class Input{
+    constructor(label,type,value=''){this.label=label;this.type=type;this.raw=value;this.tagName='INPUT';}
+    get value(){return this.raw;}set value(v){this.raw=v;}
+    getAttribute(k){return k==='aria-label'?this.label:null;}
+    dispatchEvent(){}checkValidity(){return true;}
+  }
+  const fields=[new Input('Nome da variação','text'),new Input('Opção da variação','text'),new Input('Preço (R$)','number'),new Input('Estoque','number','0')];
+  const save={textContent:'Criar variação',disabled:false,getAttribute:()=>null,click:()=>clicks++};
+  const form={action:editUrl,elements:fields,getAttribute:()=>null,querySelectorAll:()=>[save],querySelector:()=>null};
+  fields.forEach(f=>f.form=form);
+  const dup={textContent:'Duplicar anúncio',disabled:false,getAttribute:()=>null,closest:()=>null,click:()=>clicks++};
+  const row={getAttribute:k=>k==='data-item-id'?listing:null,querySelectorAll:()=>[dup]};
+  const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:s=>s==='form'?(ambiguous?[form,form]:[form]):s==='[data-item-id],[data-listing-id]'?(ambiguous?[row,row]:[row]):[]};
+  const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(editUrl),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=>kind,currentExternalListingId:()=>listing,visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
+  vm.runInContext(snippet,ctx);
+  const apply=(id,action,url,plan)=>{ctx.grant={id,context:{accountId:'store-a',externalListingId:listing,sourcePath:url,documentNonce:'doc-1',action},plan,expiresAt:new Date(Date.now()+60000).toISOString()};return vm.runInContext('applyListingOperation(grant)',ctx);};
+  const plan={name:'Cor',option:'Azul',priceCents:1200,stock:5};
+  ambiguous=true;assert.equal((await apply('ambiguous','CREATE_VARIATION',editUrl,plan)).outcome,'FAILED');ambiguous=false;
+  consent=false;assert.equal((await apply('cancel','CREATE_VARIATION',editUrl,plan)).outcome,'CANCELLED');consent=true;
+  assert.equal(clicks,0);
+  assert.equal((await apply('create','CREATE_VARIATION',editUrl,plan)).outcome,'NEEDS_VERIFICATION');
+  assert.deepEqual(fields.map(f=>f.value),['Cor','Azul','12.00','5']);assert.equal(clicks,1);
+  assert.equal((await apply('create','CREATE_VARIATION',editUrl,plan)).outcome,'FAILED');assert.equal(clicks,1);
+  kind='seller_listings';ctx.location=new URL(listUrl);
+  accountId='other';assert.equal((await apply('wrong','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');accountId='store-a';
+  challenge=true;assert.equal((await apply('challenge','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');challenge=false;
+  assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'NEEDS_VERIFICATION');assert.equal(clicks,2);
+  assert.equal((await apply('dup','DUPLICATE',listUrl,{originalTitle:'Teste'})).outcome,'FAILED');assert.equal(clicks,2);
+});
