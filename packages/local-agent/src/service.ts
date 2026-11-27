@@ -2066,7 +2066,7 @@ export class LocalService {
 
     this.register('voc.ingestBatch', (payload, auth) => {
       const i = z.object({
-        accountId: z.string().min(1), captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), sourceUrl: z.string().url().max(2048).optional(), filterSignature:z.string().max(512).optional(),
+        accountId: z.string().min(1), captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), sourceUrl: z.string().url().max(2048).optional(), filterSignature:z.string().max(512).optional(),capturePageIdentity:z.string().regex(/^[a-f0-9]{64}$/).optional(),
         sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']).default('A_PRIMARY_UI'),
         items: z.array(z.object({
           listingId: z.string().nullable().optional(),
@@ -2317,7 +2317,7 @@ export class LocalService {
       const i = z.object({
         batchId: z.string().min(1), accountId: z.string().min(1), leaseToken:z.string().uuid(),
         pagesScanned: z.number().int().min(0).max(500), pagesSucceeded: z.number().int().min(0).max(500),
-        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, spaPage:z.number().int().min(1).max(9999).optional(),listingFingerprint:z.string().regex(/^[a-f0-9]{64}$/).optional(),listingIds:z.array(z.string().min(1).max(200)).max(500).optional(),ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional(), filterSignature:z.string().max(512).optional(),coverageWarnings:z.array(z.enum(['FILTRO_NAO_RECONHECIDO','TABELA_VIRTUALIZADA','GRAFICO_SEM_DADOS_TEXTUAIS'])).max(10).optional() })).max(500),
+        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, spaPage:z.number().int().min(1).max(9999).optional(),spaFingerprint:z.string().regex(/^[a-f0-9]{64}$/).optional(),listingFingerprint:z.string().regex(/^[a-f0-9]{64}$/).optional(),listingIds:z.array(z.string().min(1).max(200)).max(500).optional(),ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional(), filterSignature:z.string().max(512).optional(),coverageWarnings:z.array(z.enum(['FILTRO_NAO_RECONHECIDO','TABELA_VIRTUALIZADA','GRAFICO_SEM_DADOS_TEXTUAIS'])).max(10).optional() })).max(500),
         seenUrls: z.array(z.string().max(2048)).max(500),
         pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80), filterSignature:z.string().max(512).optional() })).max(500),
         maxPages: z.number().int().min(1).max(500), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
@@ -2346,7 +2346,8 @@ export class LocalService {
       const mode=db.row<{collection_mode:string}>('SELECT collection_mode FROM sync_batches WHERE id=?',i.batchId)?.collection_mode;
       const advanced=mode==='ADVANCED_LISTINGS';
       if(advanced&&(i.maxPages>50||i.pages.some(page=>page.pageKind!=='seller_listings'||!page.listingFingerprint||!page.listingIds?.length||new Set(page.listingIds).size!==page.listingIds.length)))throw new Error('histórico de coleta avançada sem identidade comprovada');
-      if(!advanced&&i.pages.some(page=>page.spaPage!==undefined||page.listingFingerprint!==undefined||page.listingIds!==undefined))throw new Error('identidade SPA reservada à coleta avançada');
+      if(!advanced&&i.pages.some(page=>page.listingFingerprint!==undefined||page.listingIds!==undefined||(page.spaPage!==undefined)!==(page.spaFingerprint!==undefined)))throw new Error('identidade SPA geral incompleta ou incompatível');
+      if(advanced&&i.pages.some(page=>page.spaFingerprint!==undefined))throw new Error('identidade SPA geral incompatível com coleta avançada');
       const completedIds=i.pages.filter(page=>page.ok).flatMap(page=>page.listingIds??[]);
       if(advanced&&new Set(completedIds).size!==completedIds.length)throw new Error('anúncios repetidos entre páginas concluídas');
       const cleanPages = i.pages.map((page) => ({
@@ -2360,11 +2361,11 @@ export class LocalService {
         const next = cleanPages[prev.page_no - 1];
         if (!next || uniquePageKey(next.page_url,next.spa_page) !== uniquePageKey(prev.page_url,prev.spa_page) || (prev.status === 'COMPLETED' && next.status !== 'COMPLETED')) throw new Error('progresso anterior não pode ser substituído por outra página ou regredir');
       }
-      if(advanced){
+      {
         const prior=parseJsonObject(String(db.row<{progress_json:string}>('SELECT progress_json FROM sync_batch_accounts WHERE id=?',row.id)?.progress_json??'{}'));
         for(const page of Array.isArray(prior.pages)?prior.pages:[]){
           const next=i.pages[Number(page.page)-1];
-          if(!next||next.listingFingerprint!==page.listingFingerprint||next.filterSignature!==page.filterSignature||(page.ok&&JSON.stringify(next.listingIds)!==JSON.stringify(page.listingIds)))throw new Error('identidade do histórico avançado não pode ser alterada');
+          if((advanced||page.spaPage!==undefined)&&(!next||next.spaFingerprint!==page.spaFingerprint||next.listingFingerprint!==page.listingFingerprint||next.filterSignature!==page.filterSignature||(page.ok&&JSON.stringify(next.listingIds)!==JSON.stringify(page.listingIds))))throw new Error('identidade do histórico avançado não pode ser alterada');
         }
       }
       const cleanState = {
@@ -2378,7 +2379,7 @@ export class LocalService {
           return parsed.toString();
         }),
         pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label, ...(item.filterSignature!==undefined?{filterSignature:item.filterSignature}:{}) })),
-        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ...(advanced?{...(page.spa_page!==null?{spaPage:page.spa_page}:{}),listingFingerprint:i.pages[page.page_no-1]!.listingFingerprint,listingIds:i.pages[page.page_no-1]!.listingIds}:{}),ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued), ...(i.pages[page.page_no-1]?.filterSignature!==undefined?{filterSignature:i.pages[page.page_no-1]!.filterSignature}:{}),...(i.pages[page.page_no-1]?.coverageWarnings?{coverageWarnings:i.pages[page.page_no-1]!.coverageWarnings}:{}) })),
+        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ...(advanced?{...(page.spa_page!==null?{spaPage:page.spa_page}:{}),listingFingerprint:i.pages[page.page_no-1]!.listingFingerprint,listingIds:i.pages[page.page_no-1]!.listingIds}:page.spa_page!==null?{spaPage:page.spa_page,spaFingerprint:i.pages[page.page_no-1]!.spaFingerprint}:{}),ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued), ...(i.pages[page.page_no-1]?.filterSignature!==undefined?{filterSignature:i.pages[page.page_no-1]!.filterSignature}:{}),...(i.pages[page.page_no-1]?.coverageWarnings?{coverageWarnings:i.pages[page.page_no-1]!.coverageWarnings}:{}) })),
         maxPages: i.maxPages, unsupportedLinks: i.unsupportedLinks || i.pages.some(page=>Boolean(page.coverageWarnings?.length)), receiptProtocol: i.receiptProtocol, stoppedReason: i.stoppedReason ?? null,
       };
       const now = nowIso();
