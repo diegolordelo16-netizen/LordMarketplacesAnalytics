@@ -342,6 +342,9 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((upsert.result as any).classification).toBe('REALIZED_FROM_REPORTED_INPUT');
     const summary = await call('finance.realized.summary', { accountId: 'acct-realized' });
     expect((summary.result as any).realizedProfitCents).toBe(45000);
+    expect((await call('finance.realized.summary',{accountId:'acct-realized',periodStart:'2025-01-01T00:00:00.000Z',periodEnd:'2025-01-02T00:00:00.000Z'})).result).toMatchObject({realizedProfitCents:null,netRevenueCents:null,confidence:'NO_DATA'});
+    expect((await call('finance.realized.upsert',{...payload,periodStart:'2026-11-15T00:00:00.000Z'})).ok).toBe(true);
+    expect((await call('finance.realized.summary',{accountId:'acct-realized'})).result).toMatchObject({realizedProfitCents:null,confidence:'CONFLICTING_RECORDS',overlappingPeriods:true});
   });
 
   it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
@@ -640,6 +643,45 @@ describe('comparação de períodos e entidades', () => {
     expect(result.rows[0]!.previous.metrics.gmv).toBe(80);
     expect(result.rows[0]!.deltaPct.gmv).toBe(25);
     expect(result.rows[0]!.current.metrics.roas).toBe(3);
+  });
+
+  it('only verifies equivalent closed source windows with the same listing and filters', async () => {
+    seedImportAccount('acct-compare-verified');
+    const accountId='acct-compare-verified',listingId='listing-compare-verified';
+    const at='2025-01-01T00:00:00.000Z';
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(listingId,accountId,'mercado_livre','ML-VERIFIED','Comparável','ACTIVE',at,at);
+    const insert=db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,evidence_json) VALUES (?,?,?,?,?,?,?,?)');
+    const evidence=(from:string,to:string,status:string)=>JSON.stringify({filtersAndPeriod:'start_date='+from+'|end_date='+to+'|status='+status});
+    insert.run('verified-a',listingId,accountId,'2025-01-14T23:00:00.000Z','2025-01-14T23:00:00.000Z',JSON.stringify({gmv:120,orders:3}),'A_PRIMARY_UI',evidence('2025-01-08','2025-01-14','all'));
+    insert.run('verified-b',listingId,accountId,'2025-01-07T23:00:00.000Z','2025-01-07T23:00:00.000Z',JSON.stringify({gmv:100,orders:2}),'A_PRIMARY_UI',evidence('2025-01-01','2025-01-07','all'));
+    const payload={accountId,listingId,primaryFrom:'2025-01-08',primaryTo:'2025-01-14',comparisonFrom:'2025-01-01',comparisonTo:'2025-01-07'};
+    const verified=await call('kpi.compare.detail',payload);
+    expect(verified.ok).toBe(true);
+    expect(verified.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:20},comparisonQuality:{comparable:true}}]});
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:80,orders:10,visits:200,adSpend:120,commission:20,stockAvailable:4}),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:100,orders:20,visits:200,adSpend:100,commission:10,stockAvailable:4}),'verified-b');
+    const diagnostics=(await call('kpi.compare.detail',payload)).result as any;
+    expect(diagnostics.rows[0].diagnostics.map((d:any)=>d.code)).toEqual(expect.arrayContaining(['SALES_DECLINE','ORDERS_DECLINE','COST_INCREASE','CVR_DECLINE']));
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:120,orders:25,visits:200,stockAvailable:4}),'verified-a');
+    const growth=(await call('kpi.compare.detail',payload)).result as any;
+    expect(growth.rows[0].diagnostics.map((d:any)=>d.code)).toContain('GROWTH_REVIEW');
+
+    db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(evidence('2025-01-01','2025-01-07','active'),'verified-b');
+    const incompatible=await call('kpi.compare.detail',payload);
+    expect((incompatible.result as any).rows[0].diagnostics).toEqual([]);
+    expect(incompatible.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:null},comparisonQuality:{sameFilters:false,comparable:false}}]});
+    const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
+    expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
+    expect((await call('kpi.compare.detail',{...payload,listingId:'nonexistent'})).result).toMatchObject({rows:[]});
+    const campaignAt='2025-01-14T22:00:00.000Z';
+    const base={marketplace:'mercado_livre',accountId,pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',sourceClass:'A_PRIMARY_UI',referenceAt:campaignAt,collectedAt:campaignAt,method:'content_script_dom',listings:[],evidence:{filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all'}};
+    const detail=(externalId:string,adSpend:number,adAttributedRevenue:number)=>({kind:'AD_CAMPAIGN',externalId,metrics:{adSpend,adAttributedRevenue},evidence:{adSpend:'Investimento',adAttributedRevenue:'Receita atribuída'}});
+    expect((await call('capture.ingest',{...base,details:[detail('C-loss',100,30),detail('C-positive',10,40)]})).ok).toBe(true);
+    const campaignResult=(await call('kpi.compare.detail',{...payload,listingId:undefined})).result as any;
+    expect(campaignResult.campaigns).toEqual([expect.objectContaining({campaignId:'C-loss',spend:100,attributedRevenue:30})]);
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({campaigns:[]});
+    expect((await call('kpi.compare.detail',{...payload,listingId:undefined,groupBy:'marketplace'})).result).toMatchObject({rows:[{id:'mercado_livre',marketplace:'mercado_livre',comparisonQuality:{coverageVerified:false}}]});
+    expect((await call('kpi.compare.detail',{...payload,listingId:undefined,primaryFrom:'2025-01-09'})).result).toMatchObject({campaigns:[]});
   });
 });
 
@@ -1595,6 +1637,34 @@ describe('analytics, keyword intelligence and bundle simulation', () => {
     expect(current.orders).toBe(3);
     expect(current.visits).toBeNull();
     expect(result.missingValues).toBe('null_not_zero');
+  });
+
+  it('aggregates daily history by account before combining stores, without cross-account overrides', async () => {
+    const a='history-multi-a',b='history-multi-b';
+    const day=new Date(Date.now()-20*86400000).toISOString().slice(0,10);
+    const at=day+'T12:00:00.000Z';
+    const account=db.db.prepare('INSERT INTO accounts (id,marketplace,external_ref,display_name,handle,detection_confidence,verified_by_user,is_active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    account.run(a,'amazon',a,a,a,1,1,1,at,at);
+    account.run(b,'amazon',b,b,b,1,1,1,at,at);
+    for(const id of [a,b]){
+      db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id+'-listing',id,'amazon',id+'-external',id,'ACTIVE',at,at);
+      db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class) VALUES (?,?,?,?,?,?,?)').run(id+'-snapshot',id+'-listing',id,at,at,JSON.stringify(id===a?{gmv:10,orders:1}:{gmv:20,orders:2}),'A_PRIMARY_UI');
+    }
+    const observed=await call('capture.ingest',{marketplace:'amazon',accountId:a,pageKind:'seller_dashboard',url:'https://sellercentral.amazon.com.br/home',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',accountMetrics:{gmv:100,visits:90}});
+    expect(observed.ok).toBe(true);
+    const result=await call('kpi.history',{marketplace:'amazon',days:30});
+    expect(result.ok).toBe(true);
+    const point=(result.result as {points:Array<Record<string,unknown>>}).points.find(p=>p.date===day);
+    expect(point).toMatchObject({gmv:120,orders:3,visits:null,accountsCaptured:2,gmvCoverage:2,visitsCoverage:1});
+    const scope={marketplace:'amazon',accountId:a,listingId:a+'-listing',days:30};
+    const dashboard=await call('kpi.dashboard',scope);
+    expect(dashboard.result).toMatchObject({totals:{gmvCents:1000},window:{entityScoped:true,days:30},coverage:{totalListings:1,accountsWithSnapshots:0}});
+    const scopedHistory=await call('kpi.history',scope);
+    expect(scopedHistory.result).toMatchObject({points:[{gmv:10,orders:1,accountsCaptured:1,aovCents:1000,cvr:null}]});
+    const recent=await call('kpi.dashboard',{...scope,days:7});
+    expect(recent.result).toMatchObject({totals:{gmvCents:null},coverage:{capturedListings:0}});
+    expect((await call('kpi.history',{...scope,days:7})).result).toMatchObject({points:[]});
+
   });
 
   it('suggests local title phrases without claiming search volume', async () => {

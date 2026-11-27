@@ -264,3 +264,68 @@ test('grafo prioriza transições conhecidas da página atual sem inventar camin
   assert.equal(result.pagesSucceeded,3);
   assert.deepEqual(f.captured,[root,ratings,orders]);
 });
+
+test('atalhos de comparação usam dias UTC completos e meses de duração equivalente',()=>{
+  const ctx=vm.createContext({Date});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function comparisonPreset('),dashboard.indexOf('async function viewCompare()')),ctx);
+  const dates=(preset,at)=>JSON.parse(JSON.stringify(vm.runInContext('comparisonPreset('+JSON.stringify(preset)+',new Date('+JSON.stringify(at)+'))',ctx)));
+  assert.deepEqual(dates('7','2026-03-01T02:00:00Z'),['2026-02-22','2026-02-28','2026-02-15','2026-02-21']);
+  assert.deepEqual(dates('today','2026-01-01T01:00:00Z'),['2026-01-01','2026-01-01','2025-12-31','2025-12-31']);
+  assert.deepEqual(dates('month','2026-03-31T12:00:00Z'),['2026-03-01','2026-03-28','2026-02-01','2026-02-28']);
+  assert.equal(dates('month','2026-03-01T12:00:00Z'),null);
+});
+
+test('gráfico histórico mantém distância temporal e não conecta dias sem evidência',()=>{
+  const ctx=vm.createContext({esc:String,brl:String,num:String,Date});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function historyMetricConfig('),dashboard.indexOf('function dt(')),ctx);
+  const html=vm.runInContext("renderHistoryChart([{date:'2026-11-01',gmvCents:100},{date:'2026-11-02',gmvCents:null},{date:'2026-11-04',gmvCents:150},{date:'2026-11-05',gmvCents:200}])",ctx);
+  const path=html.match(/class="trend-path" d="([^"]+)"/)[1];
+  assert.equal((path.match(/M /g)||[]).length,2);
+  assert.equal((path.match(/L /g)||[]).length,1);
+});
+
+test('gráfico histórico oferece métricas adicionais e mantém zero distinto de ausência',()=>{
+  const ctx=vm.createContext({esc:String,brl:String,num:String,pct:String,Date});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function historyMetricConfig('),dashboard.indexOf('function dt(')),ctx);
+  const keys=vm.runInContext('Object.keys(historyMetricConfig())',ctx);
+  for(const key of ['units','stockAvailable','cvr','roas','aovCents','reviewRating','returnsCount'])assert.ok(keys.includes(key));
+  const html=vm.runInContext("renderHistoryChart([{date:'2026-11-01',units:0},{date:'2026-11-02',units:2}],'units')",ctx);
+  assert.ok(html.includes('trend-path'));
+});
+
+test('executivo usa os mesmos filtros em KPIs, histórico e diagnóstico sem misturar lucro da loja',async()=>{
+  const calls=[];
+  const ctx=vm.createContext({
+    state:{accountId:'store-a',execFilters:{marketplace:'shopee',days:7,listingId:'L1',skuId:'S1'},historyPoints:[]},viewRenderSequence:1,
+    api:async(method,payload)=>{calls.push({method,payload});if(method==='kpi.dashboard')return {totals:{gmvCents:100}};if(method==='kpi.history')return {points:[]};if(method==='kpi.compare.detail')return {rows:[],campaigns:[]};return [];},
+    comparisonPreset:()=>['2026-11-01','2026-11-07','2026-10-25','2026-10-31'],
+    esc:String,brl:String,num:String,pct:String,dt:String,badge:String,card:(a,b)=>a+b,table:()=>'',historyMetricConfig:()=>({}),renderHistoryChart:()=>'',Array
+  });
+  vm.runInContext(dashboard.slice(dashboard.indexOf('async function viewExec()'),dashboard.indexOf('// ------------------------------------------------------------------ ANÚNCIOS / CAPTURA')),ctx);
+  const html=await vm.runInContext('viewExec()',ctx);
+  const scope={accountId:'store-a',marketplace:'shopee',days:7,listingId:'L1',skuId:'S1'};
+  for(const method of ['kpi.dashboard','kpi.history'])assert.deepEqual(JSON.parse(JSON.stringify(calls.find(c=>c.method===method).payload)),scope);
+  const diagnostic=calls.find(c=>c.method==='kpi.compare.detail').payload;
+  assert.equal(diagnostic.accountId,'store-a');assert.equal(diagnostic.listingId,'L1');assert.equal(diagnostic.skuId,'S1');
+  assert.equal(calls.some(c=>c.method.startsWith('finance.realized.')),false);
+  assert.ok(html.includes('Diagnósticos automáticos'));assert.ok(html.includes('Aplicar filtros'));
+});
+
+test('cadastro financeiro exige evidência e todos os valores explícitos, inclusive zero',()=>{
+  const ctx=vm.createContext({Date,Number,Math});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('const REALIZED_FIELDS='),dashboard.indexOf('async function viewFinance()')),ctx);
+  const fields=vm.runInContext('REALIZED_FIELDS',ctx);
+  const inputs={'rp-from':'2026-10-01','rp-to':'2026-10-31','rp-evidence':'Relatório conciliado','rp-listing':''};
+  for(const [key] of fields)inputs['rp-'+key]='0';
+  inputs['rp-netRevenueCents']='123,45';
+  ctx.inputs=inputs;
+  const payload=()=>vm.runInContext("realizedPayload(id=>inputs[id],'store-a')",ctx);
+  assert.equal(payload().netRevenueCents,12345);
+  assert.equal(payload().productCostCents,0);
+  assert.equal(payload().sourceClass,'F_USER_INPUT');
+  inputs['rp-productCostCents']='';
+  assert.throws(payload,/Informe Custo/);
+  inputs['rp-productCostCents']='0';
+  inputs['rp-from']='2026-02-30';
+  assert.throws(payload,/período válido/);
+});

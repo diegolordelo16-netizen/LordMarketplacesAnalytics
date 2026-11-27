@@ -830,16 +830,19 @@ export class LocalService {
       return capture.kpisForListing(input.listingId, input.days);
     });
 
-    const buildDashboard = (filter: { accountId?: string; marketplace?: string } = {}) => {
+    const buildDashboard = (filter: { accountId?: string; marketplace?: string; days?:number; listingId?:string; skuId?:string } = {}) => {
+      const days=filter.days??30;
+      const cutoff=new Date(Date.now()-days*86400000).toISOString();
+      const entityScoped=Boolean(filter.listingId||filter.skuId);
       const accounts = db.rows<{ id: string; marketplace: string; display_name: string; is_active: number }>(
         'SELECT id, marketplace, display_name, is_active FROM accounts WHERE (? IS NULL OR id = ?) AND (? IS NULL OR marketplace = ?) ORDER BY display_name',
         filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,
       );
       const listings = db.rows<{ id: string; account_id: string; marketplace: string; external_id: string; title: string | null }>(
-        'SELECT id, account_id, marketplace, external_id, title FROM listings WHERE (? IS NULL OR account_id = ?) AND (? IS NULL OR marketplace = ?)',
-        filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,
+        'SELECT id, account_id, marketplace, external_id, title FROM listings WHERE (? IS NULL OR account_id = ?) AND (? IS NULL OR marketplace = ?) AND (? IS NULL OR id=?) AND (? IS NULL OR sku_id=?)',
+        filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,filter.listingId??null,filter.listingId??null,filter.skuId??null,filter.skuId??null,
       );
-      const perListing = listings.map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, 30) }));
+      const perListing = listings.map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, 30, cutoff) }));
       const captured = perListing.filter((l) => l.kpis !== null);
       const sumKnown = (rows: typeof perListing, select: (pillars: NonNullable<(typeof perListing)[number]['kpis']>['pillars']) => number | null): number | null => {
         if (rows.length === 0 || rows.some((l) => !l.kpis)) return null;
@@ -850,7 +853,7 @@ export class LocalService {
       const listingSnapshotRows = db.rows<{ listing_id:string; account_id:string; captured_at:string; metrics_json:string }>(
         `SELECT listing_id,account_id,captured_at,metrics_json FROM listing_snapshots
           WHERE captured_at>=? AND (? IS NULL OR account_id=?) ORDER BY captured_at DESC`,
-        new Date(Date.now()-30*86_400_000).toISOString(), filter.accountId ?? null, filter.accountId ?? null,
+        cutoff, filter.accountId ?? null, filter.accountId ?? null,
       );
       const latestListingSnapshots = new Map<string, Record<string,unknown>>();
       for (const row of listingSnapshotRows) {
@@ -858,11 +861,11 @@ export class LocalService {
         if (latestListingSnapshots.has(key)) continue;
         try { latestListingSnapshots.set(key, JSON.parse(row.metrics_json) as Record<string,unknown>); } catch { continue; }
       }
-      const accountSnapshotRows = db.rows<{ account_id:string; page_kind:string; captured_at:string; metrics_json:string }>(
+      const accountSnapshotRows = entityScoped?[]:db.rows<{ account_id:string; page_kind:string; captured_at:string; metrics_json:string }>(
         `SELECT account_id,page_kind,captured_at,metrics_json FROM account_snapshots
           WHERE captured_at>=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?)
           ORDER BY captured_at DESC`,
-        new Date(Date.now()-30*86_400_000).toISOString(), filter.accountId ?? null, filter.accountId ?? null,
+        cutoff, filter.accountId ?? null, filter.accountId ?? null,
         filter.marketplace ?? null, filter.marketplace ?? null,
       );
       const accountMetricPriority: Record<string,string[]> = {
@@ -924,7 +927,7 @@ export class LocalService {
           stockCoverageDays: stock !== null && dailySales !== null && dailySales > 0 ? stock / dailySales : null,
         };
       };
-      const byAccount = accounts.map((a) => {
+      const byAccount = accounts.filter(a=>!entityScoped||perListing.some(l=>l.account_id===a.id)).map((a) => {
         const rows = perListing.filter((l) => l.account_id === a.id);
         const capturedRows = rows.filter((l) => l.kpis);
         const metrics = accountMetrics.get(a.id);
@@ -956,12 +959,12 @@ export class LocalService {
       };
       return {
         accounts, listings: perListing, coverage: { totalListings: listings.length, capturedListings: captured.length, uncapturedListings: listings.length - captured.length, accountsWithSnapshots: accountMetrics.size },
-        totals, byAccount,
+        totals, byAccount,window:{days,cutoff,kind:'CAPTURE_RECENCY',sourcePeriodVerified:false,entityScoped},
       };
     };
 
     this.register('kpi.dashboard', (payload) => {
-      const i = z.object({ accountId: z.string().optional(), marketplace: z.string().optional() }).parse(payload ?? {});
+      const i = z.object({ accountId: z.string().optional(), marketplace:z.enum(['mercado_livre','shopee','amazon']).optional(),days:z.number().int().min(1).max(365).default(30),listingId:z.string().max(200).optional(),skuId:z.string().max(200).optional() }).parse(payload ?? {});
       return buildDashboard(i);
     });
     this.register('kpi.compare', (payload) => {
@@ -974,18 +977,19 @@ export class LocalService {
       const i = z.object({
         accountId: z.string().optional(),
         marketplace: z.enum(['mercado_livre','shopee','amazon']).optional(),
-        days: z.number().int().min(7).max(365).default(30),
+        days: z.number().int().min(1).max(365).default(30),
+        listingId:z.string().min(1).max(200).optional(),skuId:z.string().min(1).max(200).optional(),
       }).parse(payload ?? {});
       if (i.accountId && !db.row('SELECT id FROM accounts WHERE id=?', i.accountId)) throw new Error('conta não encontrada');
       const from = new Date(Date.now() - i.days * 86_400_000).toISOString();
       const rows = db.rows<{ listing_id:string; account_id:string; marketplace:string; captured_at:string; metrics_json:string }>(
         `SELECT s.listing_id,s.account_id,l.marketplace,s.captured_at,s.metrics_json
            FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id
-          WHERE s.captured_at>=? AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?)
+          WHERE s.captured_at>=? AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?) AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?)
           ORDER BY s.captured_at ASC`,
-        from, i.accountId ?? null, i.accountId ?? null, i.marketplace ?? null, i.marketplace ?? null,
+        from, i.accountId ?? null, i.accountId ?? null, i.marketplace ?? null, i.marketplace ?? null,i.listingId??null,i.listingId??null,i.skuId??null,i.skuId??null,
       );
-      const accountRows = db.rows<{ account_id:string; marketplace:string; page_kind:string; captured_at:string; metrics_json:string }>(
+      const accountRows = i.listingId||i.skuId?[]:db.rows<{ account_id:string; marketplace:string; page_kind:string; captured_at:string; metrics_json:string }>(
         `SELECT account_id,marketplace,page_kind,captured_at,metrics_json FROM account_snapshots
           WHERE captured_at>=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?)
           ORDER BY captured_at ASC`,
@@ -993,23 +997,26 @@ export class LocalService {
       );
       const latestPerListingDay = new Map<string, typeof rows[number]>();
       for (const row of rows) latestPerListingDay.set(`${row.listing_id}|${row.captured_at.slice(0,10)}`, row);
-      const metricKeys = ['gmv','netRevenue','commission','fixedFee','shippingFee','tax','marketplaceFee','orders','visits','units','adSpend','adAttributedRevenue','stockAvailable','returnsCount','cancellations'];
-      const daily = new Map<string, { date:string; listings:Set<string>; values:Record<string,{sum:number;count:number}> }>();
+      const metricKeys = ['gmv','netRevenue','commission','fixedFee','shippingFee','tax','marketplaceFee','orders','visits','units','adSpend','adAttributedRevenue','stockAvailable','returnsCount','cancellations','returnsValue','cancellationValue','adClicks','adAttributedOrders','paidImpressions','organicImpressions','questionsPending','questionsAnswered','reviewCount','reviewRating','organicClicks','favorites','addToCart','discounts','newCustomers','returningCustomers'];
+      type MetricAggregate = { sum:number; count:number };
+      type DailyAccount = { listings:Set<string>; values:Record<string,MetricAggregate> };
+      const daily = new Map<string,Map<string,DailyAccount>>();
+      const accountDay = (date:string,accountId:string) => {
+        let accounts=daily.get(date);
+        if(!accounts){accounts=new Map();daily.set(date,accounts);}
+        let point=accounts.get(accountId);
+        if(!point){point={listings:new Set<string>(),values:Object.fromEntries(metricKeys.map(key=>[key,{sum:0,count:0}]))};accounts.set(accountId,point);}
+        return point;
+      };
       for (const row of latestPerListingDay.values()) {
-        const date = row.captured_at.slice(0,10);
-        let point = daily.get(date);
-        if (!point) {
-          point = { date, listings: new Set<string>(), values: Object.fromEntries(metricKeys.map((key) => [key,{sum:0,count:0}])) };
-          daily.set(date, point);
-        }
+        const point=accountDay(row.captured_at.slice(0,10),row.account_id);
         point.listings.add(row.listing_id);
-        let metrics: Record<string,unknown>;
-        try { metrics = JSON.parse(row.metrics_json) as Record<string,unknown>; } catch { continue; }
-        for (const key of metricKeys) {
-          const value = metrics[key];
-          if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-            point.values[key]!.sum += value;
-            point.values[key]!.count += 1;
+        let metrics:Record<string,unknown>;
+        try{metrics=JSON.parse(row.metrics_json) as Record<string,unknown>;}catch{continue;}
+        for(const key of metricKeys){
+          const value=metrics[key];
+          if(typeof value==='number'&&Number.isFinite(value)&&value>=0){
+            point.values[key]!.sum+=value;point.values[key]!.count+=1;
           }
         }
       }
@@ -1027,8 +1034,10 @@ export class LocalService {
         const date = row.captured_at.slice(0,10);
         let metrics: Record<string,unknown>;
         try { metrics = JSON.parse(row.metrics_json) as Record<string,unknown>; } catch { continue; }
-        let byMetric = accountDaily.get(date);
-        if (!byMetric) { byMetric = new Map(); accountDaily.set(date, byMetric); }
+        accountDay(date,row.account_id);
+        const accountKey=JSON.stringify([date,row.account_id]);
+        let byMetric = accountDaily.get(accountKey);
+        if (!byMetric) { byMetric = new Map(); accountDaily.set(accountKey, byMetric); }
         for (const key of accountMetricPriority[row.page_kind] ?? []) {
           const value = metrics[key];
           if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue;
@@ -1036,22 +1045,24 @@ export class LocalService {
           if (!existing || row.captured_at > existing.capturedAt) byMetric.set(key,{value,capturedAt:row.captured_at,pageKind:row.page_kind});
         }
       }
-      for (const date of accountDaily.keys()) {
-        if (!daily.has(date)) daily.set(date,{ date, listings:new Set<string>(), values:Object.fromEntries(metricKeys.map((key) => [key,{sum:0,count:0}])) });
-      }
-      const points = [...daily.values()].sort((a,b) => a.date.localeCompare(b.date)).map((point) => {
-        const out: Record<string,unknown> = { date: point.date, listingsCaptured: point.listings.size };
-        for (const key of metricKeys) {
-          const entry = point.values[key]!;
-          out[key] = entry.count ? entry.sum : null;
-          out[`${key}Coverage`] = entry.count;
-        }
-        const accountMetrics = accountDaily.get(point.date);
-        if (accountMetrics) {
-          for (const [key, observed] of accountMetrics) {
-            out[key] = observed.value;
-            out[`${key}Coverage`] = 1;
+      const allMetricKeys=[...new Set([...metricKeys,...Object.values(accountMetricPriority).flat()])];
+      const points=[...daily.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([date,accounts])=>{
+        const out:Record<string,unknown>={date,listingsCaptured:[...accounts.values()].reduce((sum,p)=>sum+p.listings.size,0),accountsCaptured:accounts.size};
+        const metricCoverage:Record<string,number>={},accountSnapshotMetrics:Record<string,number>={};
+        for(const key of allMetricKeys){
+          const values:number[]=[];
+          let observedAccounts=0;
+          for(const [accountId,point] of accounts){
+            const observed=accountDaily.get(JSON.stringify([date,accountId]))?.get(key);
+            if(observed){values.push(observed.value);observedAccounts++;continue;}
+            const entry=point.values[key];
+            if(entry&&entry.count>0&&entry.count===point.listings.size&&(key!=='reviewRating'||point.listings.size===1))values.push(entry.sum);
           }
+          // A missing contribution is not zero; ratings must not be added across shops.
+          out[key]=values.length===accounts.size&&(key!=='reviewRating'||accounts.size===1)?values.reduce((sum,value)=>sum+value,0):null;
+          out[`${key}Coverage`]=values.length;
+          metricCoverage[key]=values.length;
+          if(observedAccounts)accountSnapshotMetrics[key]=observedAccounts;
         }
         out.gmvCents = typeof out.gmv === 'number' ? Math.round((out.gmv as number) * 100) : null;
         out.netRevenueCents = typeof out.netRevenue === 'number' ? Math.round((out.netRevenue as number) * 100) : null;
@@ -1060,14 +1071,17 @@ export class LocalService {
         for (const field of ['commission','fixedFee','shippingFee','tax','marketplaceFee']) {
           out[`${field}Cents`] = typeof out[field] === 'number' ? Math.round((out[field] as number) * 100) : null;
         }
-        out.coverage = {
-          totalCapturedListings: point.listings.size,
-          accountSnapshotMetrics: Object.fromEntries(accountMetrics ? [...accountMetrics.keys()].map((key) => [key,1]) : []),
-          metrics: Object.fromEntries(metricKeys.map((key) => [key, point.values[key]!.count || (accountMetrics?.has(key) ? 1 : 0)])),
+        const ratio=(numerator:string,denominator:string,multiplier=1)=>{
+          const a=out[numerator],b=out[denominator];
+          return typeof a==='number'&&typeof b==='number'&&b>0?a/b*multiplier:null;
         };
+        out.cvr=ratio('orders','visits',100);out.aovCents=ratio('gmvCents','orders');
+        out.acosPct=ratio('adSpend','adAttributedRevenue',100);out.roas=ratio('adAttributedRevenue','adSpend');
+        out.returnRatePct=ratio('returnsCount','orders',100);
+        out.coverage={totalCapturedListings:out.listingsCaptured,accountsCaptured:accounts.size,accountSnapshotMetrics,metrics:metricCoverage,unit:'accounts_with_known_metric'};
         return out;
       });
-      return { from, to: nowIso(), days: i.days, points, source: 'listing_snapshots+account_snapshots', aggregation: 'latest_snapshot_per_listing_per_day_plus_account_page_override', missingValues: 'null_not_zero' };
+      return { from, to: nowIso(), days: i.days, points, source: 'listing_snapshots+account_snapshots', aggregation: 'latest_snapshot_per_listing_per_day_within_account_then_sum_known_accounts', missingValues: 'null_not_zero' };
     });
 
     this.register('kpi.compare.detail', (payload) => {
@@ -1076,9 +1090,11 @@ export class LocalService {
         primaryTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         comparisonFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         comparisonTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        groupBy: z.enum(['account','product','listing']).default('listing'),
+        groupBy: z.enum(['account','product','listing','marketplace']).default('listing'),
         accountId: z.string().optional(),
         marketplace: z.enum(['mercado_livre','shopee','amazon']).optional(),
+        listingId:z.string().min(1).max(200).optional(),
+        skuId:z.string().min(1).max(200).optional(),
       }).parse(payload ?? {});
       const dateRange = (from: string, to: string) => {
         const start = new Date(`${from}T00:00:00.000Z`);
@@ -1086,7 +1102,9 @@ export class LocalService {
         if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start.toISOString().slice(0,10) !== from || end.toISOString().slice(0,10) !== to || start > end) {
           throw new Error('intervalo de datas inválido');
         }
-        return { start: start.toISOString(), end: end.toISOString() };
+        const days=Math.round((end.getTime()-start.getTime()+1)/86400000);
+        if(days>366)throw new Error('cada intervalo deve ter no máximo 366 dias');
+        return { start: start.toISOString(), end: end.toISOString(),days };
       };
       const primary = dateRange(i.primaryFrom,i.primaryTo);
       const comparison = dateRange(i.comparisonFrom,i.comparisonTo);
@@ -1094,9 +1112,9 @@ export class LocalService {
       if (i.accountId && !db.row('SELECT id FROM accounts WHERE id=? AND is_active=1', i.accountId)) throw new Error('conta ativa não encontrada');
       const records = db.rows<{
         listing_id:string; account_id:string; captured_at:string; metrics_json:string; external_id:string; title:string|null;
-        marketplace:string; product_id:string|null; product_name:string|null; account_name:string;
+        marketplace:string; product_id:string|null; product_name:string|null; account_name:string; evidence_json:string; source_class:string;
       }>(
-        `SELECT s.listing_id,s.account_id,s.captured_at,s.metrics_json,l.external_id,l.title,l.marketplace,
+        `SELECT s.listing_id,s.account_id,s.captured_at,s.metrics_json,s.evidence_json,s.source_class,l.external_id,l.title,l.marketplace,
                 cp.id AS product_id,cp.name AS product_name,a.display_name AS account_name
            FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id
            JOIN accounts a ON a.id=s.account_id
@@ -1104,8 +1122,9 @@ export class LocalService {
            LEFT JOIN catalog_products cp ON cp.id=sku.catalog_product_id AND cp.account_id=l.account_id
           WHERE ((s.captured_at>=? AND s.captured_at<=?) OR (s.captured_at>=? AND s.captured_at<=?))
             AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?)
+            AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?)
           ORDER BY s.captured_at DESC`,
-        primary.start,primary.end,comparison.start,comparison.end,i.accountId ?? null,i.accountId ?? null,i.marketplace ?? null,i.marketplace ?? null,
+        primary.start,primary.end,comparison.start,comparison.end,i.accountId ?? null,i.accountId ?? null,i.marketplace ?? null,i.marketplace ?? null,i.listingId??null,i.listingId??null,i.skuId??null,i.skuId??null,
       );
       type RecordItem = typeof records[number] & { metrics: Record<string,unknown> };
       const latest = new Map<string,RecordItem>();
@@ -1125,10 +1144,10 @@ export class LocalService {
       const groups = new Map<string,{label:string;accountId:string;marketplace:string;periods:{primary:RecordItem[];comparison:RecordItem[]}}>();
       for (const [key,item] of latest.entries()) {
         const period = key.startsWith('primary|') ? 'primary' : 'comparison';
-        const groupKey = i.groupBy==='account' ? item.account_id : i.groupBy==='product' ? (item.product_id ?? `listing:${item.listing_id}`) : item.listing_id;
-        const label = i.groupBy==='account' ? item.account_name : i.groupBy==='product' ? (item.product_name ?? item.title ?? item.external_id) : (item.title ?? item.external_id);
+        const groupKey = i.groupBy==='marketplace' ? item.marketplace : i.groupBy==='account' ? item.account_id : i.groupBy==='product' ? (item.product_id ?? `listing:${item.listing_id}`) : item.listing_id;
+        const label = i.groupBy==='marketplace' ? item.marketplace : i.groupBy==='account' ? item.account_name : i.groupBy==='product' ? (item.product_name ?? item.title ?? item.external_id) : (item.title ?? item.external_id);
         let group = groups.get(groupKey);
-        if (!group) { group={label,accountId:item.account_id,marketplace:item.marketplace,periods:{primary:[],comparison:[]}}; groups.set(groupKey,group); }
+        if (!group) { group={label,accountId:i.groupBy==='marketplace'?'':item.account_id,marketplace:item.marketplace,periods:{primary:[],comparison:[]}}; groups.set(groupKey,group); }
         if (!group.periods[period].some((entry) => entry.listing_id===item.listing_id)) group.periods[period].push(item);
       }
       const metricKeys = ['gmv','netRevenue','orders','units','visits','adSpend','adAttributedRevenue','commission','fixedFee','shippingFee','tax','marketplaceFee','returnsCount','stockAvailable'] as const;
@@ -1150,14 +1169,72 @@ export class LocalService {
           return { listingCount:items.length,metrics };
         };
         const current=build(group.periods.primary), previous=build(group.periods.comparison);
-        const deltaPct:Record<string,number|null>={};
+        const currentIds=group.periods.primary.map(x=>x.listing_id).sort(),previousIds=group.periods.comparison.map(x=>x.listing_id).sort();
+        const sameListings=currentIds.length>0&&JSON.stringify(currentIds)===JSON.stringify(previousIds);
+        const equalDuration=primary.days===comparison.days;
+        const windowMatches=(items:RecordItem[],from:string,to:string)=>items.length>0&&items.every(item=>{
+          if(item.source_class!=='A_PRIMARY_UI')return false;
+          const evidence=parseJsonObject(item.evidence_json??'{}');
+          if(typeof evidence.filtersAndPeriod!=='string')return false;
+          const entries=evidence.filtersAndPeriod.split('|').map(entry=>entry.split('='));
+          if(entries.some(entry=>entry.length!==2))return false;
+          const starts=entries.filter(([k])=>/^(start_date|date_from|data inicial|start date)$/.test(k??''));
+          const ends=entries.filter(([k])=>/^(end_date|date_to|data final|end date)$/.test(k??''));
+          return starts.length===1&&ends.length===1&&starts[0]?.[1]===from&&ends[0]?.[1]===to;
+        });
+        const sourceWindowsVerified=windowMatches(group.periods.primary,i.primaryFrom,i.primaryTo)&&windowMatches(group.periods.comparison,i.comparisonFrom,i.comparisonTo);
+        const contextSignature=(item:RecordItem)=>{
+          const evidence=parseJsonObject(item.evidence_json??'{}');
+          if(typeof evidence.filtersAndPeriod!=='string'||evidence.coverageWarnings)return null;
+          const entries=evidence.filtersAndPeriod.split('|').map(entry=>entry.split('='));
+          if(entries.some(entry=>entry.length!==2)||new Set(entries.map(entry=>entry[0])).size!==entries.length)return null;
+          return JSON.stringify(entries.filter(([key])=>!/^(start_date|date_from|data inicial|start date|end_date|date_to|data final|end date)$/.test(key??'')).sort((a,b)=>(a[0]??'').localeCompare(b[0]??'')));
+        };
+        const previousById=new Map(group.periods.comparison.map(item=>[item.listing_id,item]));
+        const sameFilters=sameListings&&group.periods.primary.every(item=>{
+          const prior=previousById.get(item.listing_id);
+          const signature=contextSignature(item);
+          return prior&&signature!==null&&signature===contextSignature(prior);
+        });
+        const comparable=equalDuration&&sameListings&&sameFilters&&sourceWindowsVerified&&primary.end<nowIso()&&comparison.end<nowIso();
+        const deltaPct:Record<string,number|null>={},verifiedDeltaPct:Record<string,number|null>={};
         for (const key of [...metricKeys,'cvr','aov','returnRate','roas','acos']) {
           const a=current.metrics[key],b=previous.metrics[key];
-          deltaPct[key]=typeof a==='number'&&typeof b==='number'&&b!==0?(a-b)/Math.abs(b)*100:null;
+          deltaPct[key]=sameListings&&typeof a==='number'&&typeof b==='number'&&b!==0?(a-b)/Math.abs(b)*100:null;
+          verifiedDeltaPct[key]=comparable?deltaPct[key]??null:null;
         }
-        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct };
+        const diagnostics:Array<{code:string;metric:string;current:number;previous:number|null;note:string}>=[];
+        const signal=(code:string,metric:string,note:string,condition:(a:number,b:number)=>boolean)=>{
+          const a=current.metrics[metric],b=previous.metrics[metric];
+          if(comparable&&typeof a==='number'&&typeof b==='number'&&condition(a,b))diagnostics.push({code,metric,current:a,previous:b,note});
+        };
+        signal('SALES_DECLINE','gmv','GMV observado caiu pelo menos 10%; investigar demanda, estoque e preço, sem atribuir causa.',(a,b)=>b>0&&a<=b*0.9);
+        signal('ORDERS_DECLINE','orders','Pedidos observados caíram pelo menos 10%.',(a,b)=>b>0&&a<=b*0.9);
+        for(const metric of ['adSpend','commission','fixedFee','shippingFee','tax','marketplaceFee'])signal('COST_INCREASE',metric,'Custo observado aumentou pelo menos 10%; não somar taxas que podem se sobrepor.',(a,b)=>b>0&&a>=b*1.1);
+        signal('CVR_DECLINE','cvr','Conversão caiu pelo menos 1 ponto percentual; volumes de visitas precisam ser suficientes.',(a,b)=>b-a>=1&&(current.metrics.visits??0)>=100&&(previous.metrics.visits??0)>=100);
+        if(i.groupBy==='product'||i.groupBy==='listing')signal('GROWTH_REVIEW','orders','Sinal de crescimento observado: pedidos subiram pelo menos 10%, com conversão não inferior e estoque observado positivo. Avaliar margem e demanda antes de agir.',(a,b)=>b>=10&&a>=b*1.1&&typeof current.metrics.cvr==='number'&&typeof previous.metrics.cvr==='number'&&current.metrics.cvr>=previous.metrics.cvr&&(current.metrics.stockAvailable??0)>0);
+        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,diagnostics,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable,coverageVerified:false} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
-      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,method:'último snapshot por anúncio dentro de cada período; métricas ausentes permanecem nulas; não soma capturas repetidas' };
+      const campaignRows=i.listingId||i.skuId?[]:db.rows<{account_id:string;marketplace:string;external_id:string;parent_external_id:string;label:string|null;metrics_json:string;context_json:string;evidence_json:string;captured_at:string;source_class:string}>(`SELECT account_id,marketplace,external_id,parent_external_id,label,metrics_json,context_json,evidence_json,captured_at,source_class FROM capture_detail_snapshots WHERE kind='AD_CAMPAIGN' AND captured_at>=? AND captured_at<=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) ORDER BY captured_at DESC,id DESC`,primary.start,primary.end,i.accountId??null,i.accountId??null,i.marketplace??null,i.marketplace??null);
+      const campaigns=[] as Array<{accountId:string;marketplace:string;campaignId:string;label:string|null;spend:number;attributedRevenue:number;capturedAt:string;note:string}>;
+      const seenCampaigns=new Set<string>();
+      for(const row of campaignRows){
+        const key=JSON.stringify([row.account_id,row.external_id,row.parent_external_id]);
+        if(seenCampaigns.has(key))continue;
+        seenCampaigns.add(key);
+        const metrics=parseJsonObject(row.metrics_json),context=parseJsonObject(row.context_json),evidence=parseJsonObject(row.evidence_json);
+        const spend=metrics.adSpend,revenue=metrics.adAttributedRevenue;
+        if(row.source_class!=='A_PRIMARY_UI'||typeof spend!=='number'||typeof revenue!=='number'||!Number.isFinite(spend)||!Number.isFinite(revenue)||revenue<0||spend<=revenue||evidence.coverageWarnings||context.coverageWarnings)continue;
+        const filters=context.filtersAndPeriod;
+        if(typeof filters!=='string')continue;
+        const entries=filters.split('|').map(s=>s.split('='));
+        if(entries.some(e=>e.length!==2)||new Set(entries.map(e=>e[0])).size!==entries.length)continue;
+        const starts=entries.filter(([k])=>/^(start_date|date_from|data inicial|start date)$/.test(k??''));
+        const ends=entries.filter(([k])=>/^(end_date|date_to|data final|end date)$/.test(k??''));
+        if(starts.length!==1||ends.length!==1||starts[0]?.[1]!==i.primaryFrom||ends[0]?.[1]!==i.primaryTo||primary.end>=nowIso())continue;
+        campaigns.push({accountId:row.account_id,marketplace:row.marketplace,campaignId:row.external_id,label:row.label,spend,attributedRevenue:revenue,capturedAt:row.captured_at,note:'Investimento maior que receita atribuída observada; não comprova prejuízo contábil nem efeito incremental.'});
+      }
+      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,campaigns,diagnosticPolicy:'Somente sinais observados com filtros compatíveis; cobertura integral não comprovada; sem inferência causal.',method:'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
     });
 
     this.register('missions.today', (payload) => {
@@ -2537,9 +2614,22 @@ export class LocalService {
     this.register('finance.realized.summary', (payload) => {
       const i = z.object({ accountId: z.string(), periodStart: z.string().datetime().optional(), periodEnd: z.string().datetime().optional() }).parse(payload ?? {});
       const rows = db.rows<Record<string, unknown>>(`SELECT * FROM realized_profit_snapshots WHERE account_id=? AND (? IS NULL OR period_start>=?) AND (? IS NULL OR period_end<=?)`, i.accountId, i.periodStart ?? null, i.periodStart ?? null, i.periodEnd ?? null, i.periodEnd ?? null);
+      if(i.periodStart&&i.periodEnd&&Date.parse(i.periodStart)>Date.parse(i.periodEnd))throw new Error('intervalo de datas inválido');
+      const invalidWindow=rows.some(row=>!Number.isFinite(Date.parse(String(row.period_start)))||!Number.isFinite(Date.parse(String(row.period_end)))||Date.parse(String(row.period_start))>Date.parse(String(row.period_end)));
+      const byEntity=new Map<string,Array<Record<string,unknown>>>();
+      for(const row of rows){
+        const key=row.listing_id==null?'ACCOUNT':'LISTING:'+String(row.listing_id);
+        const list=byEntity.get(key)??[];list.push(row);byEntity.set(key,list);
+      }
+      const mixedScope=byEntity.has('ACCOUNT')&&byEntity.size>1;
+      const overlap=[...byEntity.values()].some(list=>{
+        const sorted=[...list].sort((a,b)=>Date.parse(String(a.period_start))-Date.parse(String(b.period_start)));
+        return sorted.some((row,index)=>index>0&&Date.parse(String(row.period_start))<=Date.parse(String(sorted[index-1]?.period_end)));
+      });
+      const conflict=invalidWindow||mixedScope||overlap;
       const total = (field: string) => rows.reduce((sum, row) => sum + Number(row[field] ?? 0), 0);
       const realizedProfitCents = total('net_revenue_cents') - total('product_cost_cents') - total('packaging_cents') - total('shipping_cents') - total('marketplace_fees_cents') - total('taxes_cents') - total('ad_spend_cents') - total('refunds_cents') - total('return_logistics_cents') - total('cancellation_loss_cents') - total('other_costs_cents');
-      return { accountId: i.accountId, records: rows.length, realizedProfitCents, netRevenueCents: total('net_revenue_cents'), sourceClasses: [...new Set(rows.map((r) => String(r.source_class)))], confidence: rows.length ? 'SOURCE_CLASS_DEPENDENT' : 'NO_DATA', missingVsEstimate: rows.length === 0 };
+      return { accountId: i.accountId, records: rows.length, realizedProfitCents:rows.length&&!conflict?realizedProfitCents:null, netRevenueCents:rows.length&&!conflict?total('net_revenue_cents'):null, sourceClasses: [...new Set(rows.map((r) => String(r.source_class)))], confidence:conflict?'CONFLICTING_RECORDS':rows.length?'SOURCE_CLASS_DEPENDENT':'NO_DATA', missingVsEstimate: rows.length === 0, scope:!rows.length?'NONE':mixedScope?'MIXED':byEntity.has('ACCOUNT')?'ACCOUNT':'OBSERVED_LISTINGS', overlappingPeriods:overlap, mixedScope, coverageVerified:false };
     });
 
     this.register('competitor.evidence.record', (payload, auth) => {

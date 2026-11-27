@@ -313,10 +313,10 @@ export class CaptureService {
   }
 
   /** KPIs calculados a partir do snapshot mais recente do anúncio. */
-  kpisForListing(listingId: string, periodDays = 30): ReturnType<typeof computeListingKpis> | null {
+  kpisForListing(listingId: string, periodDays = 30, capturedSince?:string): ReturnType<typeof computeListingKpis> | null {
     const row = this.db.db
-      .prepare('SELECT * FROM listing_snapshots WHERE listing_id = ? ORDER BY captured_at DESC LIMIT 1')
-      .get(listingId) as
+      .prepare('SELECT * FROM listing_snapshots WHERE listing_id = ? AND (? IS NULL OR captured_at>=?) ORDER BY captured_at DESC,id DESC LIMIT 1')
+      .get(listingId,capturedSince??null,capturedSince??null) as
       | { captured_at: string; reference_at: string; metrics_json: string; account_id: string }
       | undefined;
     if (!row) return null;

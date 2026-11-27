@@ -9,7 +9,14 @@
   "settings.get": "(sem parâmetros)",
   "gemini.testKey": "(sem parâmetros — usa a chave gravada)",
   "account.list": "(sem parâmetros)",
-  "kpi.dashboard": "(sem parâmetros)",
+  "kpi.dashboard": {
+    "accountId": "string?",
+    "marketplace": "mercado_livre|shopee|amazon?",
+    "days": "1–365 days of capture recency",
+    "listingId": "string?",
+    "skuId": "string?",
+    "method": "latest available observations; selected entities exclude account totals"
+  },
   "missions.today": "accountId? | marketplace?",
   "competitor.ownProduct.upsert": "accountId | marketplace | title | brand | model | category | priceCents",
   "competitor.search": "ownProductId | marketplaces | candidates[] | discoveryMethod | sourceClass",
@@ -102,10 +109,12 @@
     "primaryTo": "YYYY-MM-DD",
     "comparisonFrom": "YYYY-MM-DD",
     "comparisonTo": "YYYY-MM-DD",
-    "groupBy": "account|product|listing",
+    "groupBy": "account|product|listing|marketplace",
     "accountId": "string?",
     "marketplace": "mercado_livre|shopee|amazon?",
-    "method": "last snapshot per listing inside each non-overlapping period; null metrics stay unavailable"
+    "method": "observed deltas; compatible source windows and filters required for diagnostics; no proof of full coverage",
+    "listingId": "string?",
+    "skuId": "string?"
   },
   "task.approvePublish": "taskId | confirmation=PUBLICAR <item count> | reason",
   "task.claimNextPublish": "marketplace | accountId | externalListingId (manage_accounts; uso exclusivo da extensão na aba ativa)",
@@ -306,5 +315,13 @@
     "payload": "accountId",
     "permission": "view_reports",
     "behavior": "Read learned routes and observed transitions for the selected verified account."
+  },
+  "kpi.history": {
+    "accountId": "string?",
+    "marketplace": "mercado_livre|shopee|amazon?",
+    "days": "1–365 days of capture recency",
+    "listingId": "string?",
+    "skuId": "string?",
+    "method": "latest daily snapshots by listing/account, null for missing contributions, observed ratios"
   }
 }

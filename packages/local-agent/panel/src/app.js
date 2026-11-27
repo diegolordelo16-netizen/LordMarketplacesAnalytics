@@ -15,6 +15,7 @@ const state = {
   view: 'exec',
   relationsStatus: 'PENDENTE',
   historyPoints: [],
+  execFilters:{marketplace:'',days:30,listingId:'',skuId:''},
 };
 
 if (state.token) {
@@ -56,8 +57,8 @@ function pct(v) {
   return v == null ? '—' : `${num(v, 1)}%`;
 }
 
-function renderHistoryChart(points, metric = 'gmvCents') {
-  const config = {
+function historyMetricConfig(){
+  return {
     gmvCents: { label: 'GMV', format: (v) => brl(v), color: '#5b8def' },
     netRevenueCents: { label: 'Receita líquida', format: (v) => brl(v), color: '#16a085' },
     orders: { label: 'Pedidos', format: (v) => num(v), color: '#a66dd4' },
@@ -66,7 +67,38 @@ function renderHistoryChart(points, metric = 'gmvCents') {
     adAttributedRevenueCents: { label: 'Receita atribuída Ads', format: (v) => brl(v), color: '#2696a6' },
     commissionCents: { label: 'Comissões observadas', format: (v) => brl(v), color: '#9b7bd3' },
     fixedFeeCents: { label: 'Tarifas fixas observadas', format: (v) => brl(v), color: '#be8b51' },
+    units: { label: "Unidades", format: (v) => num(v,2), color: '#5b8def' },
+    stockAvailable: { label: "Estoque disponível", format: (v) => num(v,2), color: '#5b8def' },
+    returnsCount: { label: "Devoluções", format: (v) => num(v,2), color: '#5b8def' },
+    cancellations: { label: "Cancelamentos", format: (v) => num(v,2), color: '#5b8def' },
+    adClicks: { label: "Cliques Ads", format: (v) => num(v,2), color: '#5b8def' },
+    adAttributedOrders: { label: "Pedidos atribuídos Ads", format: (v) => num(v,2), color: '#5b8def' },
+    paidImpressions: { label: "Impressões pagas", format: (v) => num(v,2), color: '#5b8def' },
+    organicImpressions: { label: "Impressões orgânicas", format: (v) => num(v,2), color: '#5b8def' },
+    questionsPending: { label: "Perguntas pendentes", format: (v) => num(v,2), color: '#5b8def' },
+    questionsAnswered: { label: "Perguntas respondidas", format: (v) => num(v,2), color: '#5b8def' },
+    reviewCount: { label: "Avaliações", format: (v) => num(v,2), color: '#5b8def' },
+    reviewRating: { label: "Nota observada", format: (v) => num(v,2), color: '#5b8def' },
+    organicClicks: { label: "Cliques orgânicos", format: (v) => num(v,2), color: '#5b8def' },
+    favorites: { label: "Favoritos", format: (v) => num(v,2), color: '#5b8def' },
+    addToCart: { label: "Adições ao carrinho", format: (v) => num(v,2), color: '#5b8def' },
+    newCustomers: { label: "Novos clientes", format: (v) => num(v,2), color: '#5b8def' },
+    returningCustomers: { label: "Clientes recorrentes", format: (v) => num(v,2), color: '#5b8def' },
+    shippingFeeCents: { label: "Frete", format: (v) => brl(v), color: '#5b8def' },
+    taxCents: { label: "Tributos", format: (v) => brl(v), color: '#5b8def' },
+    marketplaceFeeCents: { label: "Tarifas marketplace", format: (v) => brl(v), color: '#5b8def' },
+    returnsValue: { label: "Valor das devoluções", format: (v) => brl(v*100), color: '#5b8def' },
+    cancellationValue: { label: "Valor dos cancelamentos", format: (v) => brl(v*100), color: '#5b8def' },
+    discounts: { label: "Descontos observados", format: (v) => brl(v*100), color: '#5b8def' },
+    cvr: { label: "Conversão observada", format: (v) => pct(v), color: '#5b8def' },
+    aovCents: { label: "Ticket médio observado", format: (v) => brl(v), color: '#5b8def' },
+    acosPct: { label: "ACoS observado", format: (v) => pct(v), color: '#5b8def' },
+    roas: { label: "ROAS observado", format: (v) => num(v,2), color: '#5b8def' },
+    returnRatePct: { label: "Taxa de devolução observada", format: (v) => pct(v), color: '#5b8def' },
   };
+}
+function renderHistoryChart(points, metric = 'gmvCents') {
+  const config=historyMetricConfig();
   const selected = config[metric] ? metric : 'gmvCents';
   const meta = config[selected];
   const valid = (Array.isArray(points) ? points : []).filter((p) => typeof p[selected] === 'number' && Number.isFinite(p[selected]));
@@ -75,9 +107,10 @@ function renderHistoryChart(points, metric = 'gmvCents') {
   const values = valid.map((p) => p[selected]);
   const min = Math.min(0, ...values), max = Math.max(...values);
   const span = Math.max(1, max - min);
-  const x = (index) => left + index * ((width - left - right) / Math.max(1, valid.length - 1));
+  const start=Date.parse(valid[0].date+'T00:00:00Z'),end=Date.parse(valid[valid.length-1].date+'T00:00:00Z');
+  const x=(index)=>left+(Date.parse(valid[index].date+'T00:00:00Z')-start)/Math.max(86400000,end-start)*(width-left-right);
   const y = (value) => top + (max - value) / span * (height - top - bottom);
-  const path = valid.map((p, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(p[selected]).toFixed(2)}`).join(' ');
+  const path = valid.map((p, index) => `${index&&Date.parse(p.date+'T00:00:00Z')-Date.parse(valid[index-1].date+'T00:00:00Z')===86400000 ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(p[selected]).toFixed(2)}`).join(' ');
   const ticks = [0, .25, .5, .75, 1].map((fraction) => {
     const value = min + span * fraction;
     const yy = top + (height - top - bottom) * (1 - fraction);
@@ -85,7 +118,7 @@ function renderHistoryChart(points, metric = 'gmvCents') {
   }).join('');
   const dots = valid.map((p,index) => `<circle class="trend-dot" cx="${x(index)}" cy="${y(p[selected])}" r="3.5"><title>${esc(p.date)} · ${esc(meta.format(p[selected]))}</title></circle>`).join('');
   const first = valid[0].date, last = valid[valid.length-1].date;
-  return `<div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução de ${esc(meta.label)} de ${esc(first)} a ${esc(last)}">${ticks}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}<text class="trend-axis" x="${left}" y="${height-10}">${esc(first)}</text><text class="trend-axis" x="${width-right}" y="${height-10}" text-anchor="end">${esc(last)}</text></svg></div><p class="muted small">${valid.length} dias com dado · soma do último snapshot diário por anúncio · valores ausentes preservados como nulos.</p>`;
+  return `<div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução de ${esc(meta.label)} de ${esc(first)} a ${esc(last)}">${ticks}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}<text class="trend-axis" x="${left}" y="${height-10}">${esc(first)}</text><text class="trend-axis" x="${width-right}" y="${height-10}" text-anchor="end">${esc(last)}</text></svg></div><p class="muted small">${valid.length} dias com dado · observações por conta e anúncio · lacunas não são interpoladas.</p>`;
 }
 
 function dt(iso) {
@@ -209,11 +242,19 @@ function qualityBadge(q) {
 // ------------------------------------------------------------------ VISÃO EXECUTIVA
 async function viewExec() {
   const generation = viewRenderSequence;
-  const [kpis, missions, alerts, history] = await Promise.all([
-    api('kpi.dashboard', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
+  const selectedAccount=state.accountId;
+  const filters={...state.execFilters};
+  const scope={...(selectedAccount?{accountId:selectedAccount}:{}),...(filters.marketplace?{marketplace:filters.marketplace}:{}),days:filters.days,...(filters.listingId?{listingId:filters.listingId}:{}),...(filters.skuId?{skuId:filters.skuId}:{})};
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('7');
+  const diagnosticScope={accountId:scope.accountId,marketplace:scope.marketplace,listingId:scope.listingId,skuId:scope.skuId,primaryFrom,primaryTo,comparisonFrom,comparisonTo,groupBy:'listing'};
+  const [kpis, missions, alerts, history, realized, diagnostic, profitRows] = await Promise.all([
+    api('kpi.dashboard', scope).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
     api('alerts.list', {}).catch((e) => ({ error: e.message })),
-    api('kpi.history', { ...(state.accountId ? { accountId: state.accountId } : {}), days: 30 }).catch((e) => ({ error: e.message })),
+    api('kpi.history', scope).catch((e) => ({ error: e.message })),
+    selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.summary',{accountId:selectedAccount}).catch(e=>({error:e.message})):Promise.resolve(null),
+    api('kpi.compare.detail',diagnosticScope).catch(e=>({error:e.message})),
+    selectedAccount&&!filters.listingId&&!filters.skuId&&!filters.marketplace?api('finance.realized.list',{accountId:selectedAccount,limit:100}).catch(e=>({error:e.message})):Promise.resolve(null),
   ]);
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   if (generation === viewRenderSequence) state.historyPoints = historyPoints;
@@ -222,9 +263,11 @@ async function viewExec() {
   const k = kpis && !kpis.error ? (kpis.totals || kpis) : null;
   const kpiCards = [
     ['Receita líquida', k ? brl(k.netRevenueCents) : '—', 'netRevenue'],
+    ['Lucro realizado registrado', realized&&!realized.error ? brl(realized.realizedProfitCents) : '—', null],
     ['Lucro de contribuição', k ? brl(k.contributionCents) : '—', null],
     ['Margem de contribuição', k ? pct(k.contributionMarginPct) : '—', null],
     ['GMV', k ? brl(k.gmvCents) : '—', 'gmv'],
+    ['Unidades vendidas', k ? num(k.units) : '—', null],
     ['Pedidos', k ? num(k.orders) : '—', 'orders'],
     ['Visitas', k ? num(k.visits) : '—', 'visits'],
     ['CVR', k ? pct(k.cvr) : '—', 'cvr'],
@@ -235,15 +278,21 @@ async function viewExec() {
     ['Cobertura de estoque', k ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
   ];
 
-  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history] ].filter(([, value]) => value?.error);
+  const signals=(diagnostic?.rows||[]).flatMap(row=>(row.diagnostics||[]).map(d=>({label:row.label,...d})));
+  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history], ['Diagnósticos',diagnostic], ['Registros de lucro',profitRows] ].filter(([, value]) => value?.error);
   return `
     ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
     ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
+    ${card('Escopo dos indicadores', `<div class="form-grid"><label>Marketplace<select id="exec-market"><option value="">Todos</option>${['mercado_livre','shopee','amazon'].map(m=>`<option value="${m}" ${filters.marketplace===m?'selected':''}>${esc(m)}</option>`).join('')}</select></label><label>Recência da captura<select id="exec-days">${[1,7,30,90,365].map(d=>`<option value="${d}" ${filters.days===d?'selected':''}>${d} dias</option>`).join('')}</select></label><label>ID interno do anúncio<input id="exec-listing" maxlength="200" value="${esc(filters.listingId)}"></label><label>ID interno do SKU<input id="exec-sku" maxlength="200" value="${esc(filters.skuId)}"></label></div><button class="btn" data-act="exec-filter">Aplicar filtros</button><p class="muted small">Recência dos snapshots, não período de vendas comprovado. Missões e alertas mantêm o escopo próprio.</p>`)}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
+    ${card('Lucro realizado — evidências', !selectedAccount||filters.listingId||filters.skuId||filters.marketplace?'<p class="muted">Selecione uma loja sem filtros adicionais para consultar registros de lucro.</p>':realized?.error?'<p class="bad-text">'+esc(realized.error)+'</p>':realized?.confidence==='CONFLICTING_RECORDS'?'<p class="bad-text">Registros conflitantes: intervalos sobrepostos ou escopos misturados. Corrija a conciliação antes de somar.</p>':realized?.records?'<p>Registros: '+num(realized.records)+' · Escopo: '+esc(realized.scope)+' · Origens: '+esc(realized.sourceClasses.join(', '))+'</p><p class="muted small">Histórico de registros disponíveis, sem cobertura integral comprovada. Não é o lucro dos últimos 30 dias.</p>':'<p class="muted">Nenhum registro de lucro realizado. Dado ausente não é zero.</p>')}
+    ${card('Diagnósticos automáticos — 7 dias completos', '<p class="muted small">'+esc(diagnostic?.diagnosticPolicy||'Comparação de snapshots; não comprova causalidade.')+' · '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+' (UTC).</p>'+table(['Anúncio','Indicador','Atual','Anterior','Sinal observado'],signals.slice(0,100).map(d=>'<tr><td>'+esc(d.label)+'</td><td>'+esc(d.metric)+'</td><td>'+num(d.current,2)+'</td><td>'+num(d.previous,2)+'</td><td>'+esc(d.note)+'</td></tr>'),diagnostic?.error?'Falha ao consultar diagnósticos.':'Nenhum sinal com evidência suficiente.')+table(['Campanha','Investimento','Receita atribuída'],(diagnostic?.campaigns||[]).slice(0,100).map(d=>'<tr><td>'+esc(d.label||d.campaignId)+'</td><td>'+brl(d.spend*100)+'</td><td>'+brl(d.attributedRevenue*100)+'</td></tr>'),'Nenhuma campanha com evidência suficiente para revisão.')+'<button class="btn" data-act="nav" data-view="compare">Abrir comparações detalhadas</button>')}
+    ${card('Histórico do lucro registrado',table(['Período inicial','Período final','Escopo','Lucro registrado','Origem'],(Array.isArray(profitRows)?profitRows:[]).map(r=>'<tr><td>'+dt(r.period_start)+'</td><td>'+dt(r.period_end)+'</td><td>'+esc(r.listing_id||'Loja')+'</td><td>'+brl(r.realizedProfitCents)+'</td><td>'+esc(r.source_class)+'</td></tr>'),profitRows?.error?'Falha ao carregar registros.':'Selecione uma loja com registros de lucro.')+'<p class="muted small">Registros individuais; períodos sobrepostos não são somados.</p>')}
+    ${card('Como os indicadores são calculados', '<p class="muted small">GMV: faturamento bruto observado. Ticket médio: GMV ÷ pedidos. CVR: pedidos ÷ visitas × 100. ACoS: investimento Ads ÷ receita atribuída × 100. ROAS: receita atribuída ÷ investimento Ads. Taxa de devolução: devoluções ÷ pedidos × 100. Sem denominador positivo ou com dados ausentes, o resultado fica indisponível. Estes totais refletem snapshots; não comprovam automaticamente um período de vendas.</p>')}
 
-    ${card('Histórico de evolução', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias</span></div><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
+    ${card('Histórico de snapshots', `<div class="form-row"><label>Métrica <select id="history-metric">${Object.entries(historyMetricConfig()).map(([key,m])=>`<option value="${esc(key)}">${esc(m.label)}</option>`).join('')}</select></label><span class="muted small">Últimos ${filters.days} dias de captura</span></div><p class="muted small">Cada ponto representa a última observação do dia por loja ou anúncio, não vendas realizadas naquele dia. Métricas ausentes não são tratadas como zero; períodos da origem precisam ser conciliados.</p><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
     ${card('Missões do dia', Array.isArray(missions) && missions.length
       ? missions.map((m) => `<div class="mission">
@@ -304,8 +353,31 @@ async function viewListings() {
 }
 
 // ------------------------------------------------------------------ FINANCEIRO
+const REALIZED_FIELDS=[["netRevenueCents","Receita líquida"],["productCostCents","Custo dos produtos"],["packagingCents","Embalagens"],["shippingCents","Frete"],["marketplaceFeesCents","Taxas marketplace"],["taxesCents","Impostos"],["adSpendCents","Publicidade"],["refundsCents","Reembolsos"],["returnLogisticsCents","Logística reversa"],["cancellationLossCents","Perdas em cancelamentos"],["otherCostsCents","Outros custos"]];
+function realizedPayload(read,accountId){
+  if(!accountId)throw new Error('Selecione uma loja.');
+  const from=read('rp-from'),to=read('rp-to'),evidence=read('rp-evidence').trim();
+  const validDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(Date.parse(v+'T00:00:00Z'))&&new Date(v+'T00:00:00Z').toISOString().slice(0,10)===v;
+  if(!validDate(from)||!validDate(to)||from>to||!evidence)throw new Error('Informe período válido e evidência da conciliação.');
+  const payload={accountId,listingId:read('rp-listing').trim()||undefined,periodStart:from+'T00:00:00.000Z',periodEnd:to+'T23:59:59.999Z',sourceClass:'F_USER_INPUT',evidence:{source:evidence}};
+  for(const [key,label] of REALIZED_FIELDS){
+    const raw=read('rp-'+key).trim();
+    if(!/^\d+(?:[.,]\d{1,2})?$/.test(raw))throw new Error('Informe '+label+'; use 0 somente se confirmado.');
+    const cents=Math.round(Number(raw.replace(',','.'))*100);
+    if(!Number.isSafeInteger(cents)||cents<0)throw new Error('Valor inválido: '+label);
+    payload[key]=cents;
+  }
+  return payload;
+}
 async function viewFinance() {
-  return card('Simulador de margem e cenários', `
+  return card('Registrar lucro realizado', state.accountId?`
+    <p class="muted small">Informe valores efetivamente conciliados. Nenhum campo financeiro é preenchido automaticamente com zero. Não desconte duas vezes valores já incluídos na receita líquida.</p>
+    <div class="form-grid"><label>Anúncio (ID interno, opcional)<input id="rp-listing" maxlength="200"></label><label>Início (UTC)<input type="date" id="rp-from"></label><label>Fim (UTC)<input type="date" id="rp-to"></label>
+    ${REALIZED_FIELDS.map(([key,label])=>`<label>${esc(label)} (R$)<input id="rp-${key}" inputmode="decimal" placeholder="0,00"></label>`).join('')}</div>
+    <label>Referência da conciliação (relatório, data, origem)<textarea id="rp-evidence" maxlength="500" rows="2"></textarea></label>
+    <button class="btn primary" data-act="finance-realized-save">Registrar valores conciliados</button><div id="rp-out" class="out" aria-live="polite"></div>
+  `:'<p class="muted">Selecione uma loja para registrar lucro.</p>')
+  + card('Simulador de margem e cenários', `
     <div class="form-grid">
       <label>Preço de venda (R$) <input id="fs-price" type="number" step="0.01" value="199.90"></label>
       <label>Custo do produto (R$) <input id="fs-cost" type="number" step="0.01" value="89.00"></label>
@@ -832,22 +904,39 @@ async function viewAccounts() {
     + card('SKUs cadastrados', table(['SKU','EAN','GTIN','UPC'], (skus || []).map(x => `<tr><td>${esc(x.sku_code)}</td><td>${esc(x.ean || '—')}</td><td>${esc(x.gtin || '—')}</td><td>${esc(x.upc || '—')}</td></tr>`), 'Nenhum SKU cadastrado.'));
 }
 
+function comparisonPreset(preset,now=new Date()){
+  const today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
+  const day=(offset)=>new Date(today.getTime()+offset*86400000).toISOString().slice(0,10);
+  if(preset==='today')return [day(0),day(0),day(-1),day(-1)];
+  if(preset==='7')return [day(-7),day(-1),day(-14),day(-8)];
+  if(preset==='30')return [day(-30),day(-1),day(-60),day(-31)];
+  if(preset==='month'){
+    const year=today.getUTCFullYear(),month=today.getUTCMonth(),completed=today.getUTCDate()-1;
+    if(completed===0)return null;
+    const previousDays=new Date(Date.UTC(year,month,0)).getUTCDate();
+    const count=Math.min(completed,previousDays);
+    const date=(m,d)=>new Date(Date.UTC(year,m,d)).toISOString().slice(0,10);
+    return [date(month,1),date(month,count),date(month-1,1),date(month-1,count)];
+  }
+  return null;
+}
 async function viewCompare() {
   const [comparison, accounts] = await Promise.all([
     api('kpi.compare', {}).catch(e => ({ error: e.message })),
     api('account.list', {}).catch(() => []),
   ]);
   if (comparison?.error) return card('Comparação indisponível', `<p>${esc(comparison.error)}</p>`);
-  const today = new Date();
-  const day = (offset) => { const local = new Date(today.getTime() + offset * 86400000); local.setMinutes(local.getMinutes() - local.getTimezoneOffset()); return local.toISOString().slice(0,10); }
-  const primaryTo = day(0), primaryFrom = day(-29), comparisonTo = day(-30), comparisonFrom = day(-59);
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo]=comparisonPreset('30');
   return card('Comparação entre lojas e marketplaces', `
     <p class="muted small">Os totais ficam como indisponíveis quando existe anúncio sem captura — não tratamos dado ausente como zero.</p>
     ${table(['Loja','Marketplace','Anúncios','Capturados','GMV','Receita líquida','Comissão','Tarifa fixa','Pedidos','CVR','ROAS'], (comparison.accounts || []).map(a => `<tr><td>${esc(a.display_name)}</td><td>${esc(a.marketplace)}</td><td>${num(a.coverage.totalListings)}</td><td>${num(a.coverage.capturedListings)}</td><td>${brl(a.totals.gmvCents)}</td><td>${brl(a.totals.netRevenueCents)}</td><td>${brl(a.totals.commissionCents)}</td><td>${brl(a.totals.fixedFeeCents)}</td><td>${num(a.totals.orders)}</td><td>${pct(a.totals.cvr)}</td><td>${num(a.totals.roas,2)}</td></tr>`), 'Cadastre contas e capture anúncios para comparar.')}`)
     + card('Comparação por período, produto ou anúncio', `
       <div class="form-grid">
         <label>Conta<select id="cmp-account"><option value="">Todas as contas</option>${(accounts || []).filter(a=>a.is_active!==0).map(a=>`<option value="${esc(a.id)}" ${a.id===state.accountId?'selected':''}>${esc(a.display_name)} · ${esc(a.marketplace)}</option>`).join('')}</select></label>
-        <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option></select></label>
+        <label>Janela de captura (UTC)<select id="cmp-preset"><option value="30">30 dias completos vs anteriores</option><option value="7">7 dias completos vs anteriores</option><option value="today">Hoje vs ontem (hoje parcial)</option><option value="month">Mês até ontem vs dias equivalentes</option><option value="custom">Personalizada</option></select></label>
+        <label>Marketplace<select id="cmp-marketplace"><option value="">Todos</option><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label>
+        <label>ID interno do anúncio (opcional)<input id="cmp-listing-id" maxlength="200"></label><label>ID interno do SKU (opcional)<input id="cmp-sku-id" maxlength="200"></label>
+        <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option><option value="marketplace">Marketplace</option></select></label>
         <label>Período atual — início<input id="cmp-primary-from" type="date" value="${primaryFrom}"></label>
         <label>Período atual — fim<input id="cmp-primary-to" type="date" value="${primaryTo}"></label>
         <label>Período anterior — início<input id="cmp-previous-from" type="date" value="${comparisonFrom}"></label>
@@ -855,7 +944,7 @@ async function viewCompare() {
       </div>
       <div class="actions"><button class="btn primary" data-act="compare-detail">Comparar períodos</button></div>
       <div id="compare-detail-out"></div>
-      <p class="muted small">Usa o último snapshot de cada anúncio em cada período para evitar somar repetidamente capturas acumuladas. Métricas incompletas permanecem indisponíveis. Produto sem SKU/produto canônico é separado pelo anúncio.</p>`)
+      <p class="muted small">Usa o último snapshot de cada anúncio em cada janela de captura. Variações observadas não comprovam vendas realizadas no período; a comparação com filtros compatíveis exige janelas equivalentes, anúncios idênticos e datas explícitas da origem; isso não prova a integralidade das vendas. Métricas incompletas permanecem indisponíveis. Produto sem SKU/produto canônico é separado pelo anúncio.</p>`)
     + card('Cobertura consolidada', `<div class="kpi-grid"><div class="kpi"><div class="l">Lojas</div><div class="v">${num(comparison.accounts?.length || 0)}</div></div><div class="kpi"><div class="l">Anúncios</div><div class="v">${num(comparison.coverage?.totalListings || 0)}</div></div><div class="kpi"><div class="l">Capturados</div><div class="v">${num(comparison.coverage?.capturedListings || 0)}</div></div><div class="kpi"><div class="l">Sem captura</div><div class="v">${num(comparison.coverage?.uncapturedListings || 0)}</div></div></div>`);
 }
 
@@ -1249,6 +1338,7 @@ function createXlsxReport(report) {
   return zipStored(files);
 }
 
+let compareRequestSequence=0;
 const ACTIONS = {
   'browser-operation-save': async () => {
     await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
@@ -1488,6 +1578,15 @@ const ACTIONS = {
     renderView();
   },
 
+  'finance-realized-save': async()=>{
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#rp-out');
+    const payload=realizedPayload(id=>$('#'+id).value,accountId);
+    if(!confirm('Registrar os valores informados nesta loja? Confirme a conciliação e evite períodos duplicados.'))return;
+    const result=await api('finance.realized.upsert',payload);
+    if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#rp-out')||!host)return;
+    host.textContent='Lucro registrado: '+brl(result.realizedProfitCents)+' · fonte informada pelo usuário. Consulte o executivo para verificar conflitos.';
+  },
+  'exec-filter': async()=>{state.execFilters={marketplace:$('#exec-market').value,days:Number($('#exec-days').value),listingId:$('#exec-listing').value.trim(),skuId:$('#exec-sku').value.trim()};await renderView();},
   'kpi-drilldown': async (d) => {
     const metric = d.metric;
     const supported = new Set(['gmv','netRevenue','orders','visits','cvr','aov','acos','roas','returnRate']);
@@ -1497,14 +1596,14 @@ const ACTIONS = {
     const result = await run(() => api('kpi.compare.detail', {
       primaryFrom: day(-6), primaryTo: day(0),
       comparisonFrom: day(-13), comparisonTo: day(-7),
-      groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),
+      groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),...(state.execFilters.marketplace?{marketplace:state.execFilters.marketplace}:{}),...(state.execFilters.listingId?{listingId:state.execFilters.listingId}:{}),...(state.execFilters.skuId?{skuId:state.execFilters.skuId}:{}),
     }));
     const metricLabel = { gmv:'GMV', netRevenue:'Receita líquida', orders:'Pedidos', visits:'Visitas', cvr:'CVR', aov:'Ticket médio', acos:'ACoS', roas:'ROAS', returnRate:'Taxa de devolução' }[metric] || metric;
     const format = (value) => value == null ? '—' : ['gmv','netRevenue','aov'].includes(metric) ? brl(Math.round(value * 100)) : ['cvr','acos','returnRate'].includes(metric) ? pct(value) : metric === 'roas' ? num(value, 2) : num(value);
     const rows = (result.rows || []).filter((row) => row.current?.metrics?.[metric] != null || row.previous?.metrics?.[metric] != null).slice(0, 100);
     const host = $('#kpi-drilldown-out');
     if (!host) return;
-    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
+    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação observada','Variação com filtros compatíveis'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td><td>${row.verifiedDeltaPct?.[metric] == null ? 'Não comprovada' : `${num(row.verifiedDeltaPct[metric],1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
     initializeTables(host);
     host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
@@ -1797,19 +1896,29 @@ const ACTIONS = {
     renderView();
   },
   'compare-detail': async () => {
+    const generation=viewRenderSequence,originalHost=$('#compare-detail-out'),requestId=++compareRequestSequence;
     const value = (id) => $(`#${id}`).value;
     const payload = {
       accountId: value('cmp-account') || undefined,
+      marketplace: value('cmp-marketplace') || undefined,
+      listingId: value('cmp-listing-id').trim() || undefined,
+      skuId: value('cmp-sku-id').trim() || undefined,
       groupBy: value('cmp-group'),
       primaryFrom: value('cmp-primary-from'), primaryTo: value('cmp-primary-to'),
       comparisonFrom: value('cmp-previous-from'), comparisonTo: value('cmp-previous-to'),
     };
     const result = await run(() => api('kpi.compare.detail', payload), 'Comparação calculada a partir dos snapshots disponíveis.');
+    if(requestId!==compareRequestSequence||generation!==viewRenderSequence||originalHost!==$('#compare-detail-out')||!result)return;
     const rows = result?.rows || [];
     const delta = (n) => n == null ? '—' : `${n >= 0 ? '+' : ''}${num(n,1)}%`;
-    const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação GMV','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
-    $('#compare-detail-out').innerHTML = `<p class="muted small">${esc(result?.method || '')}</p>${output}`;
-    initializeTables($('#compare-detail-out'));
+    const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação observada','Compatibilidade dos filtros','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${row.comparisonQuality?.comparable ? delta(row.verifiedDeltaPct.gmv)+' · cobertura não comprovada' : 'Não comprovada'}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
+    const host=$('#compare-detail-out');
+    if(!host||!result)return;
+    const signals=rows.flatMap(row=>(row.diagnostics||[]).map(d=>({label:row.label,...d})));
+    const diagnostics=card('Diagnósticos de desempenho', '<p class="muted small">'+esc(result.diagnosticPolicy||'')+'</p>'+table(['Item','Indicador','Atual','Anterior','Sinal observado'],signals.map(d=>'<tr><td>'+esc(d.label)+'</td><td>'+esc(d.metric)+'</td><td>'+num(d.current,2)+'</td><td>'+num(d.previous,2)+'</td><td>'+esc(d.note)+'</td></tr>'),'Nenhum sinal com evidência suficiente. Isso não comprova ausência de problemas.'));
+    const campaigns=card('Campanhas para revisar',table(['Campanha','Marketplace','Investimento','Receita atribuída','Evidência'],(result.campaigns||[]).map(d=>'<tr><td>'+esc(d.label||d.campaignId)+'</td><td>'+esc(d.marketplace)+'</td><td>'+brl(d.spend*100)+'</td><td>'+brl(d.attributedRevenue*100)+'</td><td>'+esc(d.note)+' · '+dt(d.capturedAt)+'</td></tr>'),'Nenhuma campanha com sinal e período comprováveis. Não equivale a lucro confirmado.'));
+    host.innerHTML = `<p class="muted small">${esc(result.method || '')}</p>${output}${diagnostics}${campaigns}`;
+    initializeTables(host);
   },
 
   'task-recover-draft': async (d) => {
@@ -2074,6 +2183,12 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if(e.target?.id==='cmp-preset'&&e.target.value!=='custom'){
+    const dates=comparisonPreset(e.target.value);
+    if(!dates){e.target.value='custom';toast('Ainda não há dia completo neste mês. Selecione datas manualmente.','bad');return;}
+    ['cmp-primary-from','cmp-primary-to','cmp-previous-from','cmp-previous-to'].forEach((id,i)=>{const input=$('#'+id);if(input)input.value=dates[i];});
+  }
+  if(['cmp-primary-from','cmp-primary-to','cmp-previous-from','cmp-previous-to'].includes(e.target?.id)&&$('#cmp-preset'))$('#cmp-preset').value='custom';
   if (e.target?.id === 'history-metric') {
     const host = $('#history-chart');
     if (host) host.innerHTML = renderHistoryChart(state.historyPoints, e.target.value);
@@ -2100,7 +2215,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
