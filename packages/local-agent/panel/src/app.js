@@ -926,6 +926,7 @@ async function viewConnectors() {
     <p class="muted small">Sem datas, Google usa janela incremental; marketplaces consultam páginas limitadas, com continuação autorizada. Ausência de linha não significa zero.</p>`+
     table(['Provedor','Escopo','Status','Linhas','Última leitura','Ação'],(syncs||[]).map(r=>`<tr><td>${esc(r.connector_id)}</td><td>${esc(r.kind)} · ${esc(r.period_start||'—')} → ${esc(r.period_end||'—')}</td><td>${esc(r.status)}${r.partial?' · PARCIAL':''}</td><td>${num(r.row_count)}</td><td>${dt(r.finished_at)}</td><td><button class="btn tiny" data-act="connector-sync-get" data-id="${esc(r.id)}">Ver evidência</button>${r.has_next?` <button class="btn tiny" data-act="connector-next" data-id="${esc(r.connector_id)}" data-run-id="${esc(r.id)}">Próxima página</button>`:''}</td></tr>`),'Nenhuma leitura nesta loja.')+'<div id="co-out" class="out"></div>')
   + card('Google Trends — importação de exportação oficial',`<p class="muted small">Exporte interesse ao longo do tempo no Google Trends. A API alfa exige acesso específico; a importação local não usa API. Índices de 0 a 100 são relativos à própria exportação.</p><label class="wide">CSV de interesse ao longo do tempo<input id="trends-file" type="file" accept=".csv"></label><button class="btn" data-act="trends-import">Registrar exportação na loja</button>`)
+  + card('Exportações de serviços autorizados',`<div class="form-grid"><label>Categoria<select id="ex-kind"><option value="seo_service_generic">SEO</option><option value="marketplace_service_generic">Inteligência de marketplace</option></select></label><label>Fornecedor<input id="ex-provider" maxlength="100"></label><label>Nome do relatório<input id="ex-dataset" maxlength="100"></label><label>Data de referência (opcional)<input id="ex-date" type="date"></label><label class="wide">Arquivo exportado CSV/XLSX<input id="ex-file" type="file" accept=".csv,.xlsx"></label></div><button class="btn" data-act="external-import">Registrar evidência externa</button><p class="muted small">Somente exportações permitidas pelo fornecedor. Sem API genérica nem envio do arquivo para terceiros; dados ficam separados dos KPIs.</p>`)
   + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td></tr>`), 'Nenhuma importação para esta conta.'))
   + card('Importar relatório', `
     <div class="form-grid">
@@ -2395,11 +2396,23 @@ const ACTIONS = {
     toast(result.ok?'Página registrada: '+result.rowCount+' linhas':result.message,result.ok?'ok':'bad');
     if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
   },
-  'connector-sync-get':async ({id})=>{
+  'external-import':async ()=>{
+    const file=$('#ex-file').files?.[0],accountId=state.accountId,generation=viewRenderSequence;
+    if(!file||!accountId||file.size>2*1024*1024)throw Error('Selecione loja e arquivo CSV/XLSX de até 2 MB.');
+    const fileType=file.name.toLowerCase().split('.').at(-1);
+    if(!['csv','xlsx'].includes(fileType))throw Error('Formato inválido.');
+    const providerLabel=$('#ex-provider').value.trim(),datasetLabel=$('#ex-dataset').value.trim(),connectorId=$('#ex-kind').value,referenceDate=$('#ex-date').value||undefined;
+    if(!providerLabel||!datasetLabel||!confirm('Confirma que a exportação foi obtida com autorização e corresponde à loja selecionada?'))return;
+    const content=fileType==='csv'?{csvText:await file.text()}:{base64:await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('Falha ao ler arquivo'));reader.readAsDataURL(file);})};
+    const result=await api('connector.external.import',{accountId,connectorId,providerLabel,datasetLabel,fileName:file.name,fileType,referenceDate,confirmedSource:true,...content});
+    toast(result.duplicate?'Exportação já registrada.':'Exportação registrada: '+result.rowCount+' linhas.');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
+  'connector-sync-get':async ({id,offset})=>{
     const accountId=state.accountId,generation=viewRenderSequence,host=$('#co-out');
-    const result=await api('connector.sync.get',{accountId,runId:id});
+    const result=await api('connector.sync.get',{accountId,runId:id,offset:Number(offset||0),limit:100});
     if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#co-out'))return;
-    const pre=document.createElement('pre');pre.className='json';pre.textContent=JSON.stringify(result,null,2);host.replaceChildren(pre);
+    const pre=document.createElement('pre');pre.className='json';pre.textContent=JSON.stringify(result,null,2);host.replaceChildren(pre);for(const [label,value] of [['Anterior',result.offset>0?Math.max(0,result.offset-100):null],['Próximas 100',result.nextOffset]]){if(value==null)continue;const btn=document.createElement('button');btn.className='btn tiny';btn.dataset.act='connector-sync-get';btn.dataset.id=id;btn.dataset.offset=String(value);btn.textContent=label;host.append(btn);}
   },
   'connector-test': async ({ id }) => {
     const result = await api('connector.test', { connectorId: id });
@@ -2663,7 +2676,7 @@ document.addEventListener('click', async (e) => {
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
   if (!fn || el.dataset.busy === 'true') return;
-  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save'].includes(el.dataset.act);
+  const protectedAction = ['browser-sync-request', 'browser-sync-advanced', 'browser-sync-schedule', 'browser-sync-retry','finance-realized-save','compare-detail','content-save','connector-configure','connector-test','connector-sync','connector-next','connector-toggle','connector-disconnect','trends-import','external-import','import','import-commit'].includes(el.dataset.act);
   if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);

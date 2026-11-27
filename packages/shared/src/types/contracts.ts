@@ -275,6 +275,7 @@ export const IPC_METHODS = [
   'connector.sync.history',
   'connector.sync.get',
   'connector.trends.import',
+  'connector.external.import',
   'task.verifySaved',
   'task.rollbackPlan',
   'backup.create',

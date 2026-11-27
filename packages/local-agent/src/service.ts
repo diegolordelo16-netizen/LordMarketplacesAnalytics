@@ -292,6 +292,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'connector.sync.history': 'view_reports',
   'connector.sync.get': 'view_reports',
   'connector.trends.import': 'manage_connectors',
+  'connector.external.import': 'manage_connectors',
   'task.verifySaved': 'execute_task',
   'task.rollbackPlan': 'execute_task',
   'backup.create': 'manage_backups',
@@ -3983,12 +3984,29 @@ export class LocalService {
       this.audit(auth,'TRENDS_IMPORT','connector',id,'OK','exportação declarada pelo operador; sem consulta externa');
       return {ok:true,runId:id,rowCount:parsed.rows.length,duplicate:false};
     }));
+    this.register('connector.external.import',(payload,auth)=>db.transaction(()=>{
+      const i=z.object({accountId:z.string().min(1),connectorId:z.enum(['seo_service_generic','marketplace_service_generic']),providerLabel:z.string().trim().min(2).max(100),datasetLabel:z.string().trim().min(2).max(100),fileName:z.string().trim().min(1).max(240),fileType:z.enum(['csv','xlsx']),csvText:z.string().max(2_000_000).optional(),base64:z.string().max(2_800_000).optional(),confirmedSource:z.literal(true),referenceDate:z.string().optional()}).strict().refine(x=>x.fileType==='csv'?!!x.csvText&&!x.base64:!!x.base64&&!x.csvText,'informe somente o arquivo selecionado').parse(payload);
+      if(!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',i.accountId))throw Error('conta ativa não encontrada');
+      if(i.referenceDate&&(!/^\d{4}-\d{2}-\d{2}$/.test(i.referenceDate)||!Number.isFinite(Date.parse(i.referenceDate))||new Date(i.referenceDate).toISOString().slice(0,10)!==i.referenceDate||i.referenceDate>new Date().toISOString().slice(0,10)))throw Error('data de referência inválida');
+      const records=i.fileType==='csv'?parseCsvText(i.csvText!):parseXlsxBase64(i.base64!);
+      if(records.length>5000||Buffer.byteLength(JSON.stringify(records),'utf8')>4*1024*1024)throw Error('exportação externa excede limite de 5000 linhas ou 4 MB normalizados');
+      const source={provider:i.providerLabel,dataset:i.datasetLabel,fileName:i.fileName.replace(/[\/\\]/g,'_'),referenceDate:i.referenceDate??null,sourceClass:'F_USER_INPUT',authorization:'USER_DECLARED'};
+      const scopeKey=createHash('sha256').update(JSON.stringify([i.providerLabel,i.datasetLabel,i.referenceDate??null,records])).digest('hex');
+      const prior=db.row<{id:string;row_count:number}>("SELECT id,row_count FROM connector_sync_runs WHERE connector_id=? AND account_id=? AND scope_key=? AND status='OK'",i.connectorId,i.accountId,scopeKey);
+      if(prior)return {ok:true,runId:prior.id,rowCount:prior.row_count,duplicate:true};
+      const id=randomUUID(),at=nowIso();
+      db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,source_metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,i.connectorId,i.accountId,scopeKey,'AUTHORIZED_USER_EXPORT',i.referenceDate??null,i.referenceDate??null,at,at,'OK',0,records.length,0,'Exportação declarada pelo operador; sem API ou validação remota, não promove KPIs.',JSON.stringify(source));
+      const insert=db.db.prepare('INSERT INTO connector_sync_rows(run_id,row_key,reference_date,values_json) VALUES(?,?,?,?)');
+      records.forEach((row,index)=>insert.run(id,String(index+1).padStart(6,'0'),i.referenceDate??null,JSON.stringify(row)));
+      this.audit(auth,'EXTERNAL_EXPORT_IMPORT','connector',id,'OK','exportação declarada pelo operador; sem consulta externa');
+      return {ok:true,runId:id,rowCount:records.length,duplicate:false};
+    }));
     this.register('connector.sync.get',payload=>{
-      const i=z.object({accountId:z.string().min(1),runId:z.string().min(1)}).strict().parse(payload);
-      const run=db.row('SELECT id,connector_id,account_id,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,previous_run_id,CASE WHEN next_cursor IS NOT NULL THEN 1 ELSE 0 END has_next FROM connector_sync_runs WHERE id=? AND account_id=?',i.runId,i.accountId);
+      const i=z.object({accountId:z.string().min(1),runId:z.string().min(1),offset:z.number().int().min(0).max(10000).default(0),limit:z.number().int().min(1).max(500).default(100)}).strict().parse(payload);
+      const run=db.row<{row_count:number}>('SELECT id,connector_id,account_id,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note,source_metadata_json,previous_run_id,CASE WHEN next_cursor IS NOT NULL THEN 1 ELSE 0 END has_next FROM connector_sync_runs WHERE id=? AND account_id=?',i.runId,i.accountId);
       if(!run)throw Error('sincronização não pertence à conta');
-      const rows=db.rows<{row_key:string;reference_date:string|null;values_json:string}>('SELECT * FROM connector_sync_rows WHERE run_id=? ORDER BY row_key LIMIT 1000',i.runId);
-      return {run,rows:rows.map(row=>({key:row.row_key,date:row.reference_date,values:JSON.parse(row.values_json)})),note:'Fonte externa, não somar com métricas do marketplace.'};
+      const rows=db.rows<{row_key:string;reference_date:string|null;values_json:string}>('SELECT * FROM connector_sync_rows WHERE run_id=? ORDER BY row_key LIMIT ? OFFSET ?',i.runId,i.limit,i.offset);
+      return {run,offset:i.offset,total:run.row_count,nextOffset:i.offset+rows.length<run.row_count?i.offset+rows.length:null,rows:rows.map(row=>({key:row.row_key,date:row.reference_date,values:JSON.parse(row.values_json)})),note:'Fonte externa, não somar com métricas do marketplace.'};
     });
 
     this.register('task.verifySaved', (payload, auth) => {
@@ -4315,7 +4333,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
     this.register('connector.registry', () => db.rows<Record<string, unknown>>(
       `SELECT c.*, COALESCE(s.enabled, CASE WHEN c.status = 'CONECTADO' THEN 1 ELSE 0 END) AS enabled, cfg.last_test_at,cfg.last_test_message,
               CASE WHEN cfg.connector_id IS NULL THEN 0 ELSE 1 END AS configured,
-              (SELECT MAX(finished_at) FROM connector_sync_runs r WHERE r.connector_id=c.id AND r.status='OK') last_sync_at,
+              (SELECT MAX(finished_at) FROM connector_sync_runs r WHERE r.connector_id=c.id AND r.status='OK' AND (cfg.connector_id IS NULL OR r.account_id=json_extract(cfg.public_config_json,'$.accountId'))) last_sync_at,
               (SELECT COUNT(*) FROM connector_request_log q WHERE q.connector_id=c.id AND q.requested_at>=strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')) requests_24h,
               json_extract(cfg.public_config_json,'$.accountId') bound_account_id
          FROM connector_registry c LEFT JOIN connector_states s ON s.connector_id = c.id
@@ -4325,6 +4343,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       const i = z.object({ connectorId: z.string().min(1), enabled: z.boolean() }).parse(payload);
       const connector = db.row<{ id: string; requires_credentials: number; status: string }>('SELECT id,requires_credentials,status FROM connector_registry WHERE id=?', i.connectorId);
       if (!connector) throw new Error('conector não encontrado');
+      if(i.enabled&&!supportedId(i.connectorId)&&connector.requires_credentials===1)throw Error('provedor sem adaptador; use importação de exportação autorizada');
       if(this.connectorBusy.has(i.connectorId))throw Error('conector ocupado');
       if (i.enabled && connector.requires_credentials === 1 && connector.status !== 'CONECTADO') {
         throw new Error('conector não pode ser habilitado: credenciais e teste de conexão ainda não foram configurados. O catálogo não representa uma integração ativa.');
