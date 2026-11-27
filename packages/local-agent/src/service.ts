@@ -842,7 +842,7 @@ export class LocalService {
         'SELECT id, account_id, marketplace, external_id, title FROM listings WHERE (? IS NULL OR account_id = ?) AND (? IS NULL OR marketplace = ?) AND (? IS NULL OR id=?) AND (? IS NULL OR sku_id=?)',
         filter.accountId ?? null, filter.accountId ?? null, filter.marketplace ?? null, filter.marketplace ?? null,filter.listingId??null,filter.listingId??null,filter.skuId??null,filter.skuId??null,
       );
-      const perListing = listings.map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, days, cutoff) }));
+      const perListing = listings.map((l) => ({ ...l, kpis: capture.kpisForListing(l.id, 30, cutoff) }));
       const captured = perListing.filter((l) => l.kpis !== null);
       const sumKnown = (rows: typeof perListing, select: (pillars: NonNullable<(typeof perListing)[number]['kpis']>['pillars']) => number | null): number | null => {
         if (rows.length === 0 || rows.some((l) => !l.kpis)) return null;
@@ -977,18 +977,19 @@ export class LocalService {
       const i = z.object({
         accountId: z.string().optional(),
         marketplace: z.enum(['mercado_livre','shopee','amazon']).optional(),
-        days: z.number().int().min(7).max(365).default(30),
+        days: z.number().int().min(1).max(365).default(30),
+        listingId:z.string().min(1).max(200).optional(),skuId:z.string().min(1).max(200).optional(),
       }).parse(payload ?? {});
       if (i.accountId && !db.row('SELECT id FROM accounts WHERE id=?', i.accountId)) throw new Error('conta não encontrada');
       const from = new Date(Date.now() - i.days * 86_400_000).toISOString();
       const rows = db.rows<{ listing_id:string; account_id:string; marketplace:string; captured_at:string; metrics_json:string }>(
         `SELECT s.listing_id,s.account_id,l.marketplace,s.captured_at,s.metrics_json
            FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id
-          WHERE s.captured_at>=? AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?)
+          WHERE s.captured_at>=? AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?) AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?)
           ORDER BY s.captured_at ASC`,
-        from, i.accountId ?? null, i.accountId ?? null, i.marketplace ?? null, i.marketplace ?? null,
+        from, i.accountId ?? null, i.accountId ?? null, i.marketplace ?? null, i.marketplace ?? null,i.listingId??null,i.listingId??null,i.skuId??null,i.skuId??null,
       );
-      const accountRows = db.rows<{ account_id:string; marketplace:string; page_kind:string; captured_at:string; metrics_json:string }>(
+      const accountRows = i.listingId||i.skuId?[]:db.rows<{ account_id:string; marketplace:string; page_kind:string; captured_at:string; metrics_json:string }>(
         `SELECT account_id,marketplace,page_kind,captured_at,metrics_json FROM account_snapshots
           WHERE captured_at>=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?)
           ORDER BY captured_at ASC`,
