@@ -33,6 +33,15 @@
     </section>
 
     <section class="card">
+      <h2>Anúncios e variações — Mercado Livre</h2>
+      <p class="hint">Somente propostas aprovadas. Abra a lista para duplicação ou o formulário dedicado da variação. O executor recusa controles ambíguos e não repete cliques. Depois capture o anúncio/variação resultante e confira pelo dashboard.</p>
+      <label class="field-label" for="listing-op-proposal">ID da proposta</label><input id="listing-op-proposal" maxlength="200" autocomplete="off">
+      <label class="field-label" for="listing-op-external">ID externo do anúncio</label><input id="listing-op-external" maxlength="200" autocomplete="off">
+      <label class="field-label" for="listing-op-action">Ação</label><select id="listing-op-action"><option value="DUPLICATE">Duplicar anúncio</option><option value="CREATE_VARIATION">Criar variação simples</option><option value="EDIT_VARIATION">Editar preço/estoque da variação</option></select>
+      <label class="field-label" for="listing-op-variation">ID externo da variação (edição)</label><input id="listing-op-variation" maxlength="200" autocomplete="off">
+      <button id="listing-op-apply">Executar proposta aprovada</button><p class="hint" id="listing-op-out" role="status">Nenhuma operação solicitada.</p>
+    </section>
+    <section class="card">
       <h2>Orçamento diário — Mercado Livre</h2>
       <p class="hint">Proposta aprovada no dashboard com baseline e changes contendo apenas dailyBudgetCents. Abra a campanha na aba ativa. A execução exige confirmação no navegador; a leitura após recarga não prova causalidade.</p>
       <label class="field-label" for="budget-proposal">ID da proposta aprovada</label>
