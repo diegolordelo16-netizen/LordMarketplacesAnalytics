@@ -538,7 +538,22 @@ async function learningAction(action){
     $('learning-status').textContent=action==='clear'?'Memória apagada.':'Página demonstrada e salva.';
   }
 }
+let budgetBusy=false;
+async function budgetAction(action){
+  if(budgetBusy)return;
+  const proposalId=$('budget-proposal').value.trim(),campaignRef=$('budget-campaign').value.trim(),out=$('budget-out');
+  if(!proposalId||!campaignRef){out.textContent='Informe a proposta e a campanha.';return;}
+  if(!window.confirm(action==='apply'?'Solicitar uma execução única da proposta aprovada? Confira a loja e o orçamento na página.':'A página foi recarregada e corresponde à mesma campanha?'))return;
+  budgetBusy=true;$('budget-apply').disabled=true;$('budget-verify').disabled=true;
+  try{
+    const response=await call('campaign.browser.'+action,{proposalId,campaignRef,confirmed:true});
+    out.textContent=response?.ok?JSON.stringify(response.result):response?.error?.message||'Operação recusada. Não repetir sem conferir.';
+  }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
+  finally{budgetBusy=false;$('budget-apply').disabled=false;$('budget-verify').disabled=false;}
+}
 document.addEventListener('DOMContentLoaded', async () => {
+  $('budget-apply').addEventListener('click',()=>void budgetAction('apply'));
+  $('budget-verify').addEventListener('click',()=>void budgetAction('verify'));
   $('learning-start').addEventListener('click',()=>void learningAction('start'));
   $('learning-stop').addEventListener('click',()=>stopLearning());
   $('learning-observe').addEventListener('click',()=>void learningAction('observe'));
