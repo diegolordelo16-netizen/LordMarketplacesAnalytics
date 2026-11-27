@@ -4,6 +4,7 @@
  */
 import { parseCsvText, parseXlsxBase64 } from './importers/tabular';
 import { parsePdfBase64 } from './importers/pdf';
+import { googleAdsTerm, lookupGoogleAdsVolume } from './connectors/dataforseo';
 import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -135,6 +136,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'keyword.list': 'view_reports',
   'keyword.gap': 'view_reports',
   'keyword.suggest': 'view_reports',
+  'keyword.googleVolume': 'manage_connectors',
   'keyword.cluster': 'manage_market_intelligence',
   'keyword.visibility': 'view_reports',
   'keyword.cannibalization': 'view_reports',
@@ -1961,6 +1963,17 @@ export class LocalService {
       return db.rows<Record<string, unknown>>('SELECT * FROM keyword_competitor_gaps WHERE account_id = ? ORDER BY computed_at DESC', i.accountId);
     });
 
+    this.register('keyword.googleVolume',async(payload,auth)=>{
+      const input=z.object({
+        accountId:z.string().min(1),terms:z.array(googleAdsTerm).min(1).max(20),
+        login:z.string().trim().min(1).max(254).regex(/^[^:\r\n]+$/),
+        password:z.string().min(1).max(256),confirmedPaidRequest:z.literal(true),
+      }).strict().parse(payload);
+      if(!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',input.accountId))throw Error('conta ativa não encontrada');
+      const result=await lookupGoogleAdsVolume(input.login,input.password,input.terms);
+      this.audit(auth,'GOOGLE_ADS_SEARCH_VOLUME','account',input.accountId,'OK',String(result.items.length)+' termos');
+      return result;
+    });
     this.register('keyword.suggest', (payload) => {
       const i = z.object({ accountId: z.string().min(1), marketplace: z.enum(['mercado_livre','shopee','amazon']).optional(), limit: z.number().int().min(1).max(200).default(80) }).parse(payload ?? {});
       const account = db.row<{id:string;marketplace:string}>('SELECT id,marketplace FROM accounts WHERE id=? AND is_active=1', i.accountId);

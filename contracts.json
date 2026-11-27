@@ -1,5 +1,12 @@
 {
   "keyword.upsert": "term | marketplace | intent | language",
+  "keyword.googleVolume": {
+    "accountId": "string",
+    "terms": "1..20 Google Ads terms",
+    "login": "transient DataForSEO API login",
+    "password": "transient DataForSEO API password",
+    "confirmedPaidRequest": true
+  },
   "rank.record": "listingId | keywordId | position | isSponsored | context",
   "competitor.upsert": "accountId | marketplace | name | handle | groupKind",
   "competitor.relations": "ownProductId | accountId | status",
