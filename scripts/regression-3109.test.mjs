@@ -217,3 +217,33 @@ test('retomada avançada revisita marcadores conhecidos e não recaptura página
   const result=await vm.runInContext('captureListingPages(1,5,opts)',ctx);
   assert.deepEqual(captures,[2,3]);assert.equal(result.pagesSucceeded,3);assert.equal(result.complete,true);assert.equal(progress.at(-1).unsupportedLinks,false);
 });
+
+function generalSpaFixture({repeat=false,changeAccount=false}={}){
+  const captures=[],progress=[];
+  const url='https://seller.shopee.com.br/ratings';
+  let page=1,closed=false;
+  const info=()=>({ok:true,url,marketplace:'shopee',accountId:changeAccount&&page===2?'other':'store-a',pageKind:'seller_reputation',filterSignature:'',spaPagination:{page,canAdvance:page<2},paginationUnsupported:page<2,authorizedAreaLinks:[]});
+  const snapshot=()=>({...info(),spaPage:page,customerVoice:[{kind:'REVIEW',externalRef:'R'+(repeat?1:page),text:'review'}]});
+  const opts={logicalBatchId:'batch-1',onProgress:async v=>progress.push(structuredClone(v))};
+  const ctx=vm.createContext({URL,URLSearchParams,crypto:globalThis.crypto,TextEncoder,setTimeout:fn=>fn(),marketplaceOf:()=> 'shopee',readCapturePageInfo:async()=>info(),waitForTabComplete:async()=>{},captureTab:async(_,expected)=>{captures.push(expected);return {ok:true,snapshot:snapshot()}},chrome:{tabs:{get:async()=>({url,windowId:1}),create:async()=>({id:2}),update:async()=>{page=1},remove:async()=>{closed=true},sendMessage:async(_,msg)=>{if(msg.type==='MI_CAPTURE_ADVANCE_SPA'){page++;return {ok:true}}if(msg.type==='MI_CAPTURE_REQUEST')return {ok:true,snapshot:snapshot()};return info()}}},opts});
+  vm.runInContext(worker.slice(worker.indexOf('const AUTHORIZED_AREA_KINDS'),worker.indexOf('/**\n * Executor DRAFT')),ctx);
+  return {captures,progress,closed:()=>closed,scan:async(max,resumeState)=>{page=1;ctx.max=max;opts.resumeState=resumeState;return vm.runInContext('captureAuthorizedAreas(1,max,opts)',ctx)}};
+}
+test('SPA geral distingue avaliações na mesma URL, retoma sem recaptura e preserva totais',async()=>{
+  const f=generalSpaFixture();
+  const first=await f.scan(1);
+  assert.equal(first.pagesSucceeded,1);assert.equal(first.pendingPages,1);
+  const second=await f.scan(1,f.progress.at(-1));
+  assert.equal(second.pagesSucceeded,2);assert.equal(second.pendingPages,0);assert.equal(second.unsupportedLinks,false);
+  assert.deepEqual(f.captures.map(x=>x.spaPage),[1,2]);
+  assert.notEqual(f.captures[0].captureKey,f.captures[1].captureKey);
+  assert.equal(f.captures[1].skipAreaTotals,true);assert.equal(f.closed(),true);
+});
+test('SPA geral interrompe registros repetidos e mudança de conta',async()=>{
+  for(const options of [{repeat:true},{changeAccount:true}]){
+    const f=generalSpaFixture(options);
+    const result=await f.scan(5);
+    assert.equal(result.pagesSucceeded,1);assert.equal(result.pendingPages,1);assert.equal(result.unsupportedLinks,true);
+    assert.equal(f.captures.length,1);assert.equal(f.closed(),true);
+  }
+});
