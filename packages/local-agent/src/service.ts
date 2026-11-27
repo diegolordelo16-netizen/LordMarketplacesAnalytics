@@ -1340,10 +1340,12 @@ export class LocalService {
         const primaryItem=group.periods.primary[0];
         const funnelEvidence=primaryItem&&i.groupBy==='listing'&&comparable?parseJsonObject(primaryItem.evidence_json):{};
         const funnelMetric=(key:string)=>{
-          const evidence=funnelEvidence[key],value=primaryItem?.metrics[key];
+          const rowEvidence=funnelEvidence.listingFunnelEvidence;
+          const explicit=rowEvidence&&typeof rowEvidence==='object'&&!Array.isArray(rowEvidence)?(rowEvidence as Record<string,unknown>)[key]:undefined;
+          const evidence=explicit??(['totalImpressions','checkoutStarts'].includes(key)?null:funnelEvidence[key]),value=primaryItem?.metrics[key];
           return typeof evidence==='string'&&evidence.trim()!==''&&typeof value==='number'&&Number.isSafeInteger(value)&&value>=0?value:null;
         };
-        const funnelDetails=growth?{organicImpressions:funnelMetric('organicImpressions'),paidImpressions:funnelMetric('paidImpressions'),addToCart:funnelMetric('addToCart'),checkout:null}:null;
+        const funnelDetails=growth?{organicImpressions:funnelMetric('organicImpressions'),paidImpressions:funnelMetric('paidImpressions'),addToCart:funnelMetric('addToCart'),totalImpressions:funnelMetric('totalImpressions'),checkout:funnelMetric('checkoutStarts')}:null;
         return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,diagnostics,revenueDrivers:revenueDrivers(current.metrics,previous.metrics,comparable),growthOpportunity:growth,financialGrowth,funnelDetails,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable,coverageVerified:false} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
       const campaignRows=i.listingId||i.skuId?[]:db.rows<{account_id:string;marketplace:string;external_id:string;parent_external_id:string;label:string|null;metrics_json:string;context_json:string;evidence_json:string;captured_at:string;source_class:string}>(`SELECT account_id,marketplace,external_id,parent_external_id,label,metrics_json,context_json,evidence_json,captured_at,source_class FROM capture_detail_snapshots WHERE kind='AD_CAMPAIGN' AND captured_at>=? AND captured_at<=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) ORDER BY captured_at DESC,id DESC`,primary.start,primary.end,i.accountId??null,i.accountId??null,i.marketplace??null,i.marketplace??null);
