@@ -293,9 +293,11 @@ export class TaskScheduler {
                 i.cover_image_id,i.order_index,i.status,i.attempts,i.last_error,l.external_id
            FROM tasks t JOIN task_items i ON i.task_id=t.id
            JOIN listings l ON l.id=i.listing_id AND l.account_id=i.account_id AND l.marketplace=i.marketplace
+           JOIN accounts a ON a.id=i.account_id AND a.marketplace=i.marketplace AND a.is_active=1
           WHERE t.status IN ('RUNNING','WAITING_BROWSER') AND t.mode='DRAFT'
             AND t.kind IN ('edit_title','edit_description')
-            AND i.status IN ('PENDING','FAILED','PROCESSING') AND i.attempts < 3
+            AND i.status IN ('PENDING','FAILED') AND i.attempts < 3
+            AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.status='PROCESSING')
             AND i.marketplace=? AND l.external_id=? AND i.account_id=?
           ORDER BY t.created_at,i.order_index LIMIT 2`,
         marketplace, externalListingId, accountId,
@@ -305,7 +307,7 @@ export class TaskScheduler {
       if (!match) return null;
       const changed = this.db.db.prepare(
         `UPDATE task_items SET status='PROCESSING',attempts=attempts+1,last_error=NULL
-          WHERE id=? AND status IN ('PENDING','FAILED','PROCESSING') AND attempts < 3`,
+          WHERE id=? AND status IN ('PENDING','FAILED') AND attempts < 3`,
       ).run(match.item_id);
       if (Number(changed.changes) !== 1) return null;
       const current = this.get(match.task_id);

@@ -508,21 +508,23 @@ export class LocalService {
     // ------------------------------------------------------------ contas & captura
     this.register('account.upsert', (payload, auth) => {
       const schema = z.object({
-        marketplace: z.string(),
-        accountId: z.string(),
-        displayName: z.string(),
+        marketplace: z.string().min(1).max(80),
+        accountId: z.string().trim().min(1).max(256),
+        displayName: z.string().trim().min(1).max(500),
         handle: z.string().optional(),
         confidence: z.number().min(0).max(1),
         verifiedByUser: z.boolean(),
       });
       const input = schema.parse(payload);
       const now = new Date().toISOString();
+      const existing = db.row<{ marketplace: string }>('SELECT marketplace FROM accounts WHERE id=?', input.accountId);
+      if (existing && existing.marketplace !== input.marketplace) throw new Error('identidade da conta pertence a outro marketplace');
       db.db
         .prepare(
           `INSERT INTO accounts (id, marketplace, external_ref, display_name, handle, detection_confidence, verified_by_user, is_active, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
            ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, handle=excluded.handle,
-             detection_confidence=excluded.detection_confidence, verified_by_user=excluded.verified_by_user, updated_at=excluded.updated_at`,
+             detection_confidence=excluded.detection_confidence, verified_by_user=excluded.verified_by_user, updated_at=excluded.updated_at WHERE accounts.marketplace=excluded.marketplace`,
         )
         .run(input.accountId, input.marketplace, input.handle ?? null, input.displayName, input.handle ?? null, input.confidence, input.verifiedByUser ? 1 : 0, now, now);
       this.audit(auth, 'ACCOUNT_UPSERT', 'account', input.accountId, 'OK');
@@ -559,11 +561,12 @@ export class LocalService {
           const admins = db.row<{ total: number }>("SELECT COUNT(*) AS total FROM users WHERE role='super_admin' AND is_active=1");
           if ((admins?.total ?? 0) <= 1) throw new Error('o último super_admin ativo não pode perder o papel');
         }
-        db.db.prepare('UPDATE users SET email = ?, display_name = ?, role = ? WHERE id = ?').run(email, i.displayName, i.role, existing.id);
-        if (i.password) {
-          const { hash, salt } = hashPassword(i.password);
-          db.db.prepare('UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?').run(hash, salt, existing.id);
-        }
+        const credentials = i.password ? hashPassword(i.password) : null;
+        db.transaction(() => {
+          db.db.prepare('UPDATE users SET email = ?, display_name = ?, role = ? WHERE id = ?').run(email, i.displayName, i.role, existing.id);
+          if (credentials) db.db.prepare('UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?').run(credentials.hash, credentials.salt, existing.id);
+          if (credentials || current?.role !== i.role) db.db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(now, existing.id);
+        });
         this.audit(auth, 'USER_UPDATE', 'user', existing.id, 'OK', `papel ${i.role}`);
         return { ok: true, id: existing.id, created: false };
       }
@@ -1360,7 +1363,7 @@ export class LocalService {
           task.id, i.accountId ?? null, i.accountId ?? null,
         );
         const approvals = db.rows<{ id: string; item_id: string; status: string; expires_at: string }>(
-          'SELECT id,item_id,status,expires_at FROM task_publish_approvals WHERE task_id=? ORDER BY approved_at', task.id,
+          'SELECT id,item_id,status,expires_at FROM task_publish_approvals WHERE task_id=? AND (? IS NULL OR account_id=?) ORDER BY approved_at', task.id, i.accountId ?? null, i.accountId ?? null,
         );
         const progress = {
           completed: items.filter((item) => item.status === 'COMPLETED').length,
@@ -1425,13 +1428,16 @@ export class LocalService {
       return tasks.claimNextDraftItem(i.marketplace, i.externalListingId, i.accountId);
     });
 
-    this.register('task.itemResult', (payload, auth) => {
+    this.register('task.itemResult', (payload, auth) => db.transaction(() => {
       const i = z.object({
         itemId: z.string().min(1), ok: z.boolean(), message: z.string().max(1000).optional(),
         accountId: z.string().min(1).optional(), externalListingId: z.string().min(1).optional(),
         baseline: z.object({ title: z.string().max(5000).nullable(), description: z.string().max(20000).nullable() }).optional(),
         sourceUrl: z.string().url().optional(),
       }).parse(payload);
+      const current = db.row<{ status: string; task_status: string; active: number; account_id: string; external_id: string }>(`SELECT ti.status,t.status AS task_status,a.is_active AS active,ti.account_id,l.external_id FROM task_items ti JOIN tasks t ON t.id=ti.task_id JOIN listings l ON l.id=ti.listing_id AND l.account_id=ti.account_id AND l.marketplace=ti.marketplace JOIN accounts a ON a.id=ti.account_id AND a.marketplace=ti.marketplace WHERE ti.id=?`, i.itemId);
+      if (!current || current.status !== 'PROCESSING' || !['RUNNING','WAITING_BROWSER'].includes(current.task_status) || !current.active) throw new Error('item não está em execução em uma conta ativa');
+      if (i.accountId !== current.account_id || i.externalListingId !== current.external_id) throw new Error('resultado não corresponde à conta e ao anúncio reivindicados');
       if (i.ok) {
         if (!i.baseline || !i.sourceUrl) throw new Error('snapshot original do anúncio é obrigatório para concluir o rascunho');
         const item = db.row<{ marketplace: string; account_id: string; listing_id: string; title: string | null; description_additions: string | null; external_id: string }>(
@@ -1452,7 +1458,7 @@ export class LocalService {
       const result = tasks.completeDraftItem(i.itemId, i.ok, i.message);
       this.audit(auth, 'TASK_ITEM_RESULT', 'task_item', i.itemId, i.ok ? 'OK' : 'FAILED', i.message);
       return result;
-    });
+    }));
 
     // Publicação é uma segunda etapa: só um super_admin pode autorizar e cada
     // anúncio recebe confirmação independente no navegador ativo.
@@ -3208,12 +3214,13 @@ export class LocalService {
     const row = this.deps.db.row<{ user_id: string; role: AccessRole; expires_at: string; revoked_at: string | null }>(
       `SELECT s.user_id, u.role, s.expires_at, s.revoked_at
          FROM auth_sessions s JOIN users u ON u.id = s.user_id
-        WHERE s.token_hash = ?`,
+        WHERE s.token_hash = ? AND u.is_active=1`,
       sha256(token),
     );
     if (!row) return null;
     if (row.revoked_at) return null;
-    if (Date.parse(row.expires_at) < Date.now()) return null;
+    const expiry = Date.parse(row.expires_at);
+    if (!Number.isFinite(expiry) || expiry <= Date.now()) return null;
     return { userId: row.user_id, role: row.role };
   }
 

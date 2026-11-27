@@ -559,6 +559,29 @@ describe('autenticação e perfis', () => {
     expect((stillValid.result as { ok: boolean }).ok).toBe(true);
   });
 
+  it('nega sessão de usuário inativo mesmo quando revogação não foi executada', async () => {
+    db.db.prepare("UPDATE users SET is_active=0 WHERE email='admin@local.test'").run();
+    expect((await call('account.list')).error?.code).toBe('UNAUTHORIZED');
+  });
+  it('nega sessão com data de expiração inválida', async () => {
+    db.db.prepare("UPDATE auth_sessions SET expires_at='invalido'").run();
+    expect((await call('account.list')).error?.code).toBe('UNAUTHORIZED');
+  });
+  it('revoga todas as sessões ao trocar senha', async () => {
+    const admin = db.row<{ id: string }>("SELECT id FROM users WHERE email='admin@local.test'")!;
+    const changed = await call('user.upsert', { id: admin.id, email: 'admin@local.test', displayName: 'Admin', role: 'super_admin', password: 'nova-senha-forte-123' });
+    expect(changed.ok).toBe(true);
+    expect((await call('account.list')).error?.code).toBe('UNAUTHORIZED');
+    const login = await call('auth.login', { email: 'admin@local.test', password: 'nova-senha-forte-123' }, false);
+    expect((login.result as { ok: boolean }).ok).toBe(true);
+  });
+  it('não sobrescreve cadastro de conta pertencente a outro marketplace', async () => {
+    seedImportAccount('acct-scope');
+    const result = await call('account.upsert', { marketplace: 'shopee', accountId: 'acct-scope', displayName: 'Outro', confidence: 1, verifiedByUser: true });
+    expect(result.ok).toBe(false);
+    expect(db.row('SELECT marketplace,display_name FROM accounts WHERE id=?', 'acct-scope')).toMatchObject({ marketplace: 'mercado_livre', display_name: 'Loja acct-scope' });
+  });
+
   it('registra auditoria de login', async () => {
     const rows = db.rows<{ action: string; result: string }>('SELECT action, result FROM audit_log');
     expect(rows.some((r) => r.action === 'LOGIN' && r.result === 'OK')).toBe(true);
@@ -829,6 +852,11 @@ describe('tarefas e guard', () => {
     const claim = claimed.result as { item: { id: string; title: string }; externalListingId: string };
     expect(claim.item.title).toBe('Título novo');
     expect(claim.externalListingId).toBe('MLB1');
+    expect((await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:c', externalListingId: 'MLB1' })).result).toBeNull();
+    expect(db.row<{ attempts: number }>('SELECT attempts FROM task_items WHERE id=?', claim.item.id)?.attempts).toBe(1);
+    const wrong = await call('task.itemResult', { itemId: claim.item.id, ok: false, accountId: 'outra-loja', externalListingId: 'MLB1' });
+    expect(wrong.ok).toBe(false);
+    expect(db.row<{ status: string }>('SELECT status FROM task_items WHERE id=?', claim.item.id)?.status).toBe('PROCESSING');
     const completed = await call('task.itemResult', { itemId: claim.item.id, ok: true, accountId: 'ml:c', externalListingId: 'MLB1', message: 'rascunho preenchido e verificado', baseline: { title: 'Título anterior', description: 'Descrição anterior' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1' });
     expect((completed.result as { taskStatus: string }).taskStatus).toBe('COMPLETED');
     const list = (await call('task.list')).result as Array<{ status: string; listing_id: string }>;
