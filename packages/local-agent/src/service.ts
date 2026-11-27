@@ -203,6 +203,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'sync.claimBrowserRequest': 'execute_task',
   'voc.ingestBatch': 'manage_market_intelligence',
   'voc.items': 'view_reports',
+  'voc.overview': 'view_reports',
   'finance.realized.upsert': 'manage_financial_limits',
   'finance.realized.list': 'view_reports',
   'listing.change.prepare': 'manage_market_intelligence',
@@ -2219,11 +2220,13 @@ export class LocalService {
           rating: z.number().int().min(1).max(5).nullable().default(null),
         })
         .parse(payload);
+      if (!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',i.accountId)) throw new Error('conta inexistente ou inativa');
+      if (i.listingId && !db.row('SELECT id FROM listings WHERE id=? AND account_id=?',i.listingId,i.accountId)) throw new Error('anúncio não pertence à conta selecionada');
       const redacted = redactPII(i.text);
       const id = randomUUID();
       db.db
         .prepare('INSERT INTO customer_voice_items (id, account_id, listing_id, kind, source_class, observed_at, text_redacted, rating, verified_purchase) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
-        .run(id, i.accountId, i.listingId, i.kind, 'A_PRIMARY_UI', new Date().toISOString(), redacted, i.rating);
+        .run(id, i.accountId, i.listingId, i.kind, 'F_USER_INPUT', nowIso(), redacted, i.rating);
       this.audit(auth, 'VOC_INGEST', 'customer_voice_item', id, 'OK', 'texto com dados pessoais redigidos');
       return { ok: true, id };
     });
@@ -2284,6 +2287,36 @@ export class LocalService {
       const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(100).default(50)}).parse(payload);
       return db.rows(`SELECT v.id,v.kind,v.text_redacted,v.rating,v.observed_at,v.external_listing_id,v.listing_id,l.external_id AS linked_external_id,l.title AS listing_title
         FROM customer_voice_items v LEFT JOIN listings l ON l.id=v.listing_id AND l.account_id=v.account_id WHERE v.account_id=? ORDER BY v.observed_at DESC,v.id LIMIT ?`,i.accountId,i.limit);
+    });
+
+    this.register('voc.overview',(payload)=>{
+      const {accountId,days}=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(30)}).strict().parse(payload);
+      if (!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',accountId)) throw new Error('conta inexistente ou inativa');
+      const to=nowIso();
+      const from=new Date(Date.parse(to)-days*86400000).toISOString();
+      const summary=db.rows<{kind:string;source_class:string;count:number;rated:number;average_rating:number|null}>(`
+        SELECT kind,source_class,COUNT(*) AS count,COUNT(CASE WHEN kind='REVIEW' THEN rating END) AS rated,
+          AVG(CASE WHEN kind='REVIEW' THEN rating END) AS average_rating
+        FROM customer_voice_items
+        WHERE account_id=? AND observed_at>=? AND observed_at<=?
+        GROUP BY kind,source_class ORDER BY kind,source_class`,accountId,from,to);
+      const reputation=db.rows<{id:string;captured_at:string;metrics_json:string;evidence_json:string}>(`
+        SELECT id,captured_at,metrics_json,evidence_json FROM account_snapshots
+        WHERE account_id=? AND page_kind='seller_reputation' AND source_class='A_PRIMARY_UI'
+          AND captured_at>=? AND captured_at<=?
+        ORDER BY captured_at DESC,id DESC LIMIT 101`,accountId,from,to);
+      const observations=reputation.slice(0,100).map(row=>{
+        const metrics=parseJsonObject(row.metrics_json);
+        return {id:row.id,capturedAt:row.captured_at,rating:knownNumber(metrics,'reviewRating'),
+          reviewCount:knownNumber(metrics,'reviewCount'),partial:Boolean(parseJsonObject(row.evidence_json).coverageWarnings)};
+      });
+      const returnReasons=db.rows<{reason:string;source_class:string;count:number}>(`
+        SELECT TRIM(text_redacted) AS reason,source_class,COUNT(*) AS count FROM customer_voice_items
+        WHERE account_id=? AND kind='RETURN_REASON' AND observed_at>=? AND observed_at<=? AND TRIM(text_redacted)<>''
+        GROUP BY TRIM(text_redacted),source_class HAVING COUNT(*)>=2
+        ORDER BY count DESC,reason,source_class LIMIT 21`,accountId,from,to);
+      return {from,to,summary,reputation:observations,reputationTruncated:reputation.length>100,
+        returnReasons:returnReasons.slice(0,20),returnReasonsTruncated:returnReasons.length>20};
     });
 
     this.register('sync.createAll', (payload, auth) => {

@@ -195,6 +195,7 @@ export const IPC_METHODS = [
   'sync.claimBrowserRequest',
   'voc.ingestBatch',
   'voc.items',
+  'voc.overview',
   'finance.realized.upsert',
   'finance.realized.list',
   'finance.realized.summary',

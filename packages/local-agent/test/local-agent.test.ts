@@ -115,6 +115,35 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('sync.claimAccount',{...req,batchId:second.batchId})).result).toMatchObject({claimed:true});
   });
 
+  it('resume pós-venda por loja, janela e fonte e preserva notas ausentes',async()=>{
+    const accountId='voc-overview',other='voc-overview-other';
+    seedImportAccount(accountId);seedImportAccount(other);
+    const recent=new Date(Date.now()-86400000).toISOString();
+    const old=new Date(Date.now()-40*86400000).toISOString();
+    const capture=await call('voc.ingestBatch',{accountId,items:[
+      {kind:'REVIEW',text:'Ótimo produto',rating:4,observedAt:recent},
+      {kind:'REVIEW',text:'Produto recebido',observedAt:recent},
+      {kind:'REVIEW',text:'Avaliação antiga',rating:1,observedAt:old},
+      {kind:'RETURN_REASON',text:'Tamanho divergente',externalRef:'return-1',observedAt:recent},
+      {kind:'RETURN_REASON',text:'Tamanho divergente',externalRef:'return-2',observedAt:recent},
+    ]});
+    expect(capture.ok).toBe(true);
+    expect((await call('voc.ingest',{accountId,kind:'REVIEW',text:'Registro manual',rating:2})).ok).toBe(true);
+    expect((await call('voc.ingest',{accountId:other,kind:'QUESTION',text:'Prazo?'})).ok).toBe(true);
+    expect((await call('capture.ingest',{marketplace:'mercado_livre',accountId,pageKind:'seller_reputation',url:'https://vendedores.mercadolivre.com.br/reputacao',sourceClass:'A_PRIMARY_UI',referenceAt:recent,collectedAt:recent,method:'content_script_dom',listings:[],accountMetrics:{reviewRating:4.5}})).ok).toBe(true);
+    expect((await call('voc.overview',{accountId})).result).toMatchObject({
+      summary:[
+        {kind:'RETURN_REASON',source_class:'A_PRIMARY_UI',count:2,rated:0,average_rating:null},
+        {kind:'REVIEW',source_class:'A_PRIMARY_UI',count:2,rated:1,average_rating:4},
+        {kind:'REVIEW',source_class:'F_USER_INPUT',count:1,rated:1,average_rating:2},
+      ],
+      reputation:[{rating:4.5,reviewCount:null,partial:false}],
+      returnReasons:[{reason:'Tamanho divergente',source_class:'A_PRIMARY_UI',count:2}],
+    });
+    expect((await call('voc.overview',{accountId:other})).result).toMatchObject({summary:[{kind:'QUESTION',rated:0,average_rating:null}],reputation:[]});
+    expect((await call('voc.overview',{accountId:'unknown'})).ok).toBe(false);
+  });
+
   it('persiste detalhes de campanha e variação por conta sem somar aos totais e rejeita escopo inválido',async()=>{
     seedImportAccount('acct-details');
     seedImportAccount('acct-details-other');

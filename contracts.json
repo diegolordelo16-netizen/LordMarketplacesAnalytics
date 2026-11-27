@@ -286,6 +286,10 @@
     "payload": "accountId | kind? | limit?",
     "permission": "view_reports"
   },
+  "voc.overview": {
+    "accountId": "string",
+    "days": "integer 1..365, default 30"
+  },
   "voc.items": {
     "payload": "accountId | limit?",
     "permission": "view_reports"
