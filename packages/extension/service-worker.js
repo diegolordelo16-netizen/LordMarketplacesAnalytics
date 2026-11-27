@@ -416,8 +416,8 @@ async function captureTab(tabId, expected = {}) {
   }
   const snapshot = response.snapshot;
   if ((expected.accountId && snapshot.accountId !== expected.accountId) ||
-      (expected.url && snapshot.url !== expected.url)) {
-    return { ok: false, error: 'a conta ou a página mudou antes da captura' };
+      (expected.url && snapshot.url !== expected.url) || (expected.filterSignature!==undefined && snapshot.filterSignature!==expected.filterSignature)) {
+    return { ok: false, error: 'a conta, página ou filtros mudaram antes da captura' };
   }
   const now = new Date().toISOString();
   const payload = {
@@ -433,7 +433,7 @@ async function captureTab(tabId, expected = {}) {
     listings: snapshot.listings ?? [],
     details: Array.isArray(snapshot.details) ? snapshot.details.slice(0,100) : [],
     ...(snapshot.accountMetrics ? { accountMetrics: snapshot.accountMetrics } : {}),
-    evidence: { ...(snapshot.evidence ?? {}), missing: (snapshot.missing ?? []).join(',') },
+    evidence: { ...(snapshot.evidence ?? {}), missing: (snapshot.missing ?? []).join(','), ...(snapshot.coverageWarnings?.length?{coverageWarnings:snapshot.coverageWarnings.join(',')}: {}) },
   };
 
   const customerVoice = Array.isArray(snapshot.customerVoice) ? snapshot.customerVoice.slice(0, 200) : [];
@@ -653,6 +653,8 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     ok: Boolean(page.ok),
     ...(page.error ? { error: String(page.error).slice(0, 500) } : {}),
     queued: Boolean(page.queued),
+    ...(typeof page.filterSignature==='string'?{filterSignature:page.filterSignature}:{}),
+    ...(Array.isArray(page.coverageWarnings)?{coverageWarnings:page.coverageWarnings.slice(0,10)}:{})
   }));
   // Uma tentativa falha continua ocupando o mesmo registro de página, não uma
   // nova posição a cada retomada. Páginas entregues ou enfileiradas não são refeitas.
@@ -684,33 +686,40 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       const key = keyOf(target);
       if (!seen.has(key) && !queue.some((item) => item.key === key)) {
         if (queue.length >= 500) { unsupportedLinks = true; continue; }
-        queue.push({ key, url: target.href, label: String(link.label || link.pageKind).slice(0, 80) });
+        queue.push({ key, url: target.href, label: String(link.label || link.pageKind).slice(0, 80), ...(typeof link.filterSignature==='string'?{filterSignature:link.filterSignature}:{}) });
       }
     }
   };
   const enqueuePageLinks = (info, current) => {
     enqueueLinks(info.authorizedAreaLinks);
-    if (info.paginationUnsupported) unsupportedLinks = true;
+    if (info.paginationUnsupported || info.coverageWarnings?.length) unsupportedLinks = true;
     const next = normalizeAuthorizedAreaUrl(info.nextPageUrl, origin, marketplace);
-    if (next && current && next.pathname === current.pathname && keyOf(next) !== keyOf(current)) enqueueLinks([{ url: next.href, pageKind: info.pageKind, label: 'próxima página' }]);
-    else if (info.nextPageUrl) unsupportedLinks = true;
+    if (next && current && next.pathname === current.pathname && keyOf(next) !== keyOf(current)) {
+      const filterQuery=url=>JSON.stringify([...url.searchParams.entries()].filter(([key])=>!/^(page|page_number|p|offset|limit)$/i.test(key)).sort());
+      if(filterQuery(next)!==filterQuery(current)){unsupportedLinks=true;return;}
+      enqueueLinks([{url:next.href,pageKind:info.pageKind,label:'próxima página',filterSignature:info.filterSignature}]);
+    } else if (info.nextPageUrl) unsupportedLinks = true;
   };
   for (const item of Array.isArray(saved.pendingLinks) ? saved.pendingLinks.slice(0, 500) : []) {
     const target = normalizeAuthorizedAreaUrl(item?.url, origin, marketplace);
     if (!target || seen.has(keyOf(target))) continue;
     if (!supportedQuery(target)) { unsupportedLinks = true; continue; }
     if (!queue.some((queued) => queued.key === keyOf(target))) {
-      queue.push({ key: keyOf(target), url: target.href, label: String(item.label || 'área autorizada').slice(0, 80) });
+      queue.push({ key: keyOf(target), url: target.href, label: String(item.label || 'área autorizada').slice(0, 80), ...(typeof item.filterSignature==='string'?{filterSignature:item.filterSignature}:{}) });
     }
   }
   // A fila de versões antigas não tem recibo idempotente: nunca recapture seus itens às cegas.
   if (saved.receiptProtocol) for (const page of pages.filter((p) => !p.ok)) {
     const target = normalizeAuthorizedAreaUrl(page.url, origin, marketplace);
     if (target) seen.delete(keyOf(target));
-    if (target && supportedQuery(target) && !queue.some((item) => item.key === keyOf(target))) queue.unshift({ key: keyOf(target), url: target.href, label: 'retomada' });
+    if (target && supportedQuery(target) && !queue.some((item) => item.key === keyOf(target))) queue.unshift({ key: keyOf(target), url: target.href, label: 'retomada', ...(typeof page.filterSignature==='string'?{filterSignature:page.filterSignature}:{}) });
   }
   const currentUrl = normalizeAuthorizedAreaUrl(source.url, origin, marketplace);
   if (!currentUrl || !supportedQuery(currentUrl)) return { ok: false, error: 'filtros da URL inicial não podem ser retomados com segurança; abra uma área sem parâmetros opacos' };
+  const prior=pages.find(page=>{const url=normalizeAuthorizedAreaUrl(page.url,origin,marketplace);return url&&keyOf(url)===keyOf(currentUrl);});
+  const pending=queue.find(item=>item.key===keyOf(currentUrl));
+  const priorFilter=prior?.filterSignature??pending?.filterSignature;
+  if(priorFilter!==undefined&&priorFilter!==initialInfo.filterSignature)return {ok:false,error:'filtros da página inicial divergem do histórico; restaure os filtros antes de retomar'};
   if (!seen.has(keyOf(currentUrl))) enqueuePageLinks(initialInfo, currentUrl);
 
   let stoppedReason = 'não foram encontrados outros links autorizados visíveis';
@@ -722,7 +731,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       pagesSucceeded: pages.filter((page) => page.ok).length,
       pages: pages.map((page, index) => ({ ...page, page: index + 1 })),
       seenUrls: [...seen].slice(0, 500),
-      pendingLinks: queue.slice(0, 500).map(({ url, label }) => ({ url, label })),
+      pendingLinks: queue.slice(0, 500).map(({ url, label, filterSignature }) => ({ url, label, ...(typeof filterSignature==='string'?{filterSignature}:{}) })),
       maxPages,
       unsupportedLinks,
       receiptProtocol: options.logicalBatchId && !legacyQueued ? 1 : 0,
@@ -741,8 +750,9 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
   if (currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
     if (options.beforeCapture) await options.beforeCapture();
-    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
-    recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued) });
+    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url, filterSignature:initialInfo.filterSignature, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
+    recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued), filterSignature:initialInfo.filterSignature, coverageWarnings:firstCapture.snapshot?.coverageWarnings??initialInfo.coverageWarnings });
+    if(firstCapture.snapshot?.coverageWarnings?.length)unsupportedLinks=true;
     if (firstCapture.ok || (firstCapture.queued && !options.logicalBatchId)) {
       seen.add(keyOf(currentUrl));
       const duplicate = queue.findIndex((item) => item.key === keyOf(currentUrl));
@@ -750,7 +760,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     } else {
       if (!queue.some((item) => item.key === keyOf(currentUrl))) {
         if (queue.length >= 500) queue.pop();
-        queue.unshift({ key: keyOf(currentUrl), url: currentUrl.href, label: 'página inicial' });
+        queue.unshift({ key: keyOf(currentUrl), url: currentUrl.href, label: 'página inicial', filterSignature:initialInfo.filterSignature });
       }
       stoppedReason = 'captura da página inicial falhou; retome antes de navegar para outras áreas';
     }
@@ -794,9 +804,11 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         stoppedReason = 'a área ou a conta da loja mudou durante a navegação';
         break;
       }
+      if(item.filterSignature!==undefined&&item.filterSignature!==info.filterSignature){stoppedReason='filtros da próxima página diferem da página anterior; confirme manualmente';break;}
       if (options.beforeCapture) await options.beforeCapture();
-      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
-      recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued) });
+      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, filterSignature:info.filterSignature, ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
+      recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued), filterSignature:info.filterSignature, coverageWarnings:captured.snapshot?.coverageWarnings??info.coverageWarnings });
+      if(captured.snapshot?.coverageWarnings?.length)unsupportedLinks=true;
       if (captured.ok || (captured.queued && !options.logicalBatchId)) {
         seen.add(item.key);
         queue.shift();
@@ -813,7 +825,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   } finally {
     if (temporary?.id) await chrome.tabs.remove(temporary.id).catch(() => undefined);
   }
-  if (unsupportedLinks && queue.length === 0) stoppedReason = 'alguns links ou filtros não puderam ser percorridos com segurança; verifique manualmente';
+  if (unsupportedLinks && queue.length === 0) stoppedReason = ('cobertura parcial: links, filtros ou visualizações exigem verificação manual '+[...new Set(pages.flatMap(p=>p.coverageWarnings??[]))].join(',')).slice(0,300);
   // Persiste a fila remanescente e o motivo mesmo quando a navegação foi pausada.
   if (!progressError) await persistProgress();
   return {

@@ -236,5 +236,43 @@
     }
     return out;
   }
-  window.MI_DOM = { visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  // A assinatura usa somente controles explícitos de período e estado, não campos de busca,
+  // credenciais, identificadores de cliente ou valores de sessão.
+  function collectionFilterState(root){
+    const entries=[],warnings=[];
+    const selector='input[type="date"],input[type="month"],input[type="week"],select,[role="tab"][aria-selected="true"],button[aria-pressed="true"]';
+    for(const el of root.querySelectorAll(selector)){
+      if(!isVisible(el)||el.disabled)continue;
+      const type=String(el.type??'').toLowerCase();
+      const label=normalizeLabel(el.getAttribute('aria-label')||el.getAttribute('name')||el.getAttribute('title')||'');
+      const dateType=['date','month','week'].includes(type);
+      if(!dateType&&!/^(period|período|periodo|date range|intervalo|status|situação|situacao|start_date|end_date|data inicial|data final|start date|end date|date_from|date_to)$/.test(label))continue;
+      const val=String(dateType?el.value??'':el.selectedOptions?.[0]?.innerText??el.selectedOptions?.[0]?.textContent??el.innerText??'').replace(/\s+/g,' ').trim();
+      if(!val)continue;
+      // Values from recognized controls must be dates, explicit periods or known status names.
+      if(!/^(?:\d{4}-(?:\d{2}|W\d{2})(?:-\d{2})?|\d{1,2}\/\d{1,2}\/\d{4}|(?:últimos|ultimos|last) \d{1,3} (?:dias|days)|(?:hoje|ontem|today|yesterday|este mês|this month|mês passado|last month|todos|todas|all|ativo|ativa|active|inativo|inactive|pendente|pending|pago|paid|cancelado|cancelled|enviado|shipped|concluído|completed))$/i.test(val)){
+        warnings.push('FILTRO_NAO_RECONHECIDO');continue;
+      }
+      entries.push((label||type)+'='+val.toLowerCase());
+    }
+    const signature=[...new Set(entries)].sort().join('|');
+    if(signature.length>512){warnings.push('FILTRO_NAO_RECONHECIDO');return {signature:'',warnings:[...new Set(warnings)]};}
+    return {signature,warnings:[...new Set(warnings)]};
+  }
+  function collectionCoverage(root){
+    const warnings=[];
+    for(const grid of root.querySelectorAll('table[aria-rowcount],[role="grid"][aria-rowcount]')){
+      if(!isVisible(grid))continue;
+      const total=Number(grid.getAttribute('aria-rowcount'));
+      const visible=Array.from(grid.querySelectorAll('tbody tr,[role="row"]')).filter(isVisible).length;
+      if(Number.isInteger(total)&&total>visible)warnings.push('TABELA_VIRTUALIZADA');
+    }
+    for(const chart of root.querySelectorAll('[data-testid*="chart"] canvas,[class*="chart"] canvas')){
+      if(!isVisible(chart))continue;
+      const parent=chart.parentElement;
+      if(!parent||!Array.from(parent.querySelectorAll('span,td,svg text')).some(el=>isVisible(el)&&parseNumberPtBr(el.innerText??el.textContent)!==null))warnings.push('GRAFICO_SEM_DADOS_TEXTUAIS');
+    }
+    return [...new Set(warnings)];
+  }
+  window.MI_DOM = { collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

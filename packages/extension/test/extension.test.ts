@@ -698,3 +698,27 @@ describe('captura de detalhes por identidade de entidade',()=>{
     expect(window.MI_DOM.visibleDetailRows(root,'seller_ads')).toEqual([{kind:'AD_CAMPAIGN',externalId:'C1',metrics:{adSpend:12.5},evidence:{adSpend:'Investimento em publicidade: R$ 12,50'}}]);
   });
 });
+
+
+describe('filtros e cobertura observáveis',()=>{
+  it('registra apenas filtro reconhecido e detecta linhas virtualizadas',()=>{
+    class E{
+      constructor(public attrs:Record<string,string>={},public nodes:E[]=[],public type='',public value='',public innerText=''){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(){return this.nodes}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const date=new E({name:'start_date'},[],'date','2026-11-01');
+    const status=new E({'aria-label':'status'},[],'','','desconhecido');
+    const input=new E({name:'token'},[],'text','segredo');
+    const grid=new E({'aria-rowcount':'20'},[new E(),new E()]);
+    const root={querySelectorAll:(sel:string)=>sel.startsWith('input')?[date,status,input]:sel.startsWith('table')?[grid]:[]};
+    const result=window.MI_DOM.collectionFilterState(root);
+    expect(result.signature).toBe('start_date=2026-11-01');
+    expect(result.warnings).toEqual(['FILTRO_NAO_RECONHECIDO']);
+    expect(window.MI_DOM.collectionCoverage(root)).toEqual(['TABELA_VIRTUALIZADA']);
+  });
+});

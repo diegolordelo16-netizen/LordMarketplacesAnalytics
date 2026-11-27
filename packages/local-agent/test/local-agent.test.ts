@@ -127,6 +127,7 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?',base.accountId)?.total).toBe(0);
     expect((await call('capture.ingest',{...base,captureKey:'c'.repeat(64),details:[{...campaign,kind:'LISTING_VARIANT'}]})).ok).toBe(false);
     expect((await call('capture.ingest',{...base,captureKey:'d'.repeat(64),details:[{...campaign,evidence:{}}]})).ok).toBe(false);
+    expect((await call('capture.ingest',{...base,pageKind:'seller_listings',captureKey:'e'.repeat(64),details:[campaign]})).ok).toBe(false);
   });
 
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {

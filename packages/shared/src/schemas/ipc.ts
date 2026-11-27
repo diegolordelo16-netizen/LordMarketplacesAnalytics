@@ -173,7 +173,9 @@ export const captureIngestSchema = z.object({
   accountMetrics: capturedAccountMetricsSchema.optional(),
   /** Evidências textuais curtas (rótulo → valor lido), para auditoria. */
   evidence: z.record(z.string(), z.string().max(2000)).refine((value) => Object.keys(value).length <= 40 && JSON.stringify(value).length <= 12_000, 'evidências excedem os limites permitidos').optional(),
-}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined || payload.details.length>0, 'captura sem anúncios, detalhes nem métricas de conta');
+}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined || payload.details.length>0, 'captura sem anúncios, detalhes nem métricas de conta').superRefine((payload,ctx)=>{
+  if(payload.details.some(row=>['AD_CAMPAIGN','AD'].includes(row.kind)?payload.pageKind!=='seller_ads':!['seller_listings','seller_inventory','seller_listing_edit'].includes(payload.pageKind)))ctx.addIssue({code:'custom',message:'detalhes fora da área correspondente'});
+});
 
 export type CaptureIngest = z.infer<typeof captureIngestSchema>;
 

@@ -2288,9 +2288,9 @@ export class LocalService {
       const i = z.object({
         batchId: z.string().min(1), accountId: z.string().min(1), leaseToken:z.string().uuid(),
         pagesScanned: z.number().int().min(0).max(500), pagesSucceeded: z.number().int().min(0).max(500),
-        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(500),
+        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional(), filterSignature:z.string().max(512).optional(),coverageWarnings:z.array(z.enum(['FILTRO_NAO_RECONHECIDO','TABELA_VIRTUALIZADA','GRAFICO_SEM_DADOS_TEXTUAIS'])).max(10).optional() })).max(500),
         seenUrls: z.array(z.string().max(2048)).max(500),
-        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80) })).max(500),
+        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80), filterSignature:z.string().max(512).optional() })).max(500),
         maxPages: z.number().int().min(1).max(500), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
       }).refine((v) => v.pagesSucceeded <= v.pagesScanned && v.pages.length === v.pagesScanned && v.pagesScanned <= v.maxPages, 'contagens do progresso inválidas')
         .refine((v) => v.pages.every((page, index) => page.page === index + 1) && new Set(v.pages.map((page) => page.page)).size === v.pages.length, 'numeração de páginas inválida')
@@ -2335,9 +2335,9 @@ export class LocalService {
           parsed.search = safe.toString();
           return parsed.toString();
         }),
-        pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label })),
-        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued) })),
-        maxPages: i.maxPages, unsupportedLinks: i.unsupportedLinks, receiptProtocol: i.receiptProtocol, stoppedReason: i.stoppedReason ?? null,
+        pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label, ...(item.filterSignature!==undefined?{filterSignature:item.filterSignature}:{}) })),
+        pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued), ...(i.pages[page.page_no-1]?.filterSignature!==undefined?{filterSignature:i.pages[page.page_no-1]!.filterSignature}:{}),...(i.pages[page.page_no-1]?.coverageWarnings?{coverageWarnings:i.pages[page.page_no-1]!.coverageWarnings}:{}) })),
+        maxPages: i.maxPages, unsupportedLinks: i.unsupportedLinks || i.pages.some(page=>Boolean(page.coverageWarnings?.length)), receiptProtocol: i.receiptProtocol, stoppedReason: i.stoppedReason ?? null,
       };
       const now = nowIso();
       db.transaction(() => {

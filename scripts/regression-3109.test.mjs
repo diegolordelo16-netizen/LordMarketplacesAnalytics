@@ -111,6 +111,26 @@ test('controle de próxima página sem URL não permite conclusão silenciosa', 
   assert.equal(result.unsupportedLinks,true);
 });
 
+test('paginação não descarta filtro presente na URL',async()=>{
+  const first=orders+'?page=1&start_date=2026-11-01',second=orders+'?page=2';
+  const f=scanFixture({current:first,next:{[first]:second}});
+  const result=await f.scan(50);
+  assert.deepEqual(f.captured,[first]);assert.equal(result.unsupportedLinks,true);
+});
+test('paginação pausa quando filtro visível muda sem alterar a URL de filtro',async()=>{
+  const first=orders+'?page=1',second=orders+'?page=2';
+  const f=scanFixture({current:first,next:{[first]:second},pageInfo:{[first]:{filterSignature:'period=last 7 days'},[second]:{filterSignature:'period=last 30 days'}}});
+  const result=await f.scan(50);
+  assert.deepEqual(f.captured,[first]);assert.equal(result.pendingPages,1);
+  assert.equal(f.progress.at(-1).pendingLinks[0].filterSignature,'period=last 7 days');
+});
+test('tabela virtualizada impede conclusão integral',async()=>{
+  const f=scanFixture({pageInfo:{[root]:{coverageWarnings:['TABELA_VIRTUALIZADA']}}});
+  const result=await f.scan(50);
+  assert.equal(result.unsupportedLinks,true);
+  assert.deepEqual(f.progress.at(-1).pages[0].coverageWarnings,['TABELA_VIRTUALIZADA']);
+});
+
 function renderFixture() {
   const pending = [];
   const host = { innerHTML: '' }, title = { textContent: '' };

@@ -441,6 +441,10 @@
       try {
         const observed=capture();
         observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
+        const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
+        observed.filterSignature=filters.signature;
+        observed.coverageWarnings=[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])];
+        if(filters.signature) observed.evidence={...observed.evidence,filtersAndPeriod:filters.signature};
         sendResponse({ok:true,snapshot:observed});
       }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
@@ -448,7 +452,10 @@
     }
     if (message?.type === 'MI_CAPTURE_PAGE_INFO') {
       const pageKind = detectPageKind(location.href);
+      const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
       sendResponse({
+        filterSignature:filters.signature,
+        coverageWarnings:[...new Set([...filters.warnings,...(window.MI_DOM.collectionCoverage?.(document)??[])])],
         ok: true,
         marketplace: 'shopee',
         pageKind,
