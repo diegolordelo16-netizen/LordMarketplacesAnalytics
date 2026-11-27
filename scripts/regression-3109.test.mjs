@@ -329,3 +329,19 @@ test('cadastro financeiro exige evidência e todos os valores explícitos, inclu
   inputs['rp-from']='2026-02-30';
   assert.throws(payload,/período válido/);
 });
+
+test('captura comum rejeita troca de área ou marketplace com a mesma URL e conta',async()=>{
+  const start=worker.indexOf('async function captureTab(');
+  const end=worker.indexOf('function waitForTabComplete(',start);
+  assert.ok(start>=0&&end>start);
+  const expected={accountId:'store-a',marketplace:'shopee',pageKind:'seller_orders',url:orders,filterSignature:''};
+  let snapshot;
+  const ctx=vm.createContext({expected,chrome:{tabs:{sendMessage:async()=>({ok:true,snapshot})}}});
+  vm.runInContext(worker.slice(start,end),ctx);
+  for(const changes of [{pageKind:'seller_reputation'},{marketplace:'mercado_livre'}]){
+    snapshot={...expected,...changes,listings:[{listingId:'123'}]};
+    const result=await vm.runInContext('captureTab(1,expected)',ctx);
+    assert.equal(result.ok,false);
+    assert.match(result.error,/área ou o marketplace/);
+  }
+});
