@@ -1751,9 +1751,14 @@ const ACTIONS = {
     const generation=viewRenderSequence,host=$('#operation-measure-out');
     const result=await api('operation.measure',{accountId:state.accountId,proposalKind:d.kind,proposalId:d.id});
     if(generation!==viewRenderSequence||host!==$('#operation-measure-out')||!host)return;
-    const apiMetrics=()=>'<h4>Desempenho observado do anúncio inteiro</h4><p>'+esc(result.measurementStatus||'')+'</p>'+
+    const apiMetrics=()=>'<h4>'+esc(result.measurementScope==='DUPLICATE_ORIGINAL_VS_COPY'?'Desempenho observado: original versus cópia':'Desempenho observado do anúncio inteiro')+'</h4><p>'+esc(result.measurementStatus||'')+'</p>'+
       (result.before&&result.after?'<p>'+esc(result.before.window.from)+' a '+esc(result.before.window.to)+' × '+esc(result.after.window.from)+' a '+esc(result.after.window.to)+'</p>':'')+
       table(['Métrica','Antes','Depois','Variação'],Object.entries(result.metrics||{}).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+num(v.before,2)+'</td><td>'+num(v.after,2)+'</td><td>'+pct(v.deltaPct)+'</td></tr>'),'Sem janelas ou métricas compatíveis.')+'<p class="muted small">A comparação não atribui causalidade à operação.</p>';
+    if(result.duplicateObservation){
+      const copy=result.duplicateObservation;
+      host.innerHTML='<h4>Duplicação vinculada por confirmação da interface</h4><p>'+esc(copy.originalExternalId)+' → '+esc(copy.copyExternalId)+' · '+dt(copy.capturedAt)+'</p>'+apiMetrics();
+      initializeTables(host);host.scrollIntoView({block:'nearest'});return;
+    }
     if(result.editedVariation){
       const edited=result.editedVariation;
       host.innerHTML='<p>Estoque confirmado pela API: '+esc(edited.externalId)+' · '+esc(edited.beforeStock)+' → '+esc(edited.stock)+' · preço mantido '+brl(edited.priceCents)+'</p>'+apiMetrics();

@@ -3201,27 +3201,36 @@ export class LocalService {
       this.audit(auth,'LISTING_BROWSER_CLAIM',table,i.proposalId,'CLAIMED',i.action);
       return {id,token,context,plan,expiresAt};
     }));
+    const parseDuplicateReceipt=(message:string)=>{
+      const normalized=message.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+      const match=/^ANUNCIO (MLB-?\d{5,17}) (?:FOI )?DUPLICADO COM SUCESSO[.!]? NOVO ANUNCIO: ?(MLB-?\d{5,17})[.!]?$/.exec(normalized);
+      if(!match?.[1]||!match[2])return null;
+      const sourceId=match[1].replace('-',''),newId=match[2].replace('-','');
+      return sourceId!==newId?{sourceId,newId,message}:null;
+    };
     this.register('listing.browser.result',(payload,auth)=>db.transaction(()=>{
-      const i=z.object({id:z.string().uuid(),token:z.string().uuid(),outcome:z.enum(['CANCELLED','FAILED','NEEDS_VERIFICATION']),message:z.string().max(1000)}).strict().parse(payload);
+      const i=z.object({id:z.string().uuid(),token:z.string().uuid(),outcome:z.enum(['CANCELLED','FAILED','NEEDS_VERIFICATION']),message:z.string().max(1000),duplicateReceipt:z.string().trim().max(500).optional()}).strict().parse(payload);
       if(auth?.role!=='super_admin')throw Error('super_admin necessário');
-      const e=db.row<{proposal_id:string;account_id:string;status:string;token_hash:string}>('SELECT proposal_id,account_id,status,token_hash FROM listing_browser_executions WHERE id=?',i.id);
+      const e=db.row<{proposal_id:string;account_id:string;status:string;token_hash:string;action:string;external_listing_id:string}>('SELECT proposal_id,account_id,status,token_hash,action,external_listing_id FROM listing_browser_executions WHERE id=?',i.id);
       if(!e||e.status!=='CLAIMED'||e.token_hash!==createHash('sha256').update(i.token).digest('hex'))throw Error('execução inválida ou já consumida');
       operationAccount(e.account_id);
-      db.db.prepare('UPDATE listing_browser_executions SET status=?,updated_at=?,result_json=? WHERE id=? AND status=?').run(i.outcome,nowIso(),JSON.stringify({message:i.message}),i.id,'CLAIMED');
+      const parsed=i.outcome==='NEEDS_VERIFICATION'&&e.action==='DUPLICATE'&&i.duplicateReceipt?parseDuplicateReceipt(i.duplicateReceipt):null;
+      const duplicateReceipt=parsed&&parsed.sourceId===e.external_listing_id.replace('-','').toUpperCase()?parsed:null;
+      db.db.prepare('UPDATE listing_browser_executions SET status=?,updated_at=?,result_json=? WHERE id=? AND status=?').run(i.outcome,nowIso(),JSON.stringify({message:i.message,...(duplicateReceipt?{duplicateReceipt}:{})}),i.id,'CLAIMED');
       this.audit(auth,'LISTING_BROWSER_RESULT','listing_browser_execution',i.id,i.outcome,i.message);
       return {status:i.outcome,remoteVerified:false};
     }));
     const listingReadback = (input: {
       accountId:string; marketplace:string; listingId:string; externalListingId:string;
       observedExternalId:string; after:string; baselineAt:string;
-      action:'DUPLICATE'|'CREATE_VARIATION'|'EDIT_VARIATION'; plan:Record<string,unknown>;
+      action:'DUPLICATE'|'CREATE_VARIATION'|'EDIT_VARIATION'; plan:Record<string,unknown>; duplicateReceipt?:unknown;
     }) => {
       const {accountId,marketplace,listingId,externalListingId,observedExternalId,after,baselineAt,action,plan}=input;
       const safeCapture=(at:string,evidence:string)=>at>after&&at<=nowIso()&&!parseJsonObject(evidence).coverageWarnings;
       if(action!=='EDIT_VARIATION'){
         const kind=action==='DUPLICATE'?'LISTING_CHANGE':'VARIATION';
         const parent=action==='DUPLICATE'?null:listingId;
-        const browser=db.row(`SELECT id FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND status='CANDIDATE_OBSERVED'
+        const browser=db.row(`SELECT id FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND status IN ('CANDIDATE_OBSERVED','UI_READBACK_MATCHED')
           AND json_extract(result_json,'$.observedExternalId')=? AND (? IS NULL OR listing_id=?)`,
           accountId,kind,observedExternalId,parent,parent);
         const table=kind==='LISTING_CHANGE'?'listing_change_proposals':'offer_variation_proposals';
@@ -3237,6 +3246,12 @@ export class LocalService {
         const snap=db.row<{id:string;captured_at:string;evidence_json:string}>("SELECT id,captured_at,evidence_json FROM listing_snapshots WHERE listing_id=? AND account_id=? AND source_class='A_PRIMARY_UI' ORDER BY captured_at DESC,id DESC LIMIT 1",item.id,accountId);
         const existed=db.row('SELECT id FROM listing_snapshots WHERE listing_id=? AND account_id=? AND captured_at<=?',item.id,accountId,baselineAt);
         if(existed||!snap||!safeCapture(snap.captured_at,snap.evidence_json))throw Error('capture o novo anúncio após a operação com a conta verificada');
+        const proof=typeof input.duplicateReceipt==='object'&&input.duplicateReceipt!==null&&'message' in input.duplicateReceipt&&typeof input.duplicateReceipt.message==='string'
+          ?parseDuplicateReceipt(input.duplicateReceipt.message):null;
+        if(proof&&proof.sourceId===externalListingId.replace('-','').toUpperCase()){
+          if(proof.newId!==observedExternalId.replace('-','').toUpperCase())throw Error('ID observado diverge da confirmação explícita da duplicação');
+          return {status:'UI_READBACK_MATCHED',observedSnapshotId:snap.id,observedExternalId,remoteVerified:false,duplicateOriginObserved:true};
+        }
         return {status:'CANDIDATE_OBSERVED',observedSnapshotId:snap.id,observedExternalId,remoteVerified:false};
       }
       const keys=[accountId,marketplace,externalListingId,observedExternalId];
@@ -3264,7 +3279,7 @@ export class LocalService {
       const e=db.row<{id:string;listing_id:string;external_listing_id:string;action:'DUPLICATE'|'CREATE_VARIATION'|'EDIT_VARIATION';plan_json:string;context_json:string;created_at:string;expires_at:string;updated_at:string;status:string;result_json:string}>('SELECT * FROM listing_browser_executions WHERE account_id=? AND proposal_id=?',i.accountId,i.proposalId);
       if(!e||!['CLAIMED','NEEDS_VERIFICATION'].includes(e.status)||(e.status==='CLAIMED'&&e.expires_at>nowIso()))throw Error('execução não está disponível para conferência');
       const plan={...parseJsonObject(e.context_json),...parseJsonObject(e.plan_json)};
-      const observation=listingReadback({...i,marketplace:account.marketplace,listingId:e.listing_id,externalListingId:e.external_listing_id,action:e.action,plan,baselineAt:e.created_at,after:e.status==='CLAIMED'?e.expires_at:e.updated_at});
+      const observation=listingReadback({...i,marketplace:account.marketplace,listingId:e.listing_id,externalListingId:e.external_listing_id,action:e.action,plan,duplicateReceipt:parseJsonObject(e.result_json).duplicateReceipt,baselineAt:e.created_at,after:e.status==='CLAIMED'?e.expires_at:e.updated_at});
       db.db.prepare('UPDATE listing_browser_executions SET status=?,updated_at=?,result_json=? WHERE id=?').run(observation.status,nowIso(),JSON.stringify({...parseJsonObject(e.result_json),...observation}),e.id);
       this.audit(auth,'LISTING_BROWSER_READBACK','listing_browser_execution',e.id,observation.status,'conferência por captura da loja');
       return observation;
@@ -3359,10 +3374,12 @@ export class LocalService {
       if(!receipt&&!assisted&&!apiRun)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
       const start=apiRun?.started_at??receipt?.performed_at??assisted!.created_at;
       const end=apiRun?.updated_at??receipt?.performed_at??assisted!.updated_at;
+      let duplicateState:Record<string,unknown>|undefined;
+      let originalListingId:string|undefined,copyListingId:string|undefined;
       const finish=(result:Record<string,unknown>)=>apiState
         ? {...result,measurementStatus:result.status,...apiState,remoteVerified:true,causalityVerified:false,measurementScope:'LISTING',executionEvidence:'REMOTE_VERIFIED'}
-        : result;
-      type Observation={id:string;captured_at:string;source_class:string;metrics_json:string;evidence_json:string};
+        : duplicateState?{...result,measurementStatus:result.status,...duplicateState,remoteVerified:false,causalityVerified:false,measurementScope:'DUPLICATE_ORIGINAL_VS_COPY',executionEvidence:'UI_READBACK_MATCHED'}:result;
+      type Observation={id:string;captured_at:string;source_class:string;metrics_json:string;evidence_json:string;listing_id?:string};
       let observations:Observation[]=[];
       let variationObservation: {externalId:string;before:{id:string;capturedAt:string;priceCents:number;stock:number};after:{id:string;capturedAt:string;priceCents:number;stock:number}}|undefined;
       if(i.proposalKind==='CAMPAIGN'){
@@ -3397,7 +3414,18 @@ export class LocalService {
               priceCents:price!==null&&Number.isSafeInteger(Math.round(price*100))?Math.round(price*100):null,
               stock:knownNumber(data,'stockAvailable')}};
         }
-        if(p.kind==='DUPLICATE')return {status:'NEW_LISTING_ID_NOT_VERIFIED',metrics:null,remoteVerified:false};
+        if(p.kind==='DUPLICATE'){
+          if(result.status!=='UI_READBACK_MATCHED'||result.duplicateOriginObserved!==true||
+             typeof result.observedSnapshotId!=='string'||typeof result.observedExternalId!=='string')return {status:'NEW_LISTING_ID_NOT_VERIFIED',metrics:null,remoteVerified:false};
+          const original=db.row<{external_id:string}>('SELECT external_id FROM listings WHERE id=? AND account_id=? AND marketplace=?',p.listing_id,i.accountId,account.marketplace);
+          const copy=db.row<{id:string;external_id:string}>('SELECT id,external_id FROM listings WHERE account_id=? AND marketplace=? AND external_id=? AND id<>?',i.accountId,account.marketplace,result.observedExternalId,p.listing_id);
+          const proof=typeof result.duplicateReceipt==='object'&&result.duplicateReceipt!==null&&'message' in result.duplicateReceipt&&typeof result.duplicateReceipt.message==='string'?parseDuplicateReceipt(result.duplicateReceipt.message):null;
+          const snap=copy&&db.row<Observation>("SELECT id,captured_at,source_class,metrics_json,evidence_json FROM listing_snapshots WHERE id=? AND listing_id=? AND account_id=? AND source_class='A_PRIMARY_UI'",result.observedSnapshotId,copy.id,i.accountId);
+          if(!original||!copy||!proof||proof.sourceId!==original.external_id.replace('-','').toUpperCase()||proof.newId!==copy.external_id.replace('-','').toUpperCase()||
+            !snap||snap.captured_at<=start||snap.captured_at>nowIso()||parseJsonObject(snap.evidence_json).coverageWarnings)return {status:'NEW_LISTING_ID_NOT_VERIFIED',metrics:null,remoteVerified:false};
+          originalListingId=p.listing_id;copyListingId=copy.id;
+          duplicateState={status:'DUPLICATE_STATE_CONFIRMED',duplicateObservation:{originalExternalId:original.external_id,copyExternalId:copy.external_id,snapshotId:snap.id,capturedAt:snap.captured_at}};
+        }
         if(i.proposalKind==='VARIATION'){
           const {baselineSnapshotId,observedSnapshotId,observedExternalId}=result;
           if(result.status==='UI_READBACK_MATCHED'&&typeof baselineSnapshotId==='string'&&typeof observedSnapshotId==='string'&&typeof observedExternalId==='string'){
@@ -3414,7 +3442,7 @@ export class LocalService {
           }
         }
 
-        observations=db.rows<Observation>(`SELECT id,captured_at,source_class,metrics_json,evidence_json FROM listing_snapshots WHERE account_id=? AND listing_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.listing_id);
+        observations=db.rows<Observation>(`SELECT id,captured_at,source_class,metrics_json,evidence_json,listing_id FROM listing_snapshots WHERE account_id=? AND listing_id IN (?,?) ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.listing_id,copyListingId??p.listing_id);
       }
       if(observations.length>500)return finish({status:'LIMIT_REACHED',metrics:null,variationObservation,remoteVerified:false});
       const now=nowIso();
@@ -3426,9 +3454,9 @@ export class LocalService {
       });
       const baselines=new Map<string,(typeof eligible)[number]>();
       for(const row of eligible){
-        if(row.snapshot.captured_at<start&&row.window.to+'T23:59:59.999Z'<start&&!baselines.has(row.key))baselines.set(row.key,row);
+        if((!originalListingId||row.snapshot.listing_id===originalListingId)&&row.snapshot.captured_at<start&&row.window.to+'T23:59:59.999Z'<start&&!baselines.has(row.key))baselines.set(row.key,row);
       }
-      const followup=eligible.find(row=>row.snapshot.captured_at>end&&row.window.from+'T00:00:00.000Z'>end&&baselines.has(row.key));
+      const followup=eligible.find(row=>(!copyListingId||row.snapshot.listing_id===copyListingId)&&row.snapshot.captured_at>end&&row.window.from+'T00:00:00.000Z'>end&&baselines.has(row.key));
       const baseline=followup&&baselines.get(followup.key);
       if(!baseline||!followup)return finish({status:variationObservation?'VARIATION_STATE_OBSERVED':'INSUFFICIENT_COMPATIBLE_WINDOWS',metrics:null,variationObservation,remoteVerified:false,causalityVerified:false});
       const {snapshot:before,window:bw}=baseline,{snapshot:after,window:aw}=followup;

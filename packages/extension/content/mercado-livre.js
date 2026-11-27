@@ -664,6 +664,27 @@
   function listingOperationPublicContext(message){
     return listingOperationContext(message.action,message.externalListingId,message.variationId).base;
   }
+  function duplicateMessages(){
+    return Array.from(document.querySelectorAll('[role="alert"], [aria-live="polite"], [class*="snackbar"], [class*="toast"]'))
+      .filter(el=>window.MI_DOM.isVisible(el)).map(el=>String(el.textContent||'').replace(/\s+/g,' ').trim()).filter(text=>text&&text.length<=500);
+  }
+  async function readDuplicateReceipt(sourceId,existing){
+    for(let attempt=0;attempt<8;attempt++){
+      if(window.MI_DOM.hasChallenge(document)||visibleAccountIdentity().accountId==null)return null;
+      const candidates=duplicateMessages().filter(text=>!existing.has(text)).flatMap(message=>{
+        const normalized=message.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+        const match=/^ANUNCIO (MLB-?\d{5,17}) (?:FOI )?DUPLICADO COM SUCESSO[.!]? NOVO ANUNCIO: ?(MLB-?\d{5,17})[.!]?$/.exec(normalized);
+        if(!match)return [];
+        const source=match[1].replace('-',''),newId=match[2].replace('-','');
+        return source===sourceId.replace('-','').toUpperCase()&&source!==newId?[{message,newId}]:[];
+      });
+      const unique=new Map(candidates.map(row=>[row.newId,row]));
+      if(unique.size===1)return [...unique.values()][0];
+      if(unique.size>1)return null;
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    return null;
+  }
   async function applyListingOperation(grant){
     let touched=false;
     try{
@@ -689,8 +710,11 @@
           ? {listingIds:before.listings.map(row=>row.listingId),filterSignature:filters.signature,
             spaPage:window.MI_DOM.spaPaginationState?.(document)?.page}
           : null;
+        const existing=new Set(duplicateMessages());
         touched=true;again.button.click();
-        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
+        const receipt=await readDuplicateReceipt(g.externalListingId,existing);
+        const duplicateReceipt=receipt&&visibleAccountIdentity().accountId===g.accountId?receipt:null;
+        return {outcome:'NEEDS_VERIFICATION',clicked:true,baseline,...(duplicateReceipt?{duplicateReceipt}:{}),message:'controle de duplicação acionado; revise eventual diálogo. Não repetir automaticamente.'};
       }
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
       if(!setter)throw Error('setter nativo ausente');

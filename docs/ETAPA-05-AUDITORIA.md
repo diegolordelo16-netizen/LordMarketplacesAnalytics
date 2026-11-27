@@ -57,3 +57,5 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - Medição de operações confirmadas pela API: mantém o estado exato da variação e compara métricas do anúncio inteiro em janelas compatíveis, fora do intervalo de execução. Teste com janela ausente e janela válida. Não atribui causalidade.
 
 - Migration 040: alteração assistida do ROAS objetivo, em centésimos de multiplicador (100–3500), com orçamento mantido, autorização de uso único, formulário dedicado, leitura em documento novo e regressão simulada. Não testada em conta real.
+
+- Duplicação: confirmação explícita fresca com os dois IDs, vinculada à tentativa por token e conferida por nova captura da mesma loja. Sem confirmação inequívoca, permanece candidato. Quando vinculada, compara original antes e cópia depois em janelas equivalentes; não demonstra causalidade. Testes simulados incluem recusa de ID divergente.

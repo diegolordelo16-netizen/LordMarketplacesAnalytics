@@ -464,7 +464,8 @@
     "id": "uuid",
     "token": "uuid",
     "outcome": "CANCELLED|FAILED|NEEDS_VERIFICATION",
-    "message": "string"
+    "message": "string",
+    "duplicateReceipt": "optional explicit marketplace confirmation containing original and new IDs"
   },
   "listing.browser.verify": {
     "accountId": "string",
