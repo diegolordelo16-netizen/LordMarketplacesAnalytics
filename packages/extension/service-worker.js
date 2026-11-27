@@ -522,7 +522,9 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
   const origin=new URL(source.url).origin;
   const initialInfo=await chrome.tabs.sendMessage(sourceTabId,{type:'MI_CAPTURE_PAGE_INFO'}).catch(()=>null);
   if(!initialInfo?.ok||initialInfo.pageKind!=='seller_listings'||!initialInfo.accountId||initialInfo.loginRequired||initialInfo.challenge)return {ok:false,error:'abra uma lista de anúncios autenticada com conta identificada'};
-  const valid=info=>info?.ok&&info.marketplace===marketplace&&info.pageKind==='seller_listings'&&info.accountId===initialInfo.accountId&&info.filterSignature===initialInfo.filterSignature&&!info.loginRequired&&!info.challenge&&!info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO');
+  if(!normalizeAuthorizedAreaUrl(source.url,origin,marketplace)||initialInfo.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO'))return {ok:false,error:'URL ou filtros iniciais não reconhecidos'};
+  const validContext=info=>info?.ok&&info.marketplace===marketplace&&info.pageKind==='seller_listings'&&info.accountId===initialInfo.accountId&&!info.loginRequired&&!info.challenge&&!info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO');
+  const valid=info=>validContext(info)&&info.filterSignature===initialInfo.filterSignature;
   const maxPages=Math.max(1,Math.min(5,Number.isInteger(requestedMaxPages)?requestedMaxPages:5));
   const temporary=await chrome.tabs.create({url:source.url,active:false,windowId:source.windowId});
   const pages=[],seenIds=new Set(),seenPages=new Set();
@@ -531,24 +533,32 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
   try{
     let expectedPage=initialInfo.spaPagination?.page,previousFingerprint=null;
     for(let index=0;index<maxPages;index++){
-      let info,preview,fingerprint;
+      let info,preview,fingerprint,stable=false,reapplied=false;
       // Wait until page marker and rendered listing identities agree twice.
       for(let attempt=0;attempt<12;attempt++){
         info=await readCapturePageInfo(temporary.id);
-        if(!valid(info)){stoppedReason='conta, filtros, login ou área divergentes';break;}
+        if(!validContext(info)){stoppedReason='conta, filtros, login ou área divergentes';break;}
         const url=normalizeAuthorizedAreaUrl(info.url,origin,marketplace);
         if(!url||filterQuery(url.href)!==filterQuery(source.url)){stoppedReason='URL ou filtros divergentes';break;}
+        if(info.filterSignature!==initialInfo.filterSignature){
+          if(!reapplied){
+            reapplied=true;
+            const restored=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REAPPLY_FILTERS',accountId:info.accountId,url:info.url,currentSignature:info.filterSignature,targetSignature:initialInfo.filterSignature}).catch(()=>null);
+            if(!restored?.ok){stoppedReason='filtros não puderam ser reaplicados com segurança';break;}
+          }
+          await new Promise(resolve=>setTimeout(resolve,400));continue;
+        }
         if(expectedPage!==undefined&&info.spaPagination?.page!==expectedPage){await new Promise(resolve=>setTimeout(resolve,400));continue;}
         const response=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REQUEST'}).catch(()=>null);
         preview=response?.ok?response.snapshot:null;
         const ids=(preview?.listings??[]).map(row=>String(row.listingId));
         const candidate=JSON.stringify(ids.sort());
         if(preview?.accountId!==info.accountId||preview?.url!==info.url||preview?.filterSignature!==info.filterSignature||!ids.length||candidate===previousFingerprint||new Set(ids).size!==ids.length){await new Promise(resolve=>setTimeout(resolve,400));continue;}
-        if(fingerprint===candidate)break;
+        if(fingerprint===candidate){stable=true;break;}
         fingerprint=candidate;preview=null;
         await new Promise(resolve=>setTimeout(resolve,400));
       }
-      if(!preview||!valid(info)||JSON.stringify(preview.listings.map(row=>String(row.listingId)).sort())!==fingerprint){stoppedReason='não foi possível confirmar uma página estável da mesma loja e filtro';break;}
+      if(!stable||!preview||!valid(info)||JSON.stringify(preview.listings.map(row=>String(row.listingId)).sort())!==fingerprint){stoppedReason='não foi possível confirmar uma página estável da mesma loja e filtro';break;}
       const ids=preview.listings.map(row=>String(row.listingId));
       const key=JSON.stringify([info.url,info.spaPagination?.page??null,fingerprint]);
       if(seenPages.has(key)||ids.some(id=>seenIds.has(id))){stoppedReason='ciclo ou anúncios repetidos: coleta interrompida';break;}

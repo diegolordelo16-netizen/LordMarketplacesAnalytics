@@ -464,6 +464,11 @@
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
       return true;
     }
+    if(message?.type==='MI_CAPTURE_REAPPLY_FILTERS'){
+      const verify=()=>detectPageKind(location.href)==='seller_listings'&&visibleAccountIdentity().accountId===message.accountId&&location.href===message.url&&!window.MI_DOM.hasChallenge(document)&&!document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]');
+      const ok=Boolean(window.MI_DOM.restoreVisibleFilters?.(document,message.currentSignature,message.targetSignature,verify));
+      sendResponse({ok});return false;
+    }
     if(message?.type==='MI_CAPTURE_ADVANCE_SPA'){
       const kind=detectPageKind(location.href);
       const identity=visibleAccountIdentity();

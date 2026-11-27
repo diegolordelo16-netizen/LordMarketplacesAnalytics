@@ -412,5 +412,52 @@
     }
     return {metrics,evidence};
   }
-  window.MI_DOM = { observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  function restoreVisibleFilters(root,expected,target,verify=()=>true){
+    const state=collectionFilterState(root);
+    if(!verify()||state.warnings.length||state.signature!==expected||typeof target!=='string'||target.length>512)return false;
+    if(expected===target)return true;
+    const parse=signature=>{
+      const out=new Map();
+      for(const entry of signature.split('|').filter(Boolean)){
+        const i=entry.indexOf('=');
+        if(i<1||out.has(entry.slice(0,i)))return null;
+        out.set(entry.slice(0,i),entry.slice(i+1));
+      }
+      return out;
+    };
+    const from=parse(expected),to=parse(target);
+    if(!from||!to||from.size!==to.size||[...to.keys()].some(key=>!from.has(key)))return false;
+    const regions=Array.from(root.querySelectorAll('[data-testid="filters"],[data-testid="filter-bar"],[role="region"][aria-label]')).filter(el=>isVisible(el)&&(el.getAttribute('data-testid')==='filters'||el.getAttribute('data-testid')==='filter-bar'||/^(filtros|filters|filtros de pesquisa|search filters)$/i.test(String(el.getAttribute('aria-label')||''))));
+    if(regions.length!==1)return false;
+    const controls=Array.from(regions[0].querySelectorAll('select,input[type="date"],input[type="month"],input[type="week"]')).filter(el=>isVisible(el)&&!el.disabled&&!el.readOnly&&!el.closest('form'));
+    const changes=[];
+    for(const [key,value] of to){
+      if(from.get(key)===value)continue;
+      const candidates=controls.filter(el=>normalizeLabel(el.getAttribute('aria-label')||el.getAttribute('name')||el.getAttribute('title')||el.type||'')===key);
+      if(candidates.length!==1)return false;
+      const control=candidates[0],type=String(control.type||'').toLowerCase();
+      let next;
+      if(['date','month','week'].includes(type)){
+        const pattern=type==='date'?/^\d{4}-\d{2}-\d{2}$/:type==='month'?/^\d{4}-\d{2}$/:/^\d{4}-w\d{2}$/i;
+        if(!pattern.test(value))return false;
+        next=type==='week'?value.toUpperCase():value;
+      }else if(String(control.tagName||'').toUpperCase()==='SELECT'&&!control.multiple){
+        const options=Array.from(control.options||[]).filter(option=>!option.disabled&&!option.hidden&&normalizeLabel(option.innerText??option.textContent??'')===value);
+        if(options.length!==1)return false;
+        next=options[0].value;
+      }else return false;
+      changes.push({control,next});
+    }
+    if(!changes.length)return false;
+    for(const {control,next} of changes){
+      if(!verify()||!isVisible(control)||control.disabled||control.closest('form'))return false;
+      const setter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control),'value')?.set;
+      if(setter)setter.call(control,next);else control.value=next;
+      if(control.value!==next)return false;
+      control.dispatchEvent(new Event('input',{bubbles:true}));
+      control.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    return true;
+  }
+  window.MI_DOM = { restoreVisibleFilters, observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

@@ -840,3 +840,31 @@ describe('reputação explícita por plataforma',()=>{
     expect(window.MI_DOM.observedReputation(root,'shopee').metrics).toEqual({lateShipmentRatePct:2,chatResponseRatePct:98});
   });
 });
+
+
+describe('reaplicação segura de filtros nativos',()=>{
+  it('restaura seleção explícita em região de filtros sem clicar ou submeter formulários',()=>{
+    class E{
+      value='7';type='select-one';tagName='SELECT';events:string[]=[];inForm=false;
+      options=[{value:'7',innerText:'Últimos 7 dias'},{value:'30',innerText:'Últimos 30 dias'}];
+      constructor(public attrs:Record<string,string>={},public nodes:E[]=[]){}
+      get selectedOptions(){return this.options.filter(o=>o.value===this.value)}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(){return this.nodes}
+      closest(){return this.inForm?this:null}
+      dispatchEvent(event:any){this.events.push(event.type)}
+    }
+    class Ev{constructor(public type:string){}}
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E,Event:Ev});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const control=new E({'aria-label':'Período'}),region=new E({'data-testid':'filters'},[control]);
+    const root={querySelectorAll:(sel:string)=>sel.startsWith('input')?[control]:[region]};
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 7 dias','período=últimos 30 dias')).toBe(true);
+    expect(control.value).toBe('30');expect(control.events).toEqual(['input','change']);
+    control.inForm=true;
+    expect(window.MI_DOM.restoreVisibleFilters(root,'período=últimos 30 dias','período=últimos 7 dias')).toBe(false);
+    expect(control.value).toBe('30');
+  });
+});

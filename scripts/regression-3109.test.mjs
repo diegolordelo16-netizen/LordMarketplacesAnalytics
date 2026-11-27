@@ -189,3 +189,15 @@ test('coleta de anúncios SPA confirma conta, filtros, número de página e muda
   assert.equal(result.pagesSucceeded,2);assert.equal(result.complete,true);assert.equal(result.totalListings,2);
   assert.equal(captures[1].spaPage,2);assert.equal(closed,true);
 });
+
+
+test('coleta dedicada reaplica filtro reconhecido na aba temporária e verifica a seleção',async()=>{
+  const source='https://seller.shopee.com.br/portal/product/list';
+  let selected='period=last 30 days',restores=0;
+  const info=()=>({ok:true,marketplace:'shopee',pageKind:'seller_listings',accountId:'store-a',url:source,filterSignature:selected});
+  const snapshot=()=>({accountId:'store-a',url:source,filterSignature:selected,listings:[{listingId:'L1'}]});
+  const ctx=vm.createContext({URL,URLSearchParams,setTimeout:fn=>fn(),marketplaceOf:()=> 'shopee',readCapturePageInfo:async()=>info(),captureTab:async()=>({ok:true,snapshot:snapshot()}),chrome:{tabs:{get:async()=>({url:source,windowId:1}),create:async()=>({id:2}),remove:async()=>{},sendMessage:async(id,msg)=>{if(id===1)return {...info(),filterSignature:'period=last 7 days'};if(msg.type==='MI_CAPTURE_REAPPLY_FILTERS'){selected=msg.targetSignature;restores++;return {ok:true}}if(msg.type==='MI_CAPTURE_REQUEST')return {ok:true,snapshot:snapshot()};return info()}}}});
+  vm.runInContext(worker.slice(worker.indexOf('async function captureListingPages'),worker.indexOf('async function captureAuthorizedAreas')),ctx);
+  const result=await vm.runInContext('captureListingPages(1,5)',ctx);
+  assert.equal(result.pagesSucceeded,1);assert.equal(restores,1);assert.equal(selected,'period=last 7 days');
+});
