@@ -714,16 +714,18 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   };
   // Demonstrated routes only prioritize links independently found in the live DOM.
   // Memory never introduces a new URL or permission to navigate.
-  let learnedRoutes=new Set();
+  let learnedRoutes=new Set(),learnedEdges=new Set();
   if(typeof callService==='function'){
     const learned=await callService('navigation.list',{accountId:expectedAccountId,origin}).catch(()=>null);
     if(learned?.ok&&Array.isArray(learned.result))learnedRoutes=new Set(learned.result.map(row=>JSON.stringify([row.route,row.page_kind])));
+    const graph=await callService('navigation.graph',{accountId:expectedAccountId,origin}).catch(()=>null);
+    if(graph?.ok&&Array.isArray(graph.result))learnedEdges=new Set(graph.result.map(row=>JSON.stringify([row.from_route,row.to_route])));
   }
   const queue = [];
   let unsupportedLinks = Boolean(saved.unsupportedLinks) || legacyQueued;
   const supportedQuery = (url) => [...url.searchParams.entries()].every(([key, value]) => /^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value));
-  const enqueueLinks = (links) => {
-    const priority=link=>{try{return learnedRoutes.has(JSON.stringify([new URL(link.url).pathname,link.pageKind]))?1:0;}catch{return 0;}};
+  const enqueueLinks = (links, fromRoute) => {
+    const priority=link=>{try{const route=new URL(link.url).pathname;return (learnedRoutes.has(JSON.stringify([route,link.pageKind]))?1:0)+(learnedEdges.has(JSON.stringify([fromRoute,route]))?2:0);}catch{return 0;}};
     for (const link of (Array.isArray(links) ? [...links] : []).sort((a,b)=>priority(b)-priority(a))) {
       const target = normalizeAuthorizedAreaUrl(link?.url, origin, marketplace);
       if (!target || !AUTHORIZED_AREA_KINDS.has(link?.pageKind)) continue;
@@ -736,7 +738,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     }
   };
   const enqueuePageLinks = (info, current) => {
-    enqueueLinks(info.authorizedAreaLinks);
+    enqueueLinks(info.authorizedAreaLinks,new URL(info.url).pathname);
     if ((info.paginationUnsupported&&!info.spaPagination) || info.coverageWarnings?.length) unsupportedLinks = true;
     const next = normalizeAuthorizedAreaUrl(info.nextPageUrl, origin, marketplace);
     if (next && current && next.pathname === current.pathname && keyOf(next) !== keyOf(current)) {
@@ -881,7 +883,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
           if(!stable||!ids||ids.some(id=>observedIds.has(id))){stoppedReason='registros SPA ausentes, instáveis ou repetidos';unsupportedLinks=true;failed=true;break;}
           if(step===0)initialSummary=summary;
           else if(summary!==JSON.stringify([null,[]])&&summary!==initialSummary){unsupportedLinks=true;stoppedReason='indicadores de área variam entre páginas SPA; agregação não comprovada';failed=true;break;}
-          enqueueLinks(state.authorizedAreaLinks);
+          enqueueLinks(state.authorizedAreaLinks,new URL(state.url).pathname);
           const hash=await digest(fingerprint);
           const existing=pages.findIndex(p=>keyOf(new URL(p.url))===item.key&&p.spaPage===expectedPage);
           const previous=existing>=0?pages[existing]:null;
@@ -1217,7 +1219,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if(!requested||requested.tabId!==ctx.tabId||requested.accountId!==ctx.accountId||requested.origin!==ctx.origin)throw Error('aba, loja ou origem mudou; aprendizado interrompido');
         if(message.method==='learning.observe'&&(requested.route!==ctx.route||requested.pageKind!==ctx.pageKind))throw Error('a página mudou durante a observação; demonstre novamente');
         const base={accountId:ctx.accountId,origin:ctx.origin};
-        const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind}:base);
+        const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind,...(typeof requested.fromRoute==='string'?{fromRoute:requested.fromRoute}:{})}:base);
         sendResponse(result);return;
       }
       if (message.method === 'capture.activeTab') {
