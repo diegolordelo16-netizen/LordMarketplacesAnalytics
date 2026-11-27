@@ -19,7 +19,9 @@ const itemSchema = z.object({
   id:itemId,seller_id:remoteId,site_id:z.literal('MLB'),currency_id:z.literal('BRL'),
   status:z.literal('active'),user_product_id:z.null().optional(),
   pictures:z.array(z.object({id:z.string()})),
-  variations:z.array(z.object({id:remoteId,attribute_combinations:z.array(z.object({id:z.string().nullable(),value_id:z.string().nullable()}))})).min(1),
+  variations:z.array(z.object({id:remoteId,attribute_combinations:z.array(z.object({id:z.string().nullable(),value_id:z.string().nullable()})),
+    price:z.number().positive().optional(),available_quantity:z.number().int().nonnegative().optional(),
+    sold_quantity:z.number().int().nonnegative().optional()})).min(1),
 });
 const variationSchema = z.object({
   id:remoteId,price:z.number().positive(),available_quantity:z.number().int().nonnegative(),
@@ -32,15 +34,16 @@ const ids = (rows: Array<{id:string|null;value_id:string|null}>) =>
 export class MercadoLivreVariations {
   constructor(private readonly token:string) {}
 
-  private async request(path:string, body?:unknown):Promise<unknown> {
+  private async request(path:string, body?:unknown, method=body===undefined?'GET':'POST'):Promise<unknown> {
     const response=await fetch(new URL(path,'https://api.mercadolibre.com'),{
-      method:body===undefined?'GET':'POST',
+      method,
       headers:{Authorization:'Bearer '+this.token,Accept:'application/json',...(body===undefined?{}:{'Content-Type':'application/json'})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
       redirect:'error',
       signal:AbortSignal.timeout(10000),
     });
     if(!response.ok)throw Error('API do Mercado Livre respondeu HTTP '+response.status);
+    if(method==='DELETE')return null;
     return response.json();
   }
 
@@ -67,6 +70,18 @@ export class MercadoLivreVariations {
       available_quantity:stock,sold_quantity:0,picture_ids:option.pictureIds,
     });
     return z.object({id:remoteId}).parse(data).id;
+  }
+
+  checkRemoval(item:z.infer<typeof itemSchema>, variationId:string, priceCents:number) {
+    const variant=item.variations.find(row=>row.id===variationId);
+    if(item.variations.length<2||!variant||variant.available_quantity!==0||variant.sold_quantity!==0||
+        variant.price===undefined||Math.round(variant.price*100)!==priceCents){
+      throw Error('remoção exige outra variação no anúncio e um alvo sem estoque, sem vendas e com preço aprovado');
+    }
+  }
+
+  async remove(item:string, variation:string) {
+    await this.request('/items/'+itemId.parse(item)+'/variations/'+remoteId.parse(variation),undefined,'DELETE');
   }
 
   async matches(item:string, variation:string, option:LegacyVariationOption, priceCents:number, stock:number) {

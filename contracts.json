@@ -483,6 +483,12 @@
     "accessToken": "transient Mercado Livre OAuth token",
     "confirmed": true
   },
+  "variation.api.remove": {
+    "accountId": "string",
+    "proposalId": "approved legacy removal proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
   "variation.api.verify": {
     "accountId": "string",
     "proposalId": "string",

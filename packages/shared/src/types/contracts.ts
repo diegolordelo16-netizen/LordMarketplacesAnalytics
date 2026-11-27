@@ -226,6 +226,7 @@ export const IPC_METHODS = [
   'listing.browser.verify',
   'listing.browser.list',
   'variation.api.create',
+  'variation.api.remove',
   'variation.api.verify',
   'variation.api.list',
   'operation.limits.get',
