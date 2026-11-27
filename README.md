@@ -1,3 +1,7 @@
+## Versão 3.13.0 — dashboard e indicadores
+
+Histórico por loja, filtros de recência e entidade, comparações com evidência, diagnósticos e cadastro de lucro conciliado. Consulte [auditoria da etapa 04](docs/ETAPA-04-AUDITORIA.md).
+
 ## Versão 3.12.0 — extensão, coleta e aprendizado
 
 Coleta paginada SPA, recibos idempotentes, filtros reconhecíveis, memória de navegação por loja, grafo de transições e central de inteligência. A cobertura de interfaces desconhecidas é explicitamente limitada; homologação real dispensada como portão de integração, não executada. [Limites da coleta](docs/ETAPA-03-PENDENCIAS.md) · [Aprendizado adaptativo](docs/ETAPA-03-1-APRENDIZADO.md).
