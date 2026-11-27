@@ -149,3 +149,8 @@ A duplicação assistida passou a buscar automaticamente um candidato fora
 dos IDs visíveis no momento do clique autorizado. A releitura exige a mesma
 loja, os mesmos filtros e a mesma página, com o anúncio de origem ainda
 visível. Diálogos do marketplace continuam sob controle do operador.
+
+A migração 036 adiciona pausas e reativações assistidas no Mercado Livre.
+Use status ACTIVE ou PAUSED e o mesmo dailyBudgetCents no estado inicial
+e no alvo. O formulário precisa ser dedicado a status e o orçamento
+visível deve estar dentro do teto da loja. Consulte a CI da branch atual.

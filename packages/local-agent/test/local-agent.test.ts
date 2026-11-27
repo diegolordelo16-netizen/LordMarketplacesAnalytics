@@ -453,6 +453,33 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('campaign.budget.list',{accountId:other})).result).toEqual([]);
   });
 
+  it('autoriza pausa de campanha com orçamento constante e exige estado posterior em outro documento',async()=>{
+    const accountId='campaign-status-account',campaignRef='P-1';
+    seedImportAccount(accountId);
+    const budget={dailyBudgetCents:1000};
+    const proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,
+      baseline:{...budget,status:'ACTIVE'},changes:{...budget,status:'PAUSED'},reason:'Pausar campanha aprovada'})).result as {id:string};
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    const limit={minVariationPriceCents:100,maxVariationPriceCents:10000,maxVariationStock:50,maxVariationPriceChangePct:20};
+    const ctx={accountId,campaignRef,proposalId:proposal.id,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',
+      documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,campaignStatus:'ACTIVE',confirmed:true};
+    expect((await call('operation.limits.set',{accountId,limits:{...limit,maxCampaignDailyBudgetCents:900},confirmed:true})).ok).toBe(true);
+    expect((await call('campaign.budget.claim',ctx)).ok).toBe(false);
+    expect((await call('operation.limits.set',{accountId,limits:{...limit,maxCampaignDailyBudgetCents:1200},confirmed:true})).ok).toBe(true);
+    expect((await call('campaign.budget.claim',{...ctx,campaignStatus:undefined})).ok).toBe(false);
+    const claimed=await call('campaign.budget.claim',ctx);
+    expect(claimed.ok).toBe(true);
+    const grant=claimed.result as {id:string;token:string};
+    expect(grant).toMatchObject({beforeStatus:'ACTIVE',targetStatus:'PAUSED',beforeCents:1000,targetCents:1000});
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Clique autorizado'})).ok).toBe(true);
+    const {confirmed,...verified}=ctx;
+    expect((await call('campaign.budget.verify',{...verified,campaignStatus:'PAUSED'})).ok).toBe(false);
+    const fresh={...verified,documentNonce:'22222222-2222-4222-8222-222222222222'};
+    expect((await call('campaign.budget.verify',fresh)).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED',budgetCents:1001})).result).toMatchObject({status:'NEEDS_VERIFICATION'});
+    expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED'})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false});
+  });
+
   it('autoriza variação simples e duplicação apenas com proposta, contexto e limites correspondentes',async()=>{
     const accountId='acct-browser-listing',other='acct-browser-other';seedImportAccount(accountId);seedImportAccount(other);
     const listingId='browser-listing',externalListingId='MLB1234567',at='2025-01-07T23:59:59.999Z';

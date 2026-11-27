@@ -349,7 +349,7 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
     get value(){return this.raw;}
     set value(v){this.raw=v;}
     getAttribute(n){return n==='aria-label'?'Orçamento diário (R$)':null;}
-    closest(){return form;}
+    closest(selector){return selector==='[data-campaign-id]'?row:form;}
     get form(){return form;}
     get type(){return 'number';}
     dispatchEvent(){}
@@ -357,9 +357,24 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   }
   const field=new Input(),button={textContent:'Salvar',disabled:false,getAttribute:()=>null,hasAttribute:name=>buttonOverride&&name==='formtarget',get form(){return form;},click:()=>clicks++};
   const form={action:'https://vendedores.mercadolivre.com.br/publicidade',get target(){return target;},get elements(){return extraField?[field,{type:'email'}]:[field];},querySelector:()=>null,querySelectorAll:()=>[button]};
-  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:()=>[field],contains:el=>el===form};
+  class StatusSelect {
+    get value(){return this.current??'active';}
+    set value(v){this.current=v;}
+    getAttribute(key){return key==='aria-label'?'Status da campanha':null;}
+    hasAttribute(){return false;}
+    closest(selector){return selector==='form'?statusForm:row;}
+    get form(){return statusForm;}
+    get type(){return 'select-one';}
+    get options(){return [{textContent:'Ativa',value:'active',getAttribute:()=>null},{textContent:'Pausada',value:'paused',getAttribute:()=>null}];}
+    dispatchEvent(){}
+    checkValidity(){return true;}
+  }
+  const statusField=new StatusSelect();
+  const statusButton={...button,get form(){return statusForm;}};
+  const statusForm={...form,elements:[statusField],querySelectorAll:()=>[statusButton]};
+  const row={getAttribute:n=>n==='data-campaign-id'?'C1':null,querySelectorAll:selector=>selector==='select'?[statusField]:[field],contains:el=>el===form||el===statusForm};
   const document={visibilityState:'visible',querySelector:()=>null,querySelectorAll:()=>ambiguous?[row,row]:[row]};
-  const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(form.action),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=> 'seller_ads',visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,Event:class{},setTimeout:fn=>fn()});
+  const ctx=vm.createContext({URL,Date,crypto:{randomUUID:()=> 'doc-1'},document,location:new URL(form.action),window:{MI_DOM:{isVisible:()=>true,hasChallenge:()=>challenge},confirm:()=>consent},currentPageKind:()=> 'seller_ads',visibleAccountIdentity:()=>({accountId}),isEditableVisible:()=>true,HTMLInputElement:Input,HTMLSelectElement:StatusSelect,Event:class{},setTimeout:fn=>fn()});
   vm.runInContext(snippet,ctx);
   const grant=(id)=>({id,accountId:'store-a',campaignRef:'C1',sourcePath:form.action,documentNonce:'doc-1',beforeCents:1000,targetCents:1200,expiresAt:new Date(Date.now()+60000).toISOString()});
   const apply=async id=>{ctx.grant=grant(id);return vm.runInContext('applyCampaignBudget(grant)',ctx);};
@@ -373,6 +388,9 @@ test('executor orçamento exige formulário exclusivo, confirmação e autoriza�
   assert.equal(clicks,0);assert.equal(field.value,'10.00');
   assert.equal((await apply('valid')).outcome,'NEEDS_VERIFICATION');assert.equal(field.value,'12.00');assert.equal(clicks,1);
   assert.equal((await apply('valid')).outcome,'FAILED');assert.equal(clicks,1);
+  ctx.grant={...grant('pause'),beforeCents:1200,targetCents:1200,beforeStatus:'ACTIVE',targetStatus:'PAUSED'};
+  assert.equal((await vm.runInContext('applyCampaignBudget(grant)',ctx)).clicked,true);
+  assert.equal(statusField.value,'paused');assert.equal(field.value,'12.00');assert.equal(clicks,2);
 });
 
 test('variação simples e duplicação assistidas recusam ambiguidade e repetição',async()=>{

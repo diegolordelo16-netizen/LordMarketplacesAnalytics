@@ -512,9 +512,9 @@ async function verifyCampaignInFreshTab(tab, grant, proposalId) {
     verificationTab = await chrome.tabs.create({url:tab.url,active:false,windowId:tab.windowId});
     if (!Number.isInteger(verificationTab.id)) return null;
     await waitForTabComplete(verificationTab.id,tab.url,8000);
-    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef});
+    const info = await chrome.tabs.sendMessage(verificationTab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:grant.campaignRef,changeKind:grant.targetStatus?'STATUS':'BUDGET'});
     if (!info?.ok || info.accountId!==grant.accountId || info.campaignRef!==grant.campaignRef ||
-        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents) return null;
+        info.sourcePath!==grant.sourcePath || info.documentNonce===grant.documentNonce || info.budgetCents!==grant.targetCents || info.campaignStatus!==grant.targetStatus) return null;
     const {ok,...context}=info;
     const verified=await callService('campaign.budget.verify',{...context,proposalId});
     return verified?.ok && verified.result?.status==='UI_READBACK_MATCHED' ? verified : null;
@@ -1375,7 +1375,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if(typeof input.proposalId!=='string'||typeof input.campaignRef!=='string'||input.confirmed!==true)throw Error('proposta, campanha e confirmação explícitas necessárias');
         const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
         if(!tab?.id||marketplaceOf(tab.url)!=='mercado_livre')throw Error('abra a publicidade do Mercado Livre');
-        const info=await chrome.tabs.sendMessage(tab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:input.campaignRef});
+        const info=await chrome.tabs.sendMessage(tab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:input.campaignRef,changeKind:input.changeKind});
         if(!info?.ok)throw Error(info?.error||'contexto não reconhecido');
         const {ok,...ctx}=info;
         const payload={...ctx,proposalId:input.proposalId};

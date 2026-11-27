@@ -48,7 +48,9 @@
       <input id="budget-proposal" maxlength="200" autocomplete="off">
       <label class="field-label" for="budget-campaign">ID externo da campanha</label>
       <input id="budget-campaign" maxlength="200" autocomplete="off">
-      <div class="actions"><button id="budget-apply">Executar orçamento aprovado</button><button id="budget-verify">Conferir após recarregar</button></div>
+      <label class="field-label" for="campaign-setting">Tipo de alteração</label>
+      <select id="campaign-setting"><option value="BUDGET">Orçamento diário</option><option value="STATUS">Pausa ou reativação</option></select>
+      <div class="actions"><button id="budget-apply">Executar proposta aprovada</button><button id="budget-verify">Conferir após recarregar</button></div>
       <p class="hint" id="budget-out" role="status">Nenhuma operação solicitada.</p>
     </section>
     <section class="card">

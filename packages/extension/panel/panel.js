@@ -559,7 +559,7 @@ async function budgetAction(action){
   if(!window.confirm(action==='apply'?'Solicitar uma execução única da proposta aprovada? A extensão tentará conferir o valor em uma nova aba da mesma página.':'A página foi recarregada e corresponde à mesma campanha?'))return;
   budgetBusy=true;$('budget-apply').disabled=true;$('budget-verify').disabled=true;
   try{
-    const response=await call('campaign.browser.'+action,{proposalId,campaignRef,confirmed:true});
+    const response=await call('campaign.browser.'+action,{proposalId,campaignRef,changeKind:$('campaign-setting').value,confirmed:true});
     out.textContent=response?.ok?JSON.stringify(response.result):response?.error?.message||'Operação recusada. Não repetir sem conferir.';
   }catch(error){out.textContent=String(error?.message||error)+'; confira antes de qualquer nova proposta.';}
   finally{budgetBusy=false;$('budget-apply').disabled=false;$('budget-verify').disabled=false;}
