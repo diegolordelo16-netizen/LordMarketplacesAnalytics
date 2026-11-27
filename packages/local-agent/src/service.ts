@@ -3166,15 +3166,21 @@ export class LocalService {
 
     this.register('operation.measure',(payload)=>{
       const i=z.object({accountId:z.string().min(1),proposalKind:z.enum(['CAMPAIGN','VARIATION','LISTING_CHANGE']),proposalId:z.string().min(1)}).strict().parse(payload);
-      operationAccount(i.accountId);
+      const account=operationAccount(i.accountId);
       const receipt=db.row<{performed_at:string}>('SELECT performed_at FROM operation_manual_receipts WHERE account_id=? AND proposal_kind=? AND proposal_id=?',i.accountId,i.proposalKind,i.proposalId);
-      if(!receipt)throw Error('registre primeiro o relato de execução manual');
+      type ExecutionInterval={created_at:string;updated_at:string};
+      const assisted = receipt ? undefined : i.proposalKind==='CAMPAIGN'
+        ? db.row<ExecutionInterval>("SELECT created_at,updated_at FROM campaign_budget_executions WHERE account_id=? AND proposal_id=? AND status='UI_READBACK_MATCHED'",i.accountId,i.proposalId)
+        : db.row<ExecutionInterval>("SELECT created_at,updated_at FROM listing_browser_executions WHERE account_id=? AND proposal_kind=? AND proposal_id=? AND action='EDIT_VARIATION' AND status='UI_READBACK_MATCHED'",i.accountId,i.proposalKind,i.proposalId);
+      if(!receipt&&!assisted)return {status:'EXECUTION_EVIDENCE_REQUIRED',metrics:null,remoteVerified:false};
+      const start=receipt?.performed_at??assisted!.created_at;
+      const end=receipt?.performed_at??assisted!.updated_at;
       type Observation={id:string;captured_at:string;source_class:string;metrics_json:string;evidence_json:string};
       let observations:Observation[]=[];
       if(i.proposalKind==='CAMPAIGN'){
-        const p=db.row<{campaign_ref:string}>('SELECT campaign_ref FROM campaign_change_proposals WHERE id=? AND account_id=? AND status=?',i.proposalId,i.accountId,'APPROVED');
+        const p=db.row<{campaign_ref:string}>('SELECT campaign_ref FROM campaign_change_proposals WHERE id=? AND account_id=? AND status=?',i.proposalId,i.accountId,assisted?'EXECUTED':'APPROVED');
         if(!p)throw Error('proposta de campanha não disponível');
-        const rows=db.rows<Observation&{parent_external_id:string}>(`SELECT id,captured_at,source_class,metrics_json,context_json AS evidence_json,parent_external_id FROM capture_detail_snapshots WHERE account_id=? AND kind='AD_CAMPAIGN' AND external_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.campaign_ref);
+        const rows=db.rows<Observation&{parent_external_id:string}>(`SELECT id,captured_at,source_class,metrics_json,context_json AS evidence_json,parent_external_id FROM capture_detail_snapshots WHERE account_id=? AND marketplace=? AND kind='AD_CAMPAIGN' AND external_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,account.marketplace,p.campaign_ref);
         if(new Set(rows.map(r=>r.parent_external_id)).size>1)return {status:'AMBIGUOUS_ENTITY',metrics:null,remoteVerified:false};
         observations=rows;
       }else{
@@ -3185,15 +3191,26 @@ export class LocalService {
         observations=db.rows<Observation>(`SELECT id,captured_at,source_class,metrics_json,evidence_json FROM listing_snapshots WHERE account_id=? AND listing_id=? ORDER BY captured_at DESC,id DESC LIMIT 501`,i.accountId,p.listing_id);
       }
       if(observations.length>500)return {status:'LIMIT_REACHED',metrics:null,remoteVerified:false};
-      const before=observations.find(r=>r.captured_at<receipt.performed_at&&r.source_class==='A_PRIMARY_UI');
-      const after=observations.find(r=>r.captured_at>receipt.performed_at&&r.source_class==='A_PRIMARY_UI');
-      const bw=before?observedWindow(parseJsonObject(before.evidence_json)):null,aw=after?observedWindow(parseJsonObject(after.evidence_json)):null;
-      if(!before||!after||!bw||!aw||bw.days!==aw.days||bw.filters!==aw.filters||bw.to+'T23:59:59.999Z'>=receipt.performed_at||aw.from+'T00:00:00.000Z'<=receipt.performed_at||bw.to>=aw.from)return {status:'INSUFFICIENT_COMPATIBLE_WINDOWS',metrics:null,remoteVerified:false};
+      const now=nowIso();
+      const eligible=observations.flatMap(snapshot=>{
+        if(snapshot.source_class!=='A_PRIMARY_UI'||snapshot.captured_at>now)return [];
+        const window=observedWindow(parseJsonObject(snapshot.evidence_json));
+        if(!window||window.to+'T23:59:59.999Z'>snapshot.captured_at)return [];
+        return [{snapshot,window,key:JSON.stringify([window.days,window.filters])}];
+      });
+      const baselines=new Map<string,(typeof eligible)[number]>();
+      for(const row of eligible){
+        if(row.snapshot.captured_at<start&&row.window.to+'T23:59:59.999Z'<start&&!baselines.has(row.key))baselines.set(row.key,row);
+      }
+      const followup=eligible.find(row=>row.snapshot.captured_at>end&&row.window.from+'T00:00:00.000Z'>end&&baselines.has(row.key));
+      const baseline=followup&&baselines.get(followup.key);
+      if(!baseline||!followup)return {status:'INSUFFICIENT_COMPATIBLE_WINDOWS',metrics:null,remoteVerified:false};
+      const {snapshot:before,window:bw}=baseline,{snapshot:after,window:aw}=followup;
       const a=parseJsonObject(before.metrics_json),b=parseJsonObject(after.metrics_json),metrics:Record<string,{before:number;after:number;delta:number;deltaPct:number|null}>={};
-      for(const k of ['gmv','orders','units','visits','adSpend','adAttributedRevenue','adClicks','paidImpressions','stockAvailable']){
+      for(const k of ['gmv','orders','units','visits','adSpend','adAttributedRevenue','adClicks','paidImpressions','adAttributedOrders','stockAvailable']){
         const v=knownNumber(a,k),w=knownNumber(b,k);if(v!==null&&w!==null)metrics[k]={before:v,after:w,delta:w-v,deltaPct:v>0?(w-v)/v*100:null};
       }
-      return {status:Object.keys(metrics).length?'OBSERVED_CHANGE':'NO_COMMON_METRICS',metrics,before:{id:before.id,window:bw,capturedAt:before.captured_at},after:{id:after.id,window:aw,capturedAt:after.captured_at},remoteVerified:false,causalityVerified:false};
+      return {status:Object.keys(metrics).length?'OBSERVED_CHANGE':'NO_COMMON_METRICS',metrics,executionEvidence:receipt?'HUMAN_REPORTED':'UI_READBACK_MATCHED',measurementScope:i.proposalKind==='CAMPAIGN'?'CAMPAIGN':'LISTING',before:{id:before.id,window:bw,capturedAt:before.captured_at},after:{id:after.id,window:aw,capturedAt:after.captured_at},remoteVerified:false,causalityVerified:false};
     });
 
     const defaultOperationPolicy = { readCapture: true, prepareDrafts: true, editListings: false, publish: false, changeCampaigns: false, changeOffers: false, requireHumanApproval: true, requirePostSaveVerification: true };

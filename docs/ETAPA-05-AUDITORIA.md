@@ -22,7 +22,7 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 | 187 | Preparar troca de capa | Rascunho vinculado a anúncio, snapshot inicial e hash da imagem da mesma conta; prévia e aprovação. Upload remoto não implementado. |
 | 194 | Duplicar anúncios quando permitido | **PARCIAL**: acionamento assistido quando há controle dedicado reconhecido no Mercado Livre. A captura identifica um novo anúncio compatível; a origem da duplicação depende de evidência do marketplace. |
 | 195 | Criar variações de ofertas | **PARCIAL**: envio assistido de formulário dedicado para uma opção simples no Mercado Livre. A captura identifica uma nova opção compatível; a confirmação de publicação depende de evidência do marketplace. |
-| 196 | Medir resultados | operation.measure: antes/depois após relato manual, janelas encerradas, não sobrepostas, iguais e filtros compatíveis; não prova causalidade ou execução. Duplicação não tem ID novo verificável. |
+| 196 | Medir resultados | operation.measure: antes/depois após relato manual ou conferência de orçamento e edição assistida de variação. Usa janelas encerradas de mesma duração e filtros, fora de todo o intervalo entre a autorização e a conferência. A edição usa métricas do anúncio inteiro. Duplicação e criação ainda precisam de identificação confirmada da nova entidade; impacto causal ainda não é medido. |
 | 197 | Monitorar estoque | inventory.dashboard, recência, histórico e armazéns; sem somar SKU compartilhado. |
 | 198 | Risco de ruptura | Estoque zero ou cobertura observada <=7 dias, somente com janela de vendas explícita para calcular cobertura. |
 | 203 | Cruzar estoque e Ads | Sinal de estoque zero e gasto positivo no mesmo snapshot, sem afirmar simultaneidade. |
@@ -39,3 +39,7 @@ Base 3.13.0 (master b439433). Candidata 3.14.0 na branch validation/3.14.0-etapa
 - Não se efetuou nenhuma alteração real em campanhas ou anúncios. A aprovação do desenvolvimento não autoriza alterações financeiras remotas. Homologação real dispensada como portão em etapas anteriores, não executada nesta etapa.
 - Não declarar os 24 requisitos integralmente concluídos: 179, 182, 194 e 195 permanecem parcialmente implementados no que se refere à escrita remota. Nenhum seletor ou resultado de execução será simulado.
 - Master 3.13.0 preservada. Não iniciar etapa 06 sem concluir/aceitar limitações da etapa 05.
+
+## Changelog da candidata 3.14.0
+
+- O painel permite medir alterações assistidas de orçamento e edição de variação com leitura posterior correspondente. Capturas parciais, futuras ou com janelas ainda em curso quando coletadas ficam fora da comparação. Uma captura recente incompatível não esconde pares anteriores elegíveis.

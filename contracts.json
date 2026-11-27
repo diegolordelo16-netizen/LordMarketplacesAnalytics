@@ -394,7 +394,7 @@
     "accountId": "string",
     "proposalKind": "CAMPAIGN|VARIATION|LISTING_CHANGE",
     "proposalId": "string",
-    "method": "compatible before/after source windows following human-reported action; not remote verification or causality"
+    "method": "compatible source windows before and after a human-reported action or an assisted operation with matching UI readback"
   },
   "ads.reconcile": {
     "accountId": "string",

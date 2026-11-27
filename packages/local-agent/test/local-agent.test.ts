@@ -427,6 +427,27 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('campaign.budget.verify',{...reload,budgetCents:999})).result).toMatchObject({status:'NEEDS_VERIFICATION',remoteVerified:false});
     expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false,uiReadbackMatched:true});
     expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).ok).toBe(false);
+    const measure={accountId,proposalKind:'CAMPAIGN',proposalId:proposal.id};
+    expect((await call('operation.measure',{...measure,accountId:other})).result).toMatchObject({status:'EXECUTION_EVIDENCE_REQUIRED'});
+    db.db.prepare('UPDATE campaign_budget_executions SET created_at=?,updated_at=? WHERE id=?')
+      .run('2025-01-08T12:00:00.000Z','2025-01-09T12:00:00.000Z',grant.id);
+    const capture=async (from:string,to:string,at:string,adClicks:number,coverageWarnings?:string)=>{
+      const response=await call('capture.ingest',{accountId,marketplace:'mercado_livre',url:ctx.sourcePath,
+        pageKind:'seller_ads',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],
+        evidence:{filtersAndPeriod:`start_date=${from}|end_date=${to}|status=all`,...(coverageWarnings?{coverageWarnings}:{})},
+        details:[{kind:'AD_CAMPAIGN',externalId:campaignRef,metrics:{adClicks},evidence:{adClicks:`Cliques: ${adClicks}`}}],
+      });
+      expect(response.ok).toBe(true);
+    };
+    await capture('2025-01-01','2025-01-07','2025-01-08T10:00:00.000Z',10);
+    await capture('2025-01-09','2025-01-15','2025-01-16T10:00:00.000Z',99);
+    expect((await call('operation.measure',measure)).result).toMatchObject({status:'INSUFFICIENT_COMPATIBLE_WINDOWS'});
+    await capture('2025-01-10','2025-01-16','2025-01-17T10:00:00.000Z',12);
+    await capture('2025-01-11','2025-01-17','2025-01-18T10:00:00.000Z',99,'COBERTURA_PARCIAL');
+    expect((await call('operation.measure',measure)).result).toMatchObject({
+      status:'OBSERVED_CHANGE',executionEvidence:'UI_READBACK_MATCHED',measurementScope:'CAMPAIGN',
+      metrics:{adClicks:{before:10,after:12,delta:2}},remoteVerified:false,causalityVerified:false,
+    });
     const items=(await call('campaign.budget.list',{accountId})).result as any[];
     expect(items).toHaveLength(1);expect(items[0].status).toBe('UI_READBACK_MATCHED');expect(items[0].token_hash).toBeUndefined();
     expect((await call('campaign.budget.list',{accountId:other})).result).toEqual([]);
