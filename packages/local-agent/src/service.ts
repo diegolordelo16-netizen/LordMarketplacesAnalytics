@@ -997,7 +997,7 @@ export class LocalService {
       );
       const latestPerListingDay = new Map<string, typeof rows[number]>();
       for (const row of rows) latestPerListingDay.set(`${row.listing_id}|${row.captured_at.slice(0,10)}`, row);
-      const metricKeys = ['gmv','netRevenue','commission','fixedFee','shippingFee','tax','marketplaceFee','orders','visits','units','adSpend','adAttributedRevenue','stockAvailable','returnsCount','cancellations'];
+      const metricKeys = ['gmv','netRevenue','commission','fixedFee','shippingFee','tax','marketplaceFee','orders','visits','units','adSpend','adAttributedRevenue','stockAvailable','returnsCount','cancellations','returnsValue','cancellationValue','adClicks','adAttributedOrders','paidImpressions','organicImpressions','questionsPending','questionsAnswered','reviewCount','reviewRating','organicClicks','favorites','addToCart','discounts','newCustomers','returningCustomers'];
       type MetricAggregate = { sum:number; count:number };
       type DailyAccount = { listings:Set<string>; values:Record<string,MetricAggregate> };
       const daily = new Map<string,Map<string,DailyAccount>>();
@@ -1056,7 +1056,7 @@ export class LocalService {
             const observed=accountDaily.get(JSON.stringify([date,accountId]))?.get(key);
             if(observed){values.push(observed.value);observedAccounts++;continue;}
             const entry=point.values[key];
-            if(entry&&entry.count>0&&entry.count===point.listings.size)values.push(entry.sum);
+            if(entry&&entry.count>0&&entry.count===point.listings.size&&(key!=='reviewRating'||point.listings.size===1))values.push(entry.sum);
           }
           // A missing contribution is not zero; ratings must not be added across shops.
           out[key]=values.length===accounts.size&&(key!=='reviewRating'||accounts.size===1)?values.reduce((sum,value)=>sum+value,0):null;
@@ -1071,6 +1071,13 @@ export class LocalService {
         for (const field of ['commission','fixedFee','shippingFee','tax','marketplaceFee']) {
           out[`${field}Cents`] = typeof out[field] === 'number' ? Math.round((out[field] as number) * 100) : null;
         }
+        const ratio=(numerator:string,denominator:string,multiplier=1)=>{
+          const a=out[numerator],b=out[denominator];
+          return typeof a==='number'&&typeof b==='number'&&b>0?a/b*multiplier:null;
+        };
+        out.cvr=ratio('orders','visits',100);out.aovCents=ratio('gmvCents','orders');
+        out.acosPct=ratio('adSpend','adAttributedRevenue',100);out.roas=ratio('adAttributedRevenue','adSpend');
+        out.returnRatePct=ratio('returnsCount','orders',100);
         out.coverage={totalCapturedListings:out.listingsCaptured,accountsCaptured:accounts.size,accountSnapshotMetrics,metrics:metricCoverage,unit:'accounts_with_known_metric'};
         return out;
       });
