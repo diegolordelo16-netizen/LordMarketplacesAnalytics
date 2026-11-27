@@ -499,11 +499,11 @@ async function learningTick(){
     const ctx=res?.result;
     if(learningSession!==session)return;
     if(!res?.ok||!ctx||ctx.tabId!==session.tabId||ctx.accountId!==session.accountId||ctx.origin!==session.origin){stopLearning('Aprendizado pausado: aba, loja ou área mudou.');return;}
-    if(ctx.route===session.lastRoute&&ctx.pageKind===session.lastKind)return;
-    const saved=await call('learning.observe',{...session,route:ctx.route,pageKind:ctx.pageKind,fromRoute:session.lastRoute??undefined});
+    if(ctx.route===session.lastRoute&&ctx.pageKind===session.lastKind&&ctx.spaPage===session.previous?.spaPage&&ctx.filterSignature===session.previous?.filterSignature)return;
+    const saved=await call('learning.observe',{...session,route:ctx.route,pageKind:ctx.pageKind,spaPage:ctx.spaPage,filterSignature:ctx.filterSignature,fromRoute:session.lastRoute??undefined,previous:session.previous});
     if(learningSession!==session)return;
     if(!saved?.ok||saved.result?.ok!==true){stopLearning('Aprendizado pausado: '+(saved?.error?.message??'rota não reconhecida'));return;}
-    session.lastRoute=ctx.route;session.lastKind=ctx.pageKind;
+    session.lastRoute=ctx.route;session.lastKind=ctx.pageKind;session.previous=ctx;
     $('learning-status').textContent='Página demonstrada: '+ctx.pageKind+'. Continue navegando na mesma aba.';
   }finally{learningBusy=false;}
 }
@@ -511,7 +511,7 @@ async function learningAction(action){
   if(learningBusy)return;
   if(action==='start'){
     if(learningSession)return;
-    if(!window.confirm('Registrar apenas rotas estruturais de leitura desta loja enquanto o painel estiver aberto?'))return;
+    if(!window.confirm('Registrar rotas e mudanças de paginação e filtros desta loja enquanto o painel estiver aberto? Os valores dos filtros não serão armazenados.'))return;
   }
   if(action==='clear'&&!window.confirm('Apagar a memória de navegação desta loja e origem?'))return;
   if(action!=='start'&&learningSession)stopLearning();
