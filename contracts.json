@@ -239,15 +239,16 @@
     "payload": {
       "batchId": "string",
       "accountId": "string",
-      "pagesScanned": "integer 0..12",
+      "pagesScanned": "integer 0..200",
       "pagesSucceeded": "integer 0..pagesScanned",
-      "pages": "array of per-page URL/kind/result (max 12)",
+      "pages": "array of per-page URL/kind/result (max 200)",
       "seenUrls": "same-origin visited URL list",
-      "pendingLinks": "same-origin queued links (max 100)",
-      "maxPages": "integer 1..12",
+      "pendingLinks": "same-origin queued links (max 200)",
+      "maxPages": "integer 1..200",
+      "unsupportedLinks": "boolean; indicates untraversed links or unsupported filters",
       "stoppedReason": "optional string"
     },
-    "behavior": "Persists per-page capture history and the bounded navigation queue. URLs are restricted to the marketplace host, credentials/hash removed, and only known pagination query parameters retained. Used to resume a stale scheduled batch without revisiting completed pages.",
+    "behavior": "Persists per-page capture history and the bounded navigation queue. URLs are restricted to the marketplace host, credentials/hash removed, and only known pagination and period/filter query parameters retained. Used to resume a stale scheduled batch without revisiting completed pages.",
     "permission": "execute_task"
   },
   "sync.createAll": {

@@ -69,6 +69,42 @@ function seedImportAccount(id: string): void {
 
 
 describe('capacidades adicionais 3.10.3', () => {
+  it('persiste mais de 12 páginas, mantém filtros e retoma somente pendências no mesmo lote lógico', async () => {
+    seedImportAccount('acct-sync-large');
+    const { batchId } = (await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-sync-large',browserRequest:true})).result as {batchId:string};
+    const url = (n:number) => 'https://vendedores.mercadolivre.com.br/pedidos?page='+n+'&start_date=2026-11-01&end_date=2026-11-30';
+    const pages = Array.from({length:16},(_,i)=>({page:i+1,url:url(i+1),pageKind:'seller_orders',ok:true}));
+    const payload={batchId,accountId:'acct-sync-large',pagesScanned:16,pagesSucceeded:16,pages,seenUrls:pages.map(p=>p.url),pendingLinks:[{url:url(17),label:'próxima'}],maxPages:16,receiptProtocol:1};
+    expect((await call('sync.accountProgress',payload)).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:pages.slice(0,15),pagesScanned:15,pagesSucceeded:15,seenUrls:pages.slice(0,15).map(p=>p.url)})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',status:'COMPLETED',pagesScanned:16,pagesSucceeded:16})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',status:'PARTIAL',pagesScanned:16,pagesSucceeded:16})).ok).toBe(true);
+    const retried=await call('sync.retryFailed',{batchId,browserRequest:true});
+    expect(retried.ok).toBe(true);
+    const retryId=(retried.result as {batchId:string}).batchId;
+    const info=(await call('sync.list',{batchId:retryId})).result as any;
+    expect(info.batch.logical_batch_id).toBe(batchId);
+    expect(info.accounts[0].pages_succeeded).toBe(16);
+    expect(JSON.parse(info.accounts[0].progress_json).pendingLinks[0].url).toBe(url(17));
+    expect(info.pageRuns).toHaveLength(16);
+  });
+  it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
+    seedImportAccount('acct-receipt');
+    const at='2026-11-27T12:00:00.000Z';
+    const payload={captureKey:'a'.repeat(64),marketplace:'mercado_livre',accountId:'acct-receipt',pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/resumo',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',listings:[],accountMetrics:{orders:12,gmv:200}};
+    const first=await call('capture.ingest',payload);
+    expect(first.ok).toBe(true);
+    expect((first.result as {ok:boolean}).ok).toBe(true);
+    expect((await call('capture.ingest',{...payload,collectedAt:'2026-11-27T12:01:00.000Z'})).result).toEqual(first.result);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM account_snapshots WHERE account_id=?','acct-receipt')?.total).toBe(1);
+    expect((await call('capture.ingest',{...payload,url:'https://vendedores.mercadolivre.com.br/pedidos'})).ok).toBe(false);
+    expect((await call('capture.ingest',{...payload,marketplace:'shopee'})).ok).toBe(false);
+    const voice={captureKey:'a'.repeat(64),sourceUrl:payload.url,accountId:payload.accountId,items:[{kind:'QUESTION',text:'O produto está disponível?'}]};
+    expect((await call('voc.ingestBatch',voice)).ok).toBe(true);
+    expect((await call('voc.ingestBatch',voice)).ok).toBe(true);
+    expect(db.row<{total:number}>('SELECT COUNT(*) total FROM customer_voice_items WHERE account_id=?','acct-receipt')?.total).toBe(1);
+  });
+
   it('entrega à extensão apenas lotes solicitados pelo dashboard e protege a retomada', async () => {
     seedImportAccount('acct-browser-request');
     const payload = { scope: 'ACCOUNT', accountId: 'acct-browser-request' };

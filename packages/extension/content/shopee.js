@@ -14,6 +14,9 @@
     if (/\/datacenter|\/business-insights/i.test(url)) return 'seller_dashboard';
     if (/\/(complaint|dispute)/i.test(url)) return 'seller_complaints';
     if (/\/(return|refund)/i.test(url)) return 'seller_returns';
+    if (/\/(questions|question|perguntas)(\/|\?|#|$)/i.test(url)) return 'seller_questions';
+    if (/\/(rating|ratings|reviews|reputation|avaliacoes)(\/|\?|#|$)/i.test(url)) return 'seller_reputation';
+    if (/\/(inventory|stock)(\/|\?|#|$)/i.test(url)) return 'seller_inventory';
     if (/\/order/i.test(url)) return 'seller_orders';
     if (/\/marketing\/ads|\/ads\//i.test(url)) return 'seller_ads';
     return 'unknown';
@@ -185,9 +188,28 @@
     if (filterContext) evidence.filtersAndPeriod = filterContext;
     const listing = {};
     collectVisibleOfferEvidence(listing, evidence);
-    const accountPage = ['seller_dashboard', 'seller_ads', 'seller_orders', 'seller_inventory'].includes(pageKind);
+    const accountPage = ['seller_dashboard', 'seller_ads', 'seller_orders', 'seller_inventory', 'seller_questions', 'seller_reputation', 'seller_returns', 'seller_complaints'].includes(pageKind);
     const accountMetrics = {};
-
+    if (pageKind === 'seller_listings') {
+      const listings = [], seen = new Set();
+      for (const row of document.querySelectorAll('[data-product-id], tr[data-item-id], [data-testid="product-row"]')) {
+        if (listings.length >= 100 || !window.MI_DOM.isVisible(row)) continue;
+        const id = row.getAttribute('data-product-id') || row.getAttribute('data-item-id');
+        if (!id || !/^\d+$/.test(id) || seen.has(id)) continue;
+        seen.add(id);
+        const item = { listingId: id };
+        const title = row.querySelector('[data-testid="product-title"], [class*="product-name"], h2');
+        if (title && window.MI_DOM.isVisible(title) && title.textContent?.trim()) item.title = title.textContent.trim().slice(0,2000);
+        for (const [field, key] of [['price',null],['stockAvailable','stock'],['units','units'],['visits','visits'],['orders','orders']]) {
+          const el = field === 'price' ? row.querySelector('[data-testid="price"], [class*="price"]') : null;
+          const found = key ? window.MI_DOM.findValueByLabel(row,LABELS[key]) : null;
+          const value = window.MI_DOM.parseNumberPtBr(found?.text ?? (el && window.MI_DOM.isVisible(el) ? el.textContent : null));
+          if (typeof value === 'number' && value >= 0) item[field] = value;
+        }
+        listings.push(item);
+      }
+      if (listings.length) return { marketplace:'shopee', pageKind, ...visibleAccountIdentity(), url:location.href, listings, evidence:{...evidence, rows:String(listings.length)}, missing:['price','stockAvailable','units','visits','orders'].filter(field=>listings.every(row=>row[field] === undefined)) };
+    }
     const idMatch = location.href.match(/i\.(\d{6,})\.(\d{6,})/);
     if (idMatch) listing.listingId = `${idMatch[1]}.${idMatch[2]}`;
 
@@ -437,7 +459,7 @@
         url: location.href,
         loginRequired: pageKind === 'login' || Boolean(document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')),
         challenge: window.MI_DOM.hasChallenge(document),
-        nextPageUrl: pageKind === 'seller_listings' ? window.MI_DOM.paginationInfo(document, location.href, 'shopee') : null,
+        nextPageUrl: pageKind.startsWith('seller_') && pageKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'shopee') : null,
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

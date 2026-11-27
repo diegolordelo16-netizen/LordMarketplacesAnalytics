@@ -130,6 +130,7 @@ export const capturedAccountMetricsSchema = z.object({
 }).partial().refine((metrics) => Object.values(metrics).some((value) => value !== undefined), 'informe ao menos uma métrica de conta');
 
 export const captureIngestSchema = z.object({
+  captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   marketplace: marketplaceIdSchema,
   accountId: z.string().min(1).max(128),
   pageKind: pageKindSchema,

@@ -8,10 +8,10 @@ const dashboard = readFileSync(new URL('../packages/local-agent/panel/src/app.js
 const root = 'https://seller.shopee.com.br/datacenter';
 const orders = 'https://seller.shopee.com.br/order';
 
-function scanFixture({ captureOk = true, links = [], current = root } = {}) {
+function scanFixture({ captureOk = true, links = [], current = root, next = {}, pageInfo = {} } = {}) {
   const captured = [], progress = [], created = [];
   let tabUrl = current;
-  const info = (url) => ({ ok: true, url, accountId: 'store-a', pageKind: url === root ? 'seller_dashboard' : 'seller_orders', authorizedAreaLinks: url === root ? links : [] });
+  const info = (url) => ({ ok: true, url, accountId: 'store-a', pageKind: url === root ? 'seller_dashboard' : 'seller_orders', authorizedAreaLinks: url === root ? links : [], nextPageUrl: next[url], ...(pageInfo[url] || {}) });
   const ctx = vm.createContext({ URL, URLSearchParams, setTimeout: (fn) => fn(),
     marketplaceOf: () => 'shopee',
     captureTab: async (id, expected) => { captured.push(expected.url); return { ok: captureOk, error: captureOk ? undefined : 'offline' }; },
@@ -56,6 +56,44 @@ test('retomada de área secundária usa o registro existente sem recapturar a ra
   assert.equal(result.pagesSucceeded, 2);
   assert.equal(result.pendingPages, 0);
   assert.deepEqual(f.captured, [orders]);
+});
+
+test('coleta geral segue paginação de uma área e preserva filtros conhecidos', async () => {
+  const first = orders + '?page=1&start_date=2026-11-01&end_date=2026-11-30';
+  const second = orders + '?page=2&start_date=2026-11-01&end_date=2026-11-30';
+  const f = scanFixture({ current: first, next: { [first]: second } });
+  const result = await f.scan(20);
+  assert.deepEqual(f.captured, [first, second]);
+  assert.equal(result.pagesSucceeded, 2);
+  assert.equal(result.pendingPages, 0);
+});
+test('varredura percorre mais de doze páginas sem recapturar a raiz', async () => {
+  const urls = Array.from({length: 16}, (_, i) => orders + '?page=' + (i+1));
+  const next = Object.fromEntries(urls.slice(0,-1).map((url,i)=>[url,urls[i+1]]));
+  const f = scanFixture({ current: urls[0], next });
+  const result = await f.scan(20);
+  assert.deepEqual(f.captured, urls);
+  assert.equal(result.pagesSucceeded, 16);
+});
+test('filtro opaco não é removido silenciosamente e não gera conclusão integral', async () => {
+  const f = scanFixture({ links: [{url: orders + '?token=not-a-real-token', pageKind:'seller_orders'}] });
+  const result = await f.scan(20);
+  assert.deepEqual(f.captured, [root]);
+  assert.equal(result.unsupportedLinks, true);
+});
+test('CAPTCHA ou alteração de conta impede captura da próxima página', async () => {
+  for (const pageInfo of [{challenge:true}, {accountId:'other'}]) {
+    const f = scanFixture({ links: [{url:orders,pageKind:'seller_orders'}], pageInfo:{[orders]:pageInfo} });
+    const result = await f.scan(20);
+    assert.deepEqual(f.captured,[root]);
+    assert.equal(result.pendingPages,1);
+  }
+});
+test('continuação amplia o orçamento quando a janela anterior está concluída', async () => {
+  const f = scanFixture({links:[{url:orders,pageKind:'seller_orders'}]});
+  const result = await f.scan(1, {maxPages:1,pages:[{page:1,url:root,pageKind:'seller_dashboard',ok:true}],seenUrls:[root],pendingLinks:[{url:orders}]});
+  assert.deepEqual(f.captured,[orders]);
+  assert.equal(result.pagesSucceeded,2);
 });
 
 function renderFixture() {

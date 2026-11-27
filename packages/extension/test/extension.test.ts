@@ -187,11 +187,11 @@ describe('extensão: navegação entre áreas autorizadas', () => {
     expect(info.authorizedAreaLinks[0].pageKind).toBe('seller_orders');
   });
 
-  it('o worker exige allowlist, limita a 12 páginas e interrompe em login/CAPTCHA', () => {
+  it('o worker exige allowlist, limita a 200 páginas e interrompe em login/CAPTCHA', () => {
     const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
     expect(worker).toContain('captureAuthorizedAreas');
     expect(worker).toContain("'capture.scanAuthorizedAreas'");
-    expect(worker).toContain('Math.min(12');
+    expect(worker).toContain('Math.min(200');
     expect(worker).toContain("info.loginRequired || info.challenge");
     expect(worker).toContain("url.origin !== expectedOrigin");
     expect(worker).toContain("url.protocol !== 'https:'");
@@ -227,6 +227,9 @@ describe('extensão: leitura de números pt-BR', () => {
     expect(dom.parseNumberPtBr('não disponível')).toBeNull();
     expect(dom.parseNumberPtBr(null)).toBeNull();
     expect(dom.parseNumberPtBr('')).toBeNull();
+    expect(dom.parseNumberPtBr('12 pedidos / 20 visitas')).toBeNull();
+    expect(dom.parseNumberPtBr('01/11/2026')).toBeNull();
+    expect(dom.parseNumberPtBr('1,2 mil')).toBeNull();
   });
 
   it('extrai ID externo do anúncio', () => {
@@ -471,13 +474,14 @@ describe('extensão: captura financeira com rótulos não ambíguos', () => {
         ['Tarifa fixa', 'R$ 5,00'], ['Frete pago pelo vendedor', 'R$ 12,00'], ['Impostos', 'R$ 8,00'],
         ['Tarifas do marketplace', 'R$ 3,00'],
       ];
-      const nodes = pairs.map(([label, value]) => ({ textContent: label, nextElementSibling: { textContent: value }, parentElement: null }));
+      class VisibleElement { constructor(public textContent: string, public nextElementSibling: VisibleElement | null = null) {} getBoundingClientRect() { return { width: 100, height: 20 }; } }
+      const nodes = pairs.map(([label, value]) => new VisibleElement(label, new VisibleElement(value)));
       const body = { querySelectorAll: () => nodes, innerText: pairs.map(([label, value]) => `${label} ${value}`).join(' ') };
-      const window: Record<string, unknown> = {};
+      const window: Record<string, unknown> = { getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }) };
       const context = vm.createContext({
         window, location: { href: url }, document: { body, querySelector: () => null, querySelectorAll: () => [] },
         chrome: { runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } } },
-        String, Number, Math, RegExp, URL, Element: class {},
+        String, Number, Math, RegExp, URL, Element: VisibleElement,
       });
       vm.runInContext(readFileSync(join(ext, 'content', 'dom-utils.js'), 'utf8'), context);
       vm.runInContext(readFileSync(join(ext, 'content', file), 'utf8'), context);
@@ -487,6 +491,9 @@ describe('extensão: captura financeira com rótulos não ambíguos', () => {
     };
     const ml = captureFinancialPage('mercado-livre.js', 'https://www.mercadolivre.com.br/vendas/metricas', 'Faturamento bruto');
     const shopee = captureFinancialPage('shopee.js', 'https://seller.shopee.com.br/portal/datacenter', 'Vendas brutas (BRL)');
+    const amazon = captureFinancialPage('amazon.js', 'https://sellercentral.amazon.com.br/home', 'Ordered Product Sales');
+    expect(amazon.gmv).toBe(1000);
+    expect(amazon.netRevenue).toBe(910);
     for (const metrics of [ml, shopee]) {
       expect(metrics.gmv).toBe(1000);
       expect(metrics.netRevenue).toBe(910);

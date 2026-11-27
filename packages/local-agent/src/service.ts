@@ -8,6 +8,7 @@ import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
+  captureIngestSchema,
   evaluateQualityGate,
   ipcRequestSchema,
   protocolCompatible,
@@ -403,6 +404,40 @@ export class LocalService {
 
   private registerAll(): void {
     const { db, secrets, tasks, gemini, knowledge, autoUpgrade, capture } = this.deps;
+    // Receipts are committed together with their writes. A lost HTTP/native reply is safe to replay.
+    function captureOnce<T extends { ok: boolean }>(method: string, payload: unknown, work: () => T): T {
+      const raw = payload as Record<string, unknown> | null | undefined;
+      if (raw?.captureKey === undefined) return work();
+      const parsed = z.object({ captureKey: z.string().regex(/^[a-f0-9]{64}$/), accountId: z.string().min(1) }).passthrough().parse(payload);
+      const { captureKey, accountId } = parsed;
+      const source = new URL(z.string().url().max(2048).parse(method === 'capture.ingest' ? parsed.url : parsed.sourceUrl));
+      if (source.protocol !== 'https:' || source.username || source.password) throw new Error('URL do recibo inválida');
+      source.hash = ''; source.searchParams.sort();
+      const identity = createHash('sha256').update(source.href).digest('hex');
+      let rejected: T | undefined;
+      const abort = new Error('captura não confirmada');
+      try {
+        return db.transaction(() => {
+          const active = db.row<{ is_active: number; marketplace: string }>('SELECT is_active,marketplace FROM accounts WHERE id=?', accountId);
+          if (!active?.is_active) throw new Error('conta inexistente ou inativa');
+          const hosts: Record<string, RegExp> = { mercado_livre: /(^|\.)mercadolivre\.com\.br$/i, shopee: /(^|\.)shopee\.com\.br$/i, amazon: /^sellercentral\.amazon\.com\.br$/i };
+          if (!hosts[active.marketplace]?.test(source.hostname) || (method === 'capture.ingest' && parsed.marketplace !== active.marketplace)) throw new Error('recibo não pertence ao marketplace da conta');
+          const receipt = db.row<{ result_json: string; identity_hash: string }>('SELECT result_json,identity_hash FROM capture_receipts WHERE account_id=? AND method=? AND capture_key=?', accountId, method, captureKey);
+          if (receipt) {
+            if (receipt.identity_hash !== identity) throw new Error('chave de captura reutilizada para outra página');
+            return JSON.parse(receipt.result_json) as T;
+          }
+          const result = work();
+          if (!result.ok) { rejected = result; throw abort; }
+          db.db.prepare('INSERT INTO capture_receipts(account_id,method,capture_key,identity_hash,result_json,created_at) VALUES (?,?,?,?,?,?)')
+            .run(accountId,method,captureKey,identity,JSON.stringify(result),nowIso());
+          return result;
+        });
+      } catch (error) {
+        if (error === abort && rejected) return rejected;
+        throw error;
+      }
+    }
 
     this.register('ping', () => ({ pong: true, version: this.deps.version, at: new Date().toISOString() }));
 
@@ -687,9 +722,12 @@ export class LocalService {
     });
 
     this.register('capture.ingest', (payload, auth) => {
+      if ((payload as { captureKey?: unknown } | null)?.captureKey !== undefined) captureIngestSchema.parse(payload);
+      return captureOnce('capture.ingest', payload, () => {
       const result = capture.ingest(payload);
       this.audit(auth, 'CAPTURE_INGEST', 'listing_snapshot', null, result.ok ? 'OK' : 'PARTIAL', result.errors.join('; '));
       return result;
+      });
     });
 
     this.register('capture.snapshot', (payload) => {
@@ -2009,7 +2047,7 @@ export class LocalService {
 
     this.register('voc.ingestBatch', (payload, auth) => {
       const i = z.object({
-        accountId: z.string().min(1),
+        accountId: z.string().min(1), captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(), sourceUrl: z.string().url().max(2048).optional(),
         sourceClass: z.enum(['A_PRIMARY_UI','B_PLATFORM_EXPORT','F_USER_INPUT']).default('A_PRIMARY_UI'),
         items: z.array(z.object({
           listingId: z.string().nullable().optional(),
@@ -2020,6 +2058,7 @@ export class LocalService {
           observedAt: z.string().datetime().optional(),
         })).min(1).max(200),
       }).parse(payload ?? {});
+      return captureOnce('voc.ingestBatch', i, () => {
       const account = db.row<{ id: string; is_active: number }>('SELECT id,is_active FROM accounts WHERE id=?', i.accountId);
       if (!account || account.is_active !== 1) throw new Error('conta inexistente ou inativa');
       const listingIds = [...new Set(i.items.map((item) => item.listingId).filter((value): value is string => Boolean(value)))];
@@ -2045,6 +2084,7 @@ export class LocalService {
       });
       this.audit(auth, 'VOC_INGEST_BATCH', 'customer_voice_item', null, 'OK', `${inserted.length} inseridos; ${duplicates.length} duplicados ignorados`);
       return { ok: true, inserted: inserted.length, duplicates: duplicates.length, ids: inserted, duplicateIds: duplicates, piiRedacted: true };
+      });
     });
 
     this.register('sync.createAll', (payload, auth) => {
@@ -2078,13 +2118,13 @@ export class LocalService {
 
     this.register('sync.retryFailed', (payload, auth) => {
       const i = z.object({ batchId: z.string().min(1), browserRequest: z.boolean().default(false) }).parse(payload ?? {});
-      const original = db.row<{ id: string; scope: 'ALL_ACTIVE_ACCOUNTS' | 'ALL_ENABLED_MARKETPLACES' | 'ACCOUNT'; status: string }>(
-        'SELECT id,scope,status FROM sync_batches WHERE id=?', i.batchId,
+      const original = db.row<{ id: string; scope: 'ALL_ACTIVE_ACCOUNTS' | 'ALL_ENABLED_MARKETPLACES' | 'ACCOUNT'; status: string; logical_batch_id: string | null }>(
+        'SELECT id,scope,status,logical_batch_id FROM sync_batches WHERE id=?', i.batchId,
       );
       if (!original) throw new Error('lote original de sincronização não encontrado');
       if (!['PARTIAL','FAILED'].includes(original.status)) throw new Error('somente lotes parciais ou com falha podem ser repetidos');
-      const failedAccounts = db.rows<{ account_id: string; marketplace: string }>(
-        `SELECT ba.account_id,ba.marketplace FROM sync_batch_accounts ba
+      const failedAccounts = db.rows<{ account_id: string; marketplace: string; progress_json: string; pages_scanned: number; pages_succeeded: number }>(
+        `SELECT ba.account_id,ba.marketplace,ba.progress_json,ba.pages_scanned,ba.pages_succeeded FROM sync_batch_accounts ba
            JOIN accounts a ON a.id=ba.account_id
           WHERE ba.batch_id=? AND ba.status IN ('FAILED','PARTIAL','SKIPPED') AND a.is_active=1
             AND NOT EXISTS (
@@ -2098,10 +2138,15 @@ export class LocalService {
       if (!failedAccounts.length) throw new Error('nenhuma conta ativa com falha pode ser repetida; confira se já existe um lote em andamento');
       const batchId = randomUUID(); const now = nowIso();
       db.transaction(() => {
-        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request) VALUES (?,?,?,?,?,?,?)')
-          .run(batchId, auth?.userId ?? null, original.scope, 'QUEUED', now, JSON.stringify({ retryOf: original.id, accountCount: failedAccounts.length }), Number(i.browserRequest));
-        const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status) VALUES (?,?,?,?,?)');
-        for (const account of failedAccounts) insert.run(randomUUID(), batchId, account.account_id, account.marketplace, 'WAITING_BROWSER');
+        db.db.prepare('INSERT INTO sync_batches (id,requested_by,scope,status,requested_at,summary_json,browser_request,logical_batch_id) VALUES (?,?,?,?,?,?,?,?)')
+          .run(batchId, auth?.userId ?? null, original.scope, 'QUEUED', now, JSON.stringify({ retryOf: original.id, accountCount: failedAccounts.length }), Number(i.browserRequest), original.logical_batch_id ?? original.id);
+        const insert = db.db.prepare('INSERT INTO sync_batch_accounts (id,batch_id,account_id,marketplace,status,progress_json,pages_scanned,pages_succeeded) VALUES (?,?,?,?,?,?,?,?)');
+        const copyPage = db.db.prepare(`INSERT INTO sync_batch_page_runs(id,batch_id,account_id,page_no,page_url,page_kind,status,error,queued,updated_at)
+          SELECT ?,?,account_id,page_no,page_url,page_kind,status,error,queued,? FROM sync_batch_page_runs WHERE id=?`);
+        for (const account of failedAccounts) {
+          insert.run(randomUUID(), batchId, account.account_id, account.marketplace, 'WAITING_BROWSER', account.progress_json, account.pages_scanned, account.pages_succeeded);
+          for (const page of db.rows<{ id: string }>('SELECT id FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',original.id,account.account_id)) copyPage.run(randomUUID(),batchId,now,page.id);
+        }
       });
       this.audit(auth, 'SYNC_BATCH_RETRY', 'sync_batch', batchId, 'OK', `${failedAccounts.length} conta(s); origem ${original.id}`);
       return { ok: true, batchId, accounts: failedAccounts, retryOf: original.id, requiresOpenSellerTabs: true, neverSwitchesAccounts: true };
@@ -2167,8 +2212,10 @@ export class LocalService {
       const now = nowIso();
       const staleBefore = new Date(Date.now() - 30 * 60_000).toISOString();
       const row = db.row<{ id: string; batch_id: string; schedule_id: string }>(`SELECT id,batch_id,schedule_id FROM sync_schedule_runs
-        WHERE batch_id IS NOT NULL AND (status='QUEUED' OR (status='RUNNING' AND started_at<=?))
-        ORDER BY scheduled_at,id LIMIT 1`, staleBefore);
+        WHERE batch_id IS NOT NULL AND (status='QUEUED' OR (status='RUNNING' AND started_at<=? AND NOT EXISTS (
+          SELECT 1 FROM sync_batch_accounts a WHERE a.batch_id=sync_schedule_runs.batch_id AND a.progress_updated_at>?
+        )))
+        ORDER BY scheduled_at,id LIMIT 1`, staleBefore, staleBefore);
       if (!row) return { claimed: false };
       const pending = db.row<{ total: number }>("SELECT COUNT(*) AS total FROM sync_batch_accounts WHERE batch_id=? AND status IN ('WAITING_BROWSER','RUNNING')", row.batch_id)?.total ?? 0;
       if (Number(pending) === 0) {
@@ -2202,16 +2249,16 @@ export class LocalService {
       const pageKind = z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']);
       const i = z.object({
         batchId: z.string().min(1), accountId: z.string().min(1),
-        pagesScanned: z.number().int().min(0).max(12), pagesSucceeded: z.number().int().min(0).max(12),
-        pages: z.array(z.object({ page: z.number().int().min(1).max(12), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(12),
-        seenUrls: z.array(z.string().max(2048)).max(12),
-        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80) })).max(100),
-        maxPages: z.number().int().min(1).max(12), stoppedReason: z.string().max(300).optional(),
-      }).refine((v) => v.pagesSucceeded <= v.pagesScanned && v.pages.length === v.pagesScanned, 'contagens do progresso inválidas')
+        pagesScanned: z.number().int().min(0).max(200), pagesSucceeded: z.number().int().min(0).max(200),
+        pages: z.array(z.object({ page: z.number().int().min(1).max(200), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(200),
+        seenUrls: z.array(z.string().max(2048)).max(200),
+        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80) })).max(200),
+        maxPages: z.number().int().min(1).max(200), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
+      }).refine((v) => v.pagesSucceeded <= v.pagesScanned && v.pages.length === v.pagesScanned && v.pagesScanned <= v.maxPages, 'contagens do progresso inválidas')
         .refine((v) => v.pages.every((page, index) => page.page === index + 1) && new Set(v.pages.map((page) => page.page)).size === v.pages.length, 'numeração de páginas inválida')
         .refine((v) => v.pages.filter((page) => page.ok).length === v.pagesSucceeded, 'páginas concluídas não correspondem à contagem')
         .parse(payload ?? {});
-      const row = db.row<{ id: string; status: string; marketplace: string }>('SELECT id,status,marketplace FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
+      const row = db.row<{ id: string; status: string; marketplace: string; pages_scanned: number; pages_succeeded: number }>('SELECT ba.id,ba.status,ba.marketplace,ba.pages_scanned,ba.pages_succeeded FROM sync_batch_accounts ba JOIN accounts a ON a.id=ba.account_id AND a.marketplace=ba.marketplace AND a.is_active=1 WHERE ba.batch_id=? AND ba.account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
       if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) throw new Error('não é permitido atualizar progresso de conta terminal');
       const hosts: Record<string, RegExp> = {
@@ -2225,27 +2272,34 @@ export class LocalService {
         url.username = ''; url.password = ''; url.hash = '';
         // Só preserva parâmetros de paginação conhecidos; descarta tokens e parâmetros opacos.
         const safe = new URLSearchParams();
-        for (const [key, value] of url.searchParams) if (/^(page|page_number|p|offset|limit|sort|order)$/i.test(key)) safe.append(key, value.slice(0, 80));
+        for (const [key, value] of url.searchParams) if (/^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)) safe.append(key, value.slice(0, 80)); else throw new Error('filtro da URL não suportado para retomada segura');
         url.search = safe.toString();
-        return url.toString().slice(0, 500);
+        return url.toString();
       };
       const cleanPages = i.pages.map((page) => ({
         page_no: page.page, page_url: sanitizeUrl(page.url), page_kind: page.pageKind,
         status: page.ok ? 'COMPLETED' : page.queued ? 'QUEUED' : 'FAILED', error: page.error ?? null, queued: page.queued ? 1 : 0,
       }));
+      if (i.pagesScanned < row.pages_scanned || i.pagesSucceeded < row.pages_succeeded) throw new Error('progresso atrasado não pode reduzir contagens');
+      const uniquePageKey = (raw: string) => { const u = new URL(raw); u.searchParams.sort(); return u.href; };
+      if (new Set(cleanPages.map((page) => uniquePageKey(page.page_url))).size !== cleanPages.length) throw new Error('URLs duplicadas no progresso');
+      for (const prev of db.rows<{ page_no: number; page_url: string; status: string }>('SELECT page_no,page_url,status FROM sync_batch_page_runs WHERE batch_id=? AND account_id=?',i.batchId,i.accountId)) {
+        const next = cleanPages[prev.page_no - 1];
+        if (!next || uniquePageKey(next.page_url) !== uniquePageKey(prev.page_url) || (prev.status === 'COMPLETED' && next.status !== 'COMPLETED')) throw new Error('progresso anterior não pode ser substituído por outra página ou regredir');
+      }
       const cleanState = {
         seenUrls: i.seenUrls.map((url) => {
           const parsed = new URL(url);
           if (parsed.protocol !== 'https:' || !hosts[row.marketplace]?.test(parsed.hostname)) throw new Error('URL visitada fora do domínio autorizado');
           parsed.username = ''; parsed.password = ''; parsed.hash = '';
           const safe = new URLSearchParams();
-          for (const [key, value] of parsed.searchParams) if (/^(page|page_number|p|offset|limit|sort|order)$/i.test(key)) safe.append(key, value.slice(0, 80));
+          for (const [key, value] of parsed.searchParams) if (/^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value)) safe.append(key, value.slice(0, 80)); else throw new Error('filtro da URL não suportado para retomada segura');
           parsed.search = safe.toString();
-          return parsed.toString().slice(0, 500);
+          return parsed.toString();
         }),
         pendingLinks: i.pendingLinks.map((item) => ({ url: sanitizeUrl(item.url), label: item.label })),
         pages: cleanPages.map((page) => ({ page: page.page_no, url: page.page_url, pageKind: page.page_kind, ok: page.status === 'COMPLETED', ...(page.error ? { error: page.error } : {}), queued: Boolean(page.queued) })),
-        maxPages: i.maxPages, stoppedReason: i.stoppedReason ?? null,
+        maxPages: i.maxPages, unsupportedLinks: i.unsupportedLinks, receiptProtocol: i.receiptProtocol, stoppedReason: i.stoppedReason ?? null,
       };
       const now = nowIso();
       db.transaction(() => {
@@ -2263,7 +2317,7 @@ export class LocalService {
     });
 
     this.register('sync.completeAccount', (payload, auth) => db.transaction(() => {
-      const i = z.object({ batchId: z.string(), accountId: z.string(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(50).default(0), pagesSucceeded: z.number().int().min(0).max(50).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
+      const i = z.object({ batchId: z.string(), accountId: z.string(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(200).default(0), pagesSucceeded: z.number().int().min(0).max(200).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
       const row = db.row<{ id: string; status: string; progress_json: string }>('SELECT id,status,progress_json FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
       if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) {
@@ -2273,7 +2327,7 @@ export class LocalService {
       }
       if (i.status === 'COMPLETED') {
         const progress = parseJsonObject(row.progress_json);
-        if ((Array.isArray(progress.pendingLinks) && progress.pendingLinks.length) ||
+        if (progress.unsupportedLinks === true || (Array.isArray(progress.pendingLinks) && progress.pendingLinks.length) ||
             (Array.isArray(progress.pages) && (!progress.pages.length || progress.pages.some((page) => page?.ok !== true)))) {
           throw new Error('a coleta tem páginas pendentes ou sem confirmação');
         }

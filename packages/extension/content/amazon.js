@@ -8,7 +8,11 @@
 
   function detectPageKind(url) {
     if (/\/(ap\/)?signin|\/login/i.test(url)) return 'login';
+    if (/\/(edit|update|delete|remove)(\/|\?|#|$)/i.test(url)) return 'unknown';
     if (/myinventory|manageinventory|inventory/i.test(url)) return 'seller_listings';
+    if (/return|refund/i.test(url)) return 'seller_returns';
+    if (/feedback|reputation|reviews/i.test(url)) return 'seller_reputation';
+    if (/claims|complaints|disputes/i.test(url)) return 'seller_complaints';
     if (/orders-v3|\/orders/i.test(url)) return 'seller_orders';
     if (/advertising|campaignmanager|\/ads/i.test(url)) return 'seller_ads';
     if (/dashboard|home/i.test(url)) return 'seller_dashboard';
@@ -87,7 +91,7 @@
   function capture() {
     const pageKind = detectPageKind(location.href);
     const evidence = {};
-    const listings = [];
+    const listings = [], accountMetrics = {};
     if (pageKind === 'seller_listings') {
       const rows = document.querySelectorAll('#myitable tbody tr, table tbody tr[data-asin], tr[data-row-key], [data-testid="inventory-row"]');
       for (const row of rows) {
@@ -109,9 +113,29 @@
       evidence.visibleInventoryRows = String(rows.length);
       evidence.capturedListings = String(listings.length);
     }
+    if (['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints'].includes(pageKind)) {
+      const fields = {
+        orders:['pedidos','orders','total order items'], units:['unidades vendidas','units ordered','units sold'],
+        gmv:['vendas de produtos pedidos','ordered product sales','faturamento bruto','gross sales'], netRevenue:['receita líquida','net revenue','net sales'],
+        visits:['sessões','sessions','visitas'], organicImpressions:['impressões orgânicas','organic impressions'], paidImpressions:['impressões pagas','ad impressions'],
+        adSpend:['gasto com anúncios','ad spend','advertising cost'], adClicks:['cliques em anúncios','ad clicks'],
+        adAttributedRevenue:['vendas atribuídas','ad-attributed sales'], adAttributedOrders:['pedidos atribuídos','ad-attributed orders'],
+        returnsCount:['devoluções','returns'], returnsValue:['valor devolvido','refund amount'], cancellations:['cancelamentos','cancellations'],
+        discounts:['descontos concedidos','discount amount'], commission:['comissões','referral fees'],
+        marketplaceFee:['taxas do marketplace','marketplace fees'], reviewCount:['total de avaliações','total reviews'], reviewRating:['nota média','average rating'],
+      };
+      for (const [field, labels] of Object.entries(fields)) {
+        const found = window.MI_DOM.findValueByLabel(document.body,labels);
+        const value = found && window.MI_DOM.parseNumberPtBr(found.text);
+        if (typeof value === 'number' && value >= 0 && (field !== 'reviewRating' || value <= 5)) {
+          accountMetrics[field] = value; evidence[field] = String(found.label + ': ' + found.text).slice(0,200);
+        }
+      }
+    }
     return {
       marketplace: 'amazon',
       pageKind,
+      ...(Object.keys(accountMetrics).length ? { accountMetrics } : {}),
       ...visibleAccountIdentity(),
       url: location.href,
       listings,
@@ -120,7 +144,7 @@
         if (key === 'sku_or_asin') return listings.length === 0;
         const field = key === 'stockAvailable' ? key : key;
         return listings.length > 0 && listings.every((row) => row[field] === undefined);
-      }) : ['inventory_list'],
+      }) : ['orders','units','gmv','netRevenue','visits','adSpend','adClicks','adAttributedRevenue','returnsCount','cancellations'].filter(field => accountMetrics[field] === undefined),
     };
   }
 
@@ -140,7 +164,7 @@
         url: location.href,
         loginRequired: challengeDetected() || pageKind === 'login',
         challenge: window.MI_DOM.hasChallenge(document),
-        nextPageUrl: pageKind === 'seller_listings' ? window.MI_DOM.paginationInfo(document, location.href, 'amazon') : null,
+        nextPageUrl: pageKind.startsWith('seller_') && pageKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'amazon') : null,
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

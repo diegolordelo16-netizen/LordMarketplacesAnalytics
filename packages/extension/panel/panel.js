@@ -156,14 +156,14 @@ async function capturePages() {
 }
 
 async function captureAreas() {
-  if (!window.confirm('Iniciar leitura das áreas do vendedor que estiverem ligadas por links visíveis? A varredura permanece no mesmo domínio, limita-se a 8 páginas e para em login/CAPTCHA. Nenhuma alteração será publicada.')) return;
+  if (!window.confirm('Iniciar leitura das áreas do vendedor que estiverem ligadas por links visíveis? A varredura permanece no mesmo domínio, limita-se inicialmente a 50 páginas, com retomada pelo histórico do lote e para em login/CAPTCHA. Nenhuma alteração será publicada.')) return;
   const button = $('capture-areas');
   button.disabled = true;
   button.textContent = 'Varrendo áreas…';
   const hint = $('hint');
   hint.textContent = 'Lendo somente links visíveis e páginas autorizadas do mesmo marketplace. A operação para em qualquer tela de login ou verificação.';
   try {
-    const res = await call('capture.scanAuthorizedAreas', { maxPages: 8 });
+    const res = await call('capture.scanAuthorizedAreas', { maxPages: 50 });
     if (!res?.ok || !res.result) {
       hint.textContent = `Falha na varredura: ${res?.error?.message ?? 'resposta inválida'}`;
       return;
@@ -203,7 +203,7 @@ async function syncAllAccounts() {
     }
     const { batchId, accounts } = created.result;
     button.textContent = 'Lendo abas de vendedor…';
-    const scanned = await call('capture.syncAllOpenTabs', { batchId, maxPages: 8 });
+    const scanned = await call('capture.syncAllOpenTabs', { batchId, maxPages: 50 });
     if (!scanned?.ok || !scanned.result) {
       out.textContent = `Lote ${batchId}: criado, mas a extensão não concluiu a varredura: ${scanned?.error?.message ?? 'sem resultado'}`;
       return;
@@ -404,7 +404,7 @@ async function retryFailedSync(batchId, scheduleId, button) {
   try {
     const created = await call('sync.retryFailed', { batchId });
     if (!created?.ok || !created.result?.batchId) { $('sync-out').textContent = `Não foi possível repetir: ${created?.error?.message ?? 'erro'}`; return; }
-    const scanned = await call('capture.syncAllOpenTabs', { batchId: created.result.batchId, maxPages: 8 });
+    const scanned = await call('capture.syncAllOpenTabs', { batchId: created.result.batchId, maxPages: 50 });
     if (!scanned?.ok || !scanned.result) { $('sync-out').textContent = `Novo lote ${created.result.batchId} criado; a extensão não concluiu a coleta: ${scanned?.error?.message ?? 'erro'}`; return; }
     const outcomes = scanned.result.outcomes ?? [];
     const completed = outcomes.filter((item) => item.status === 'COMPLETED').length;

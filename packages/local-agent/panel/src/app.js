@@ -1034,7 +1034,7 @@ async function viewBrowserSync() {
     <td>${dt(batch.requested_at)}</td><td>${batch.browser_request ? 'Dashboard' : 'Extensão ou agenda'}</td>
     <td>${esc(SYNC_SCOPES[batch.scope])}</td><td>${esc(syncLabel(batch.status))}</td>
     <td><div class="actions"><button class="btn tiny" data-act="browser-sync-batch" data-id="${esc(batch.id)}">Ver progresso</button>
-    ${['PARTIAL','FAILED'].includes(batch.status) ? `<button class="btn tiny ghost" data-act="browser-sync-retry" data-id="${esc(batch.id)}">Repetir falhas</button>` : ''}</div></td></tr>`), 'Nenhum lote de coleta.'))
+    ${['PARTIAL','FAILED'].includes(batch.status) ? `<button class="btn tiny ghost" data-act="browser-sync-retry" data-id="${esc(batch.id)}">Retomar pendências</button>` : ''}</div></td></tr>`), 'Nenhum lote de coleta.'))
   + '<div id="browser-sync-detail" class="out" aria-live="polite"></div>';
 }
 
@@ -1051,7 +1051,7 @@ async function showBrowserSyncBatch() {
   const data = await api('sync.list', { batchId });
   if (!target.isConnected || selectedSyncBatch !== batchId) return;
   const rows = data.accounts.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${esc(row.marketplace)}</td>
-    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}</td></tr>`);
+    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}${(() => { try { const progress = JSON.parse(row.progress_json || '{}'); return `<div class="muted small">${num((progress.pendingLinks || []).length)} páginas na fila${progress.unsupportedLinks ? ' · links/filtros exigem revisão manual' : ''}</div>`; } catch { return ''; } })()}</td></tr>`);
   const pages = data.pageRuns.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${num(row.page_no)}</td>
     <td>${esc(row.page_kind)}</td><td>${esc(syncLabel(row.status))}</td><td>${esc(row.error ?? '')}</td></tr>`);
   const content = card(`Progresso do lote · ${esc(syncLabel(data.batch?.status))}`,

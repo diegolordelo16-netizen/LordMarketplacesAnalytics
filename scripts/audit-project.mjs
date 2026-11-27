@@ -190,7 +190,7 @@ check(workerJs.includes('MI_SYNC_PROGRESS') && workerJs.includes('notifyProgress
 check(workerJs.includes("chrome.alarms.create('mi.sync'") && workerJs.includes("if (alarm.name === 'mi.sync') void processScheduledSyncs()") && workerJs.includes("callService('sync.claimScheduled'"), 'alarme periódico da extensão reivindica coletas agendadas');
 check(serviceTs.includes('30 * 60_000') && serviceTs.includes('started_at<=?') && serviceTs.includes('recoveredStaleLease: true'), 'lote agendado pode recuperar lease órfão após 30 minutos sem repetir contas terminais');
 check(serviceTs.includes('reconciled: true') && serviceTs.includes('UPDATE sync_schedule_runs SET status=?,finished_at=COALESCE'), 'claim reconcilia lote já finalizado se o worker cair entre gravações');
-check(workerJs.includes('syncAllOpenSellerTabs(batchId, 8)') && workerJs.includes('nenhuma sessão foi trocada'), 'coleta agendada reusa correspondência exata de contas e abas abertas');
+check(workerJs.includes('syncAllOpenSellerTabs(batchId, 50)') && workerJs.includes('nenhuma sessão foi trocada'), 'coleta agendada reusa correspondência exata de contas e abas abertas');
 const syncProgressMigration = readFileSync(join(root, 'packages/local-agent/migrations/017_sync_page_progress.sql'), 'utf8');
 check(syncProgressMigration.includes('sync_batch_page_runs') && syncProgressMigration.includes('progress_json') && syncProgressMigration.includes('current_page_no'), 'migration de progresso guarda páginas, cursor atual e estado de retomada');
 check(registered.has('sync.accountProgress') && permissionKeys.has('sync.accountProgress') && ipcMethods.includes("'sync.accountProgress'") && Object.hasOwn(contracts, 'sync.accountProgress'), 'API de progresso por página está declarada, registrada e protegida');
@@ -201,7 +201,7 @@ check(workerJs.includes("callService('sync.accountProgress'") && workerJs.includ
 check(workerJs.includes('Number(scan.pendingPages ?? 0) === 0') && workerJs.includes('pendingPages: queue.length'), 'lote com links pendentes termina como PARTIAL e mantém retomada em vez de falso COMPLETED');
 check(extensionPanel.includes('message.currentPage') && extensionPanel.includes('MI_SYNC_PROGRESS'), 'painel exibe página atual e progresso por conta em tempo real');
 check(syncProgressMigration.includes('UNIQUE(batch_id,account_id,page_no)') && serviceTs.includes('ON CONFLICT(batch_id,account_id,page_no) DO UPDATE'), 'retomada evita duplicar registros de página no mesmo lote e conta');
-check(syncProgressMigration.includes("'COMPLETED','FAILED','QUEUED'") && serviceTs.includes("page.queued ? 'QUEUED' : 'FAILED'") && workerJs.includes('captured.ok || captured.queued'), 'página falha permanece pendente e página aceita na fila local não é recapturada indevidamente');
+check(syncProgressMigration.includes("'COMPLETED','FAILED','QUEUED'") && serviceTs.includes("page.queued ? 'QUEUED' : 'FAILED'") && workerJs.includes('captured.ok || (captured.queued && !options.logicalBatchId)'), 'página falha permanece pendente e página aceita na fila local não é recapturada indevidamente');
 
 const ignoredDirectories = new Set(['node_modules', '.git', 'dist']);
 let jsonCount = 0;

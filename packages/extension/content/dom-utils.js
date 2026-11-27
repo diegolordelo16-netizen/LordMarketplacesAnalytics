@@ -16,10 +16,10 @@
   /** Lê um número pt-BR ("1.234,56", "12,5%", "R$ 1.234"). null se não houver número. */
   function parseNumberPtBr(text) {
     if (text === null || text === undefined) return null;
-    const cleaned = String(text)
-      .replace(/\u00a0/g, ' ')
-      .replace(/[^\d.,-]/g, '')
-      .trim();
+    const raw = String(text).replace(/\u00a0/g, ' ').trim();
+    const match = raw.match(/^(?:R\$\s*)?(-?\d[\d.,]*)(?:\s*(?:%|unidades?|vendidos?|pedidos?|visitas?|cliques?|impressões?))?$/i);
+    if (!match) return null;
+    const cleaned = match[1];
     if (!cleaned || !/\d/.test(cleaned)) return null;
 
     const lastComma = cleaned.lastIndexOf(',');
@@ -56,28 +56,20 @@
     const wanted = labels.map(normalizeLabel);
     const nodes = root.querySelectorAll('div, span, td, th, dt, dd, li, p, label, strong, b');
     for (const node of nodes) {
-      const text = normalizeLabel(node.textContent ?? '');
+      if (!isVisible(node)) continue;
+      const raw = String(node.innerText ?? node.textContent ?? '').trim();
+      const text = normalizeLabel(raw);
       if (!text || text.length > 80) continue;
-      if (!wanted.some((w) => text === w || text.startsWith(w + ' ') || text.startsWith(w + ':'))) continue;
-
-      const siblingText = node.nextElementSibling && node.nextElementSibling.textContent
-        ? node.nextElementSibling.textContent.trim()
-        : '';
-      if (siblingText && siblingText.length <= 120 && /\d/.test(siblingText)) {
-        return { text: siblingText, label: node.textContent.trim(), node };
-      }
-
-      const inline = (node.textContent || '').match(/[:\-]\s*(.+)$/);
-      if (inline && /\d/.test(inline[1])) {
-        return { text: inline[1].trim(), label: node.textContent.trim(), node };
-      }
-
-      const parentText = node.parentElement && node.parentElement.textContent
-        ? node.parentElement.textContent.trim()
-        : '';
-      if (parentText && parentText.length <= 160 && parentText !== node.textContent.trim()) {
-        const rest = parentText.replace(node.textContent, '').replace(/[:\-]/g, '').trim();
-        if (rest && /\d/.test(rest)) return { text: rest, label: node.textContent.trim(), node };
+      if (!wanted.some((w) => text === w || text.startsWith(w + ':') || text.startsWith(w + ' - '))) continue;
+      const inline = raw.match(/[:\-]\s*(.+)$/);
+      if (inline && parseNumberPtBr(inline[1]) !== null) return { text: inline[1].trim(), label: raw, node };
+      const sibling = node.nextElementSibling;
+      const siblingText = sibling && isVisible(sibling) ? String(sibling.innerText ?? sibling.textContent ?? '').trim() : '';
+      if (siblingText && parseNumberPtBr(siblingText) !== null) return { text: siblingText, label: raw, node };
+      const parent = node.parentElement;
+      if (parent && isVisible(parent)) {
+        const rest = String(parent.innerText ?? '').replace(raw, '').replace(/^\s*[:\-]\s*/, '').trim();
+        if (rest && parseNumberPtBr(rest) !== null) return { text: rest, label: raw, node };
       }
     }
     return null;

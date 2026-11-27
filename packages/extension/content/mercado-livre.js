@@ -37,7 +37,6 @@
     if (/\/(itens|items)(\/|$)/i.test(url)) return 'seller_listings';
     // Painel do vendedor (vendedores./central de vendas).
     if (/\/(resumo|summary|dashboard|home)(\/|$|\?|#)/i.test(url)) return 'seller_dashboard';
-    if (/\/(vendas|ventas|orders|pedidos)\b/i.test(url)) return 'seller_orders';
     if (/\/(metricas|métricas|stats|performance)\b/i.test(url)) return 'seller_dashboard';
     if (/\/(anuncios|publicaciones)(\/|$)/i.test(url) && /vendedores\.|seller/i.test(url)) return 'seller_listings';
     if (/\/(publicidade|product_ads|ads|promocoes|promociones)\b/i.test(url)) return 'seller_ads';
@@ -47,6 +46,7 @@
     if (/\/(devolucoes|devoluciones|returns)\b/i.test(url)) return 'seller_returns';
     if (/\/(estoque|inventario|inventory|stock)\b/i.test(url)) return 'seller_inventory';
     if (/\/(produtos|productos)\b/i.test(url)) return 'seller_listings';
+    if (/\/(vendas|ventas|orders|pedidos)\b/i.test(url)) return 'seller_orders';
     if (/\/(login|sesion)\b/i.test(url)) return 'login';
     return 'unknown';
   }
@@ -544,7 +544,7 @@
         url: location.href,
         loginRequired: currentKind === 'login' || Boolean(document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')),
         challenge: window.MI_DOM.hasChallenge(document),
-        nextPageUrl: currentKind === 'seller_listings' ? window.MI_DOM.paginationInfo(document, location.href, 'mercado_livre') : null,
+        nextPageUrl: currentKind.startsWith('seller_') && currentKind !== 'seller_listing_edit' ? window.MI_DOM.paginationInfo(document, location.href, 'mercado_livre') : null,
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;

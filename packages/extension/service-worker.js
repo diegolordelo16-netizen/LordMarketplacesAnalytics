@@ -429,6 +429,7 @@ async function captureTab(tabId, expected = {}) {
     referenceAt: now,
     collectedAt: now,
     method: 'content_script_dom',
+    ...(expected.captureKey ? { captureKey: expected.captureKey } : {}),
     listings: snapshot.listings ?? [],
     ...(snapshot.accountMetrics ? { accountMetrics: snapshot.accountMetrics } : {}),
     evidence: { ...(snapshot.evidence ?? {}), missing: (snapshot.missing ?? []).join(',') },
@@ -448,7 +449,7 @@ async function captureTab(tabId, expected = {}) {
   if (payload.listings.length || payload.accountMetrics) pending.push({ method: 'capture.ingest', payload, account, queuedAt: now });
   if (customerVoice.length) pending.push({
     method: 'voc.ingestBatch',
-    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice },
+    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url } : {}) },
     account, queuedAt: now,
   });
   try {
@@ -461,7 +462,7 @@ async function captureTab(tabId, expected = {}) {
     }
     let voiceResult = null;
     if (customerVoice.length) {
-      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice });
+      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url } : {}) });
       if (!captureAccepted(voiceResult)) return { ok: false, error: voiceResult.error?.message ?? 'falha ao registrar avaliações/reclamações', res: voiceResult };
       pending.shift();
     }
@@ -604,7 +605,8 @@ const AUTHORIZED_AREA_KINDS = new Set([
 function normalizeAuthorizedAreaUrl(raw, expectedOrigin, marketplace) {
   try {
     const url = new URL(raw);
-    if (url.protocol !== 'https:' || url.origin !== expectedOrigin || marketplaceOf(url.href) !== marketplace) return null;
+    if (url.protocol !== 'https:' || url.origin !== expectedOrigin || marketplaceOf(url.href) !== marketplace || url.username || url.password) return null;
+    if (/(?:^|\/)(?:edit|editar|update|delete|remove|logout|signout|checkout)(?:\/|$)/i.test(url.pathname)) return null;
     url.hash = '';
     return url;
   } catch {
@@ -630,20 +632,20 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     return { ok: false, error: 'a identificação da loja não corresponde à coleta' };
   }
   const saved = options.resumeState && typeof options.resumeState === 'object' ? options.resumeState : {};
-  const requested = Math.max(1, Math.min(12, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 8));
-  const savedMax = Number.isInteger(saved.maxPages) ? Math.max(1, Math.min(12, saved.maxPages)) : requested;
-  const maxPages = Math.max(requested, savedMax);
+  const requested = Math.max(1, Math.min(200, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 50));
+  const savedMax = Number.isInteger(saved.maxPages) ? Math.max(1, Math.min(200, saved.maxPages)) : requested;
+  const maxPages = Math.min(200, Math.max(requested, savedMax, Array.isArray(saved.pages) && saved.pages.length >= savedMax && saved.pages.every((p) => p.ok) ? savedMax + requested : savedMax));
   const keyOf = (url) => {
-    const params = [...url.searchParams.entries()].filter(([key]) => /^(page|page_number|p|offset|limit|sort|order)$/i.test(key)).sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
+    const params = [...url.searchParams.entries()].filter(([key]) => /^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key)).sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
     const query = new URLSearchParams(params).toString();
     return `${url.origin}${url.pathname}${query ? `?${query}` : ''}`;
   };
   const seen = new Set();
-  for (const raw of Array.isArray(saved.seenUrls) ? saved.seenUrls.slice(0, 12) : []) {
+  for (const raw of Array.isArray(saved.seenUrls) ? saved.seenUrls.slice(0, 200) : []) {
     const safe = normalizeAuthorizedAreaUrl(raw, origin, marketplace);
     if (safe) seen.add(keyOf(safe));
   }
-  const pages = (Array.isArray(saved.pages) ? saved.pages : []).slice(0, 12).map((page, index) => ({
+  const pages = (Array.isArray(saved.pages) ? saved.pages : []).slice(0, 200).map((page, index) => ({
     page: index + 1,
     url: String(page.url || '').slice(0, 2048),
     pageKind: AUTHORIZED_AREA_KINDS.has(page.pageKind) ? page.pageKind : 'seller_dashboard',
@@ -653,9 +655,16 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   }));
   // Uma tentativa falha continua ocupando o mesmo registro de página, não uma
   // nova posição a cada retomada. Páginas entregues ou enfileiradas não são refeitas.
+  const legacyQueued = !saved.receiptProtocol && pages.some((page) => page.queued && !page.ok);
+  const keyForCapture = async (url) => {
+    if (!options.logicalBatchId) return undefined;
+    const bytes = new TextEncoder().encode(JSON.stringify([options.logicalBatchId, expectedAccountId, keyOf(url)]));
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map((v) => v.toString(16).padStart(2, '0')).join('');
+  };
   const failedIndex = (url) => pages.findIndex((page) => {
     const target = normalizeAuthorizedAreaUrl(page.url, origin, marketplace);
-    return target && keyOf(target) === keyOf(url) && !page.ok && !page.queued;
+    return target && keyOf(target) === keyOf(url) && !page.ok && (!page.queued || Boolean(saved.receiptProtocol));
   });
   const canCapture = (url) => pages.length < maxPages || failedIndex(url) >= 0;
   const recordPage = (url, data) => {
@@ -664,25 +673,42 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     else pages.push({ ...data, page: pages.length + 1 });
   };
   const queue = [];
+  let unsupportedLinks = Boolean(saved.unsupportedLinks) || legacyQueued;
+  const supportedQuery = (url) => [...url.searchParams.entries()].every(([key, value]) => /^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value));
   const enqueueLinks = (links) => {
     for (const link of Array.isArray(links) ? links : []) {
       const target = normalizeAuthorizedAreaUrl(link?.url, origin, marketplace);
       if (!target || !AUTHORIZED_AREA_KINDS.has(link?.pageKind)) continue;
+      if (!supportedQuery(target)) { unsupportedLinks = true; continue; }
       const key = keyOf(target);
-      if (!seen.has(key) && !queue.some((item) => item.key === key) && queue.length < 100) {
+      if (!seen.has(key) && !queue.some((item) => item.key === key)) {
+        if (queue.length >= 200) { unsupportedLinks = true; continue; }
         queue.push({ key, url: target.href, label: String(link.label || link.pageKind).slice(0, 80) });
       }
     }
   };
-  for (const item of Array.isArray(saved.pendingLinks) ? saved.pendingLinks.slice(0, 100) : []) {
+  const enqueuePageLinks = (info, current) => {
+    enqueueLinks(info.authorizedAreaLinks);
+    const next = normalizeAuthorizedAreaUrl(info.nextPageUrl, origin, marketplace);
+    if (next && current && next.pathname === current.pathname && keyOf(next) !== keyOf(current)) enqueueLinks([{ url: next.href, pageKind: info.pageKind, label: 'próxima página' }]);
+  };
+  for (const item of Array.isArray(saved.pendingLinks) ? saved.pendingLinks.slice(0, 200) : []) {
     const target = normalizeAuthorizedAreaUrl(item?.url, origin, marketplace);
     if (!target || seen.has(keyOf(target))) continue;
+    if (!supportedQuery(target)) { unsupportedLinks = true; continue; }
     if (!queue.some((queued) => queued.key === keyOf(target))) {
       queue.push({ key: keyOf(target), url: target.href, label: String(item.label || 'área autorizada').slice(0, 80) });
     }
   }
+  // A fila de versões antigas não tem recibo idempotente: nunca recapture seus itens às cegas.
+  if (saved.receiptProtocol) for (const page of pages.filter((p) => !p.ok)) {
+    const target = normalizeAuthorizedAreaUrl(page.url, origin, marketplace);
+    if (target) seen.delete(keyOf(target));
+    if (target && supportedQuery(target) && !queue.some((item) => item.key === keyOf(target))) queue.unshift({ key: keyOf(target), url: target.href, label: 'retomada' });
+  }
   const currentUrl = normalizeAuthorizedAreaUrl(source.url, origin, marketplace);
-  if (currentUrl && !seen.has(keyOf(currentUrl))) enqueueLinks(initialInfo.authorizedAreaLinks);
+  if (!currentUrl || !supportedQuery(currentUrl)) return { ok: false, error: 'filtros da URL inicial não podem ser retomados com segurança; abra uma área sem parâmetros opacos' };
+  if (!seen.has(keyOf(currentUrl))) enqueuePageLinks(initialInfo, currentUrl);
 
   let stoppedReason = 'não foram encontrados outros links autorizados visíveis';
   let progressError = null;
@@ -692,9 +718,11 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       pagesScanned: pages.length,
       pagesSucceeded: pages.filter((page) => page.ok).length,
       pages: pages.map((page, index) => ({ ...page, page: index + 1 })),
-      seenUrls: [...seen].slice(0, 12),
-      pendingLinks: queue.slice(0, 100).map(({ url, label }) => ({ url, label })),
+      seenUrls: [...seen].slice(0, 200),
+      pendingLinks: queue.slice(0, 200).map(({ url, label }) => ({ url, label })),
       maxPages,
+      unsupportedLinks,
+      receiptProtocol: options.logicalBatchId && !legacyQueued ? 1 : 0,
       stoppedReason,
     };
     try {
@@ -709,25 +737,25 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
 
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
   if (currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
-    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url });
+    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
     recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued) });
-    if (firstCapture.ok || firstCapture.queued) {
+    if (firstCapture.ok || (firstCapture.queued && !options.logicalBatchId)) {
       seen.add(keyOf(currentUrl));
       const duplicate = queue.findIndex((item) => item.key === keyOf(currentUrl));
       if (duplicate >= 0) queue.splice(duplicate, 1);
     } else {
       if (!queue.some((item) => item.key === keyOf(currentUrl))) {
-        if (queue.length >= 100) queue.pop();
+        if (queue.length >= 200) queue.pop();
         queue.unshift({ key: keyOf(currentUrl), url: currentUrl.href, label: 'página inicial' });
       }
       stoppedReason = 'captura da página inicial falhou; retome antes de navegar para outras áreas';
     }
-    enqueueLinks(initialInfo.authorizedAreaLinks);
-    if (!(await persistProgress()) || (!firstCapture.ok && !firstCapture.queued)) {
+    enqueuePageLinks(initialInfo, currentUrl);
+    if (!(await persistProgress()) || (!firstCapture.ok && (!firstCapture.queued || options.logicalBatchId))) {
       return { ok: pages.some((page) => page.ok), marketplace, pagesScanned: pages.length, pagesSucceeded: pages.filter((page) => page.ok).length, pagesQueued: pages.filter((page) => page.queued).length, pendingPages: queue.length, areas: [...new Set(pages.map((page) => page.pageKind))], stoppedReason, progressError, pages };
     }
   } else {
-    enqueueLinks(initialInfo.authorizedAreaLinks);
+    enqueuePageLinks(initialInfo, currentUrl);
   }
 
   let temporary = null;
@@ -762,24 +790,25 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         stoppedReason = 'a área ou a conta da loja mudou durante a navegação';
         break;
       }
-      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url });
+      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
       recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued) });
-      if (captured.ok || captured.queued) {
+      if (captured.ok || (captured.queued && !options.logicalBatchId)) {
         seen.add(item.key);
         queue.shift();
-        enqueueLinks(info.authorizedAreaLinks);
+        enqueuePageLinks(info, currentTarget);
         stoppedReason = queue.length ? 'há mais áreas autorizadas visíveis ou o limite de páginas foi atingido' : 'todas as áreas autorizadas visíveis foram percorridas';
       } else {
         stoppedReason = 'captura da página falhou; a URL permaneceu na fila para nova tentativa';
       }
       if (!(await persistProgress())) break;
-      if (!captured.ok && !captured.queued) break;
+      if (!captured.ok && (!captured.queued || options.logicalBatchId)) break;
       if (queue.length && canCapture(new URL(queue[0].url))) await new Promise((resolve) => setTimeout(resolve, 900));
     }
     if (queue.length && !canCapture(new URL(queue[0].url))) stoppedReason = `limite de segurança de ${maxPages} páginas atingido`;
   } finally {
     if (temporary?.id) await chrome.tabs.remove(temporary.id).catch(() => undefined);
   }
+  if (unsupportedLinks && queue.length === 0) stoppedReason = 'alguns links ou filtros não puderam ser percorridos com segurança; verifique manualmente';
   // Persiste a fila remanescente e o motivo mesmo quando a navegação foi pausada.
   if (!progressError) await persistProgress();
   return {
@@ -789,6 +818,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     pagesSucceeded: pages.filter((page) => page.ok).length,
     pagesQueued: pages.filter((page) => page.queued).length,
     pendingPages: queue.length,
+    unsupportedLinks,
     areas: [...new Set(pages.map((page) => page.pageKind))],
     stoppedReason,
     ...(progressError ? { progressError } : {}),
@@ -952,6 +982,7 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
     if (!captureAccepted(started)) throw new Error(started?.error?.message ?? 'início da coleta não confirmado');
     const scan = await captureAuthorizedAreas(matched.tab.id, requestedMaxPages, {
       resumeState,
+      logicalBatchId: batch.result.batch?.logical_batch_id || batchId,
       expectedAccountId: account.account_id,
       onProgress: async (progress) => {
         const saved = await callService('sync.accountProgress', { batchId, accountId: account.account_id, ...progress });
@@ -963,7 +994,7 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
     if (scan.progressError) throw new Error(scan.stoppedReason);
     const pages = Number(scan.pagesScanned ?? scan.pages?.length ?? 0);
     const succeeded = Number(scan.pagesSucceeded ?? scan.pages?.filter((page) => page.ok).length ?? 0);
-    const status = !scan.ok ? 'FAILED' : succeeded === pages && Number(scan.pendingPages ?? 0) === 0 ? 'COMPLETED' : succeeded > 0 ? 'PARTIAL' : 'FAILED';
+    const status = !scan.ok ? 'FAILED' : succeeded === pages && Number(scan.pendingPages ?? 0) === 0 && !scan.unsupportedLinks ? 'COMPLETED' : succeeded > 0 ? 'PARTIAL' : 'FAILED';
     const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status, pagesScanned: pages, pagesSucceeded: succeeded, ...(status === 'COMPLETED' ? {} : { error: scan.error ?? scan.stoppedReason }) });
     if (!captureAccepted(result)) throw new Error(result?.error?.message ?? 'resultado da coleta não confirmado');
     outcomes.push({ accountId: account.account_id, marketplace: account.marketplace, status, scan, result });
@@ -983,7 +1014,7 @@ async function processScheduledSyncs() {
     const claimed = manual?.result?.claimed ? manual : await callService('sync.claimScheduled', {});
     if (!claimed?.ok || !claimed.result?.claimed || !claimed.result?.batchId) return;
     const batchId = claimed.result.batchId;
-    await syncAllOpenSellerTabs(batchId, 8);
+    await syncAllOpenSellerTabs(batchId, 50);
   } catch {
     // A coleta pode ser retomada após expiração da reserva.
   } finally {
@@ -1038,7 +1069,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.method === 'capture.scanAuthorizedAreas') {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tab?.id) throw new Error('nenhuma aba ativa');
-        sendResponse({ ok: true, result: await captureAuthorizedAreas(tab.id, message.payload?.maxPages ?? 8) });
+        sendResponse({ ok: true, result: await captureAuthorizedAreas(tab.id, message.payload?.maxPages ?? 50) });
         return;
       }
       if (message.method === 'capture.syncAllOpenTabs') {
