@@ -1072,3 +1072,38 @@ describe('captura pública de concorrentes',()=>{
     expect(vm.runInContext(source.slice(start,end)+';collectPublicCompetitorCards()',rejected)).toHaveProperty('error');
   });
 });
+
+describe('agendamento de busca competitiva',()=>{
+  it('reserva um ciclo, interrompe falhas e exige confirmação e sessão estável',async()=>{
+    const source=readFileSync(join(ext,'service-worker.js'),'utf8');
+    const start=source.indexOf("const COMP_PLAN_KEY='mi.competitor.public.schedule.v1'");
+    const end=source.indexOf('chrome.runtime.onMessage.addListener',start);
+    expect(start).toBeGreaterThan(-1);expect(end).toBeGreaterThan(start);
+    const key='mi.competitor.public.schedule.v1',stored:Record<string,any>={};
+    let token='fixture-session',calls=0,removed=0,fail=false;
+    const url='https://www.amazon.com.br/s?k=capacete';
+    const chrome={storage:{local:{get:async(k:string)=>({[k]:structuredClone(stored[k])}),set:async(v:Record<string,any>)=>Object.assign(stored,structuredClone(v)),remove:async(k:string)=>{delete stored[k]}}},permissions:{contains:async()=>true},tabs:{create:async()=>{calls++;return {id:1}},get:async()=>({url}),remove:async()=>{removed++}},scripting:{executeScript:async()=>[{result:fail?{error:'blocked'}:{marketplace:'amazon',sourceUrl:url,candidates:[{}]}}]}};
+    const callService=async(method:string)=>method==='competitor.searchPlan'?{ok:true,result:{links:[{kind:'TITLE',marketplace:'amazon',url}]}}:{ok:true,result:{observedCards:1}};
+    const context=vm.createContext({chrome,Date,URL,TextEncoder,Uint8Array,crypto:{subtle:{digest:async()=>new Uint8Array([token==='fixture-session'?1:2]).buffer}},sessionToken:async()=>token,callService,waitForTabComplete:async()=>{},collectPublicCompetitorCards:()=>{}});
+    vm.runInContext(source.slice(start,end),context);
+    const input={confirmed:true,accountId:'a',ownProductId:'p',kind:'TITLE',marketplaces:['amazon'],runs:2};
+    context.input=input;
+    await expect(vm.runInContext("competitorSchedule('start',{...input,confirmed:false})",context)).rejects.toThrow();
+    await vm.runInContext("competitorSchedule('start',input)",context);
+    expect(stored[key]).toMatchObject({enabled:true,remaining:2});
+    stored[key].nextAt=0;
+    await vm.runInContext('runDueCompetitorSchedule()',context);
+    expect(stored[key]).toMatchObject({enabled:true,remaining:1,last:{status:'OBSERVED'}});
+    expect(calls).toBe(1);expect(removed).toBe(1);
+    await vm.runInContext('runDueCompetitorSchedule()',context);expect(calls).toBe(1);
+    stored[key].nextAt=0;fail=true;
+    await vm.runInContext('runDueCompetitorSchedule()',context);
+    expect(stored[key]).toMatchObject({enabled:false,remaining:0,last:{status:'NOT_VERIFIED'}});
+    await vm.runInContext("competitorSchedule('start',input)",context);
+    stored[key].nextAt=0;token='changed';
+    await vm.runInContext('runDueCompetitorSchedule()',context);
+    expect(stored[key]).toMatchObject({enabled:false,remaining:2,last:{status:'NOT_VERIFIED'}});
+    expect(calls).toBe(2);
+    await vm.runInContext("competitorSchedule('stop')",context);expect(stored[key]).toBeUndefined();
+  });
+});
