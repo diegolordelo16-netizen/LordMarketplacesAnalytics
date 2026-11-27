@@ -194,6 +194,21 @@ describe('capacidades adicionais 3.10.3', () => {
     expect(JSON.parse(info.accounts[0].progress_json).pages[1].listingIds).toEqual(['MLB123452']);
   });
 
+  it('aprende somente rotas estruturais de contas verificadas, com isolamento e exclusão',async()=>{
+    seedImportAccount('acct-learn-a');seedImportAccount('acct-learn-b');
+    const accountId='acct-learn-a',origin='https://vendedores.mercadolivre.com.br';
+    const payload={accountId,origin,route:'/reputacao',pageKind:'seller_reputation'};
+    expect((await call('navigation.observe',payload)).result).toEqual({ok:true});
+    expect((await call('navigation.observe',payload)).result).toEqual({ok:true});
+    expect((await call('navigation.list',{accountId,origin})).result).toEqual([expect.objectContaining({route:'/reputacao',observations:2})]);
+    expect((await call('navigation.list',{accountId:'acct-learn-b',origin})).result).toEqual([]);
+    for(const invalid of [{...payload,route:'/reputacao/editar'},{...payload,route:'/reputacao?token=secret'},{...payload,route:'/reputacao/cliente'},{...payload,origin:'https://example.com'},{...payload,pageKind:'seller_listing_edit'},{...payload,rawText:'secret'}]){
+      expect((await call('navigation.observe',invalid)).ok).toBe(false);
+    }
+    expect((await call('navigation.clear',{accountId,origin})).result).toEqual({ok:true});
+    expect((await call('navigation.list',{accountId,origin})).result).toEqual([]);
+  });
+
   it('persiste identidade SPA geral e rejeita regressão ou troca de fingerprint',async()=>{
     seedImportAccount('acct-spa-general');
     const accountId='acct-spa-general';
