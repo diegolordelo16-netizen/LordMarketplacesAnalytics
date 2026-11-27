@@ -11,7 +11,12 @@ $log = Join-Path $env:RUNNER_TEMP 'marketplace-installer-smoke.log'
 try {
   $setup = Start-Process -FilePath $Installer -ArgumentList @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$installDir`"", "/LOG=`"$log`""
-  ) -Wait -PassThru
+  ) -PassThru
+  # Aguarda o instalador, pois o serviço que ele inicia continua em segundo plano.
+  if (-not $setup.WaitForExit(120000)) {
+    Stop-Process -Id $setup.Id -Force
+    throw 'O instalador não terminou em dois minutos.'
+  }
   if ($setup.ExitCode -ne 0) { throw "Falha ao instalar (código $($setup.ExitCode))." }
   $extensionId = (Get-Content -LiteralPath (Join-Path $dataDir 'extension-id.txt') -Raw).Trim()
   if ($extensionId -cnotmatch '^[a-p]{32}$') { throw 'ID da extensão inválido.' }

@@ -53,6 +53,7 @@ jobs:
         run: node scripts/package-windows.mjs
 
       - name: Validar instalação e desinstalação
+        timeout-minutes: 5
         shell: pwsh
         run: ./scripts/smoke-windows-installer.ps1 -Installer ./installer/output/MarketplaceIntelligence-Setup.exe
 
