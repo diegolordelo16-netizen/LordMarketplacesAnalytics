@@ -530,6 +530,62 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('campaign.budget.verify',{...fresh,campaignStatus:'PAUSED'})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false});
   });
 
+  it('cria variação legada pela API com loja validada, ID retornado e conferência independente',async()=>{
+    const accountId='api-variant-shop',itemId='MLB1234567',listingId='api-item',at='2025-01-01T00:00:00.000Z';
+    seedImportAccount(accountId);
+    db.db.prepare('INSERT INTO listings(id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(listingId,accountId,'mercado_livre',itemId,'Anúncio','ACTIVE',at,at);
+    const option={attributeCombinations:[{id:'COLOR',value_id:'2'}],pictureIds:['PIC1']};
+    const draft=(await call('offer.variation.prepare',{accountId,listingId,variationName:'Azul',options:[option],proposedPriceCents:1200,proposedStock:0})).result as {id:string};
+    expect((await call('offer.variation.review',{accountId,id:draft.id,decision:'APPROVED',reason:'Teste de revisão'})).ok).toBe(true);
+    expect((await call('operation.limits.set',{accountId,confirmed:true,limits:{
+      maxCampaignDailyBudgetCents:2000,minVariationPriceCents:500,maxVariationPriceCents:2000,maxVariationStock:10,maxVariationPriceChangePct:20,
+    }})).ok).toBe(true);
+    const request={accountId,proposalId:draft.id,accessToken:'fixture-token-local',confirmed:true};
+    let nickname='outra loja',created=false,postCount=0,failReadback=true;
+    const mock=vi.fn(async (url:URL,init:RequestInit)=>{
+      expect(url.origin).toBe('https://api.mercadolibre.com');
+      expect(init.redirect).toBe('error');
+      if(url.pathname==='/users/me')return Response.json({id:23,nickname,site_id:'MLB',tags:[]});
+      if(url.pathname==='/items/'+itemId)return Response.json({id:itemId,seller_id:23,site_id:'MLB',currency_id:'BRL',status:'active',
+        user_product_id:null,pictures:[{id:'PIC1'}],variations:[{id:41,attribute_combinations:[{id:'COLOR',value_id:'1'}]},
+          ...(created?[{id:42,attribute_combinations:option.attributeCombinations}]:[])]});
+      if(url.pathname==='/items/'+itemId+'/variations'&&init.method==='POST'){
+        postCount++;
+        expect(JSON.parse(String(init.body))).toEqual({attribute_combinations:option.attributeCombinations,price:12,available_quantity:0,sold_quantity:0,picture_ids:['PIC1']});
+        created=true;return Response.json({id:42},{status:201});
+      }
+      if(url.pathname==='/items/'+itemId+'/variations/42'){
+        if(failReadback)throw Error('timeout simulado');
+        return Response.json({id:42,price:12,available_quantity:0,picture_ids:['PIC1'],attribute_combinations:option.attributeCombinations});
+      }
+      throw Error('rota inesperada');
+    });
+    vi.stubGlobal('fetch',mock);
+    try{
+      expect((await call('variation.api.create',request)).ok).toBe(false);
+      expect(postCount).toBe(0);
+      nickname=accountId;
+      const results=await Promise.all([call('variation.api.create',request),call('variation.api.create',request)]);
+      expect(results.filter(r=>r.ok)).toHaveLength(1);
+      expect(results.find(r=>r.ok)?.result).toMatchObject({status:'NEEDS_VERIFICATION',variationId:'42',remoteVerified:false});
+      expect(postCount).toBe(1);
+      failReadback=false;
+      const {confirmed,...verify}=request;
+      expect((await call('variation.api.verify',verify)).result).toMatchObject({status:'REMOTE_VERIFIED',variationId:'42',remoteVerified:true});
+      expect(postCount).toBe(1);
+      const list=await call('variation.api.list',{accountId});
+      expect(list.result).toMatchObject([{proposal_id:draft.id,variation_id:'42',status:'REMOTE_VERIFIED'}]);
+      expect((await call('operation.measure',{accountId,proposalId:draft.id,proposalKind:'VARIATION'})).result).toMatchObject({
+        status:'API_VARIATION_CONFIRMED',remoteVerified:true,causalityVerified:false,
+        createdVariation:{externalId:'42',priceCents:1200,stock:0},
+      });
+      expect(JSON.stringify(list.result)).not.toContain(request.accessToken);
+    }finally{
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('autoriza variação simples e duplicação apenas com proposta, contexto e limites correspondentes',async()=>{
     const accountId='acct-browser-listing',other='acct-browser-other';seedImportAccount(accountId);seedImportAccount(other);
     const listingId='browser-listing',externalListingId='MLB1234567',at='2025-01-07T23:59:59.999Z';

@@ -154,3 +154,17 @@ A migração 036 adiciona pausas e reativações assistidas no Mercado Livre.
 Use status ACTIVE ou PAUSED e o mesmo dailyBudgetCents no estado inicial
 e no alvo. O formulário precisa ser dedicado a status e o orçamento
 visível deve estar dentro do teto da loja. Consulte a CI da branch atual.
+
+A migração 037 adiciona criação pela API oficial em anúncios ativos do
+modelo legado do Mercado Livre que já tenham variações. Para preparar,
+informe uma opção com attributeCombinations (lista de id e value_id) e
+pictureIds (lista de IDs de imagens do anúncio), além de preço e estoque.
+A aprovação fica no painel. Use o botão de criação por API e um token
+OAuth da mesma loja. O token é transitório. /users/me verifica o apelido
+e a API do anúncio confirma o seller_id antes de escrever.
+O ID devolvido pelo POST é persistido e conferido por GET separado.
+Uma falha de leitura pode ser conferida novamente com o mesmo ID. Uma
+falha sem ID mantém a tentativa pendente sem repetir a criação.
+O teste usa a API simulada. Homologação real continua adiada.
+A integração ainda precisa atender User Products, operações adicionais
+de gestão de variações e comprovação da origem da duplicação.

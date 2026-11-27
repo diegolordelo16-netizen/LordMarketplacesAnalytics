@@ -477,6 +477,20 @@
   "listing.browser.list": {
     "accountId": "string"
   },
+  "variation.api.create": {
+    "accountId": "string",
+    "proposalId": "approved legacy variant proposal",
+    "accessToken": "transient Mercado Livre OAuth token",
+    "confirmed": true
+  },
+  "variation.api.verify": {
+    "accountId": "string",
+    "proposalId": "string",
+    "accessToken": "transient Mercado Livre OAuth token"
+  },
+  "variation.api.list": {
+    "accountId": "string"
+  },
   "operation.limits.get": {
     "accountId": "string"
   },
