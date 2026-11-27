@@ -912,3 +912,24 @@ describe('nota individual de avaliações',()=>{
     expect(result.map((item:any)=>item.rating??null)).toEqual([5,4,null,null,null,null]);
   });
 });
+
+describe('marcas explícitas de gráficos sem tabela',()=>{
+  it('coleta somente marcas visíveis com evidência completa, mantendo cobertura parcial',()=>{
+    class E{
+      constructor(public attrs:Record<string,string>,public nodes:E[]=[],public hidden=false){}
+      getBoundingClientRect(){return {width:this.hidden?0:20,height:this.hidden?0:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+      querySelectorAll(s:string){return s==='table'?[]:this.nodes}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const point=new E({'data-series':'Receita','data-dimension':'Dia 1','data-value':'R$ 12,50','aria-label':'Receita Dia 1 R$ 12,50'});
+    const chart=new E({'data-chart-id':'sales','aria-label':'Vendas'},[point]);
+    const root={querySelectorAll:(s:string)=>s==='[data-chart-id]'?[chart]:[]};
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[{chartId:'sales',chartTitle:'Vendas',series:'Receita',dimension:'Dia 1',value:12.5,unit:'BRL',raw:'R$ 12,50'}]});
+    point.attrs['aria-label']='Receita Dia 1';
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
+    point.attrs['aria-label']='Receita Dia 1 R$ 12,50';point.hidden=true;
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
+  });
+});
