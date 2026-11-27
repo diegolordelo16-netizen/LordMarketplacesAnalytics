@@ -187,11 +187,11 @@ describe('extensão: navegação entre áreas autorizadas', () => {
     expect(info.authorizedAreaLinks[0].pageKind).toBe('seller_orders');
   });
 
-  it('o worker exige allowlist, limita a 200 páginas e interrompe em login/CAPTCHA', () => {
+  it('o worker exige allowlist, limita a 500 páginas e interrompe em login/CAPTCHA', () => {
     const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
     expect(worker).toContain('captureAuthorizedAreas');
     expect(worker).toContain("'capture.scanAuthorizedAreas'");
-    expect(worker).toContain('Math.min(200');
+    expect(worker).toContain('Math.min(500');
     expect(worker).toContain("info.loginRequired || info.challenge");
     expect(worker).toContain("url.origin !== expectedOrigin");
     expect(worker).toContain("url.protocol !== 'https:'");

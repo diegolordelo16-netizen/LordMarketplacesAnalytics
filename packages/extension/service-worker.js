@@ -632,20 +632,20 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     return { ok: false, error: 'a identificação da loja não corresponde à coleta' };
   }
   const saved = options.resumeState && typeof options.resumeState === 'object' ? options.resumeState : {};
-  const requested = Math.max(1, Math.min(200, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 50));
-  const savedMax = Number.isInteger(saved.maxPages) ? Math.max(1, Math.min(200, saved.maxPages)) : requested;
-  const maxPages = Math.min(200, Math.max(requested, savedMax, Array.isArray(saved.pages) && saved.pages.length >= savedMax && saved.pages.every((p) => p.ok) ? savedMax + requested : savedMax));
+  const requested = Math.max(1, Math.min(500, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 50));
+  const savedMax = Number.isInteger(saved.maxPages) ? Math.max(1, Math.min(500, saved.maxPages)) : requested;
+  const maxPages = Math.min(500, Math.max(requested, savedMax, Array.isArray(saved.pages) && saved.pages.length >= savedMax && saved.pages.every((p) => p.ok) ? savedMax + requested : savedMax));
   const keyOf = (url) => {
     const params = [...url.searchParams.entries()].filter(([key]) => /^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key)).sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
     const query = new URLSearchParams(params).toString();
     return `${url.origin}${url.pathname}${query ? `?${query}` : ''}`;
   };
   const seen = new Set();
-  for (const raw of Array.isArray(saved.seenUrls) ? saved.seenUrls.slice(0, 200) : []) {
+  for (const raw of Array.isArray(saved.seenUrls) ? saved.seenUrls.slice(0, 500) : []) {
     const safe = normalizeAuthorizedAreaUrl(raw, origin, marketplace);
     if (safe) seen.add(keyOf(safe));
   }
-  const pages = (Array.isArray(saved.pages) ? saved.pages : []).slice(0, 200).map((page, index) => ({
+  const pages = (Array.isArray(saved.pages) ? saved.pages : []).slice(0, 500).map((page, index) => ({
     page: index + 1,
     url: String(page.url || '').slice(0, 2048),
     pageKind: AUTHORIZED_AREA_KINDS.has(page.pageKind) ? page.pageKind : 'seller_dashboard',
@@ -682,17 +682,19 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       if (!supportedQuery(target)) { unsupportedLinks = true; continue; }
       const key = keyOf(target);
       if (!seen.has(key) && !queue.some((item) => item.key === key)) {
-        if (queue.length >= 200) { unsupportedLinks = true; continue; }
+        if (queue.length >= 500) { unsupportedLinks = true; continue; }
         queue.push({ key, url: target.href, label: String(link.label || link.pageKind).slice(0, 80) });
       }
     }
   };
   const enqueuePageLinks = (info, current) => {
     enqueueLinks(info.authorizedAreaLinks);
+    if (info.paginationUnsupported) unsupportedLinks = true;
     const next = normalizeAuthorizedAreaUrl(info.nextPageUrl, origin, marketplace);
     if (next && current && next.pathname === current.pathname && keyOf(next) !== keyOf(current)) enqueueLinks([{ url: next.href, pageKind: info.pageKind, label: 'próxima página' }]);
+    else if (info.nextPageUrl) unsupportedLinks = true;
   };
-  for (const item of Array.isArray(saved.pendingLinks) ? saved.pendingLinks.slice(0, 200) : []) {
+  for (const item of Array.isArray(saved.pendingLinks) ? saved.pendingLinks.slice(0, 500) : []) {
     const target = normalizeAuthorizedAreaUrl(item?.url, origin, marketplace);
     if (!target || seen.has(keyOf(target))) continue;
     if (!supportedQuery(target)) { unsupportedLinks = true; continue; }
@@ -718,8 +720,8 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       pagesScanned: pages.length,
       pagesSucceeded: pages.filter((page) => page.ok).length,
       pages: pages.map((page, index) => ({ ...page, page: index + 1 })),
-      seenUrls: [...seen].slice(0, 200),
-      pendingLinks: queue.slice(0, 200).map(({ url, label }) => ({ url, label })),
+      seenUrls: [...seen].slice(0, 500),
+      pendingLinks: queue.slice(0, 500).map(({ url, label }) => ({ url, label })),
       maxPages,
       unsupportedLinks,
       receiptProtocol: options.logicalBatchId && !legacyQueued ? 1 : 0,
@@ -746,7 +748,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       if (duplicate >= 0) queue.splice(duplicate, 1);
     } else {
       if (!queue.some((item) => item.key === keyOf(currentUrl))) {
-        if (queue.length >= 200) queue.pop();
+        if (queue.length >= 500) queue.pop();
         queue.unshift({ key: keyOf(currentUrl), url: currentUrl.href, label: 'página inicial' });
       }
       stoppedReason = 'captura da página inicial falhou; retome antes de navegar para outras áreas';
@@ -943,7 +945,7 @@ async function diagnoseLight(port) {
 /** Sincroniza apenas abas de vendedor já abertas e conta cuja identidade visível coincide com o lote. */
 async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
   if (typeof batchId !== 'string' || !batchId) throw new Error('batchId obrigatório');
-  const batch = await callService('sync.list', { batchId });
+  const batch = await callService('sync.list', { batchId, compact:true });
   const accounts = batch?.result?.accounts;
   if (!Array.isArray(accounts) || !accounts.length) throw new Error('lote sem contas pendentes');
   const tabs = await chrome.tabs.query({});
@@ -957,10 +959,12 @@ async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
     let resumeState = {};
     let resumeOrigin = null;
     try {
-      resumeState = account.progress_json ? JSON.parse(account.progress_json) : {};
+      const detail = await callService('sync.list', { batchId, accountId:account.account_id });
+      if (!detail?.ok || !detail.result?.accounts?.[0]) throw new Error('histórico da conta indisponível');
+      resumeState = JSON.parse(detail.result.accounts[0].progress_json || '{}');
       const savedUrl = resumeState.pendingLinks?.[0]?.url ?? resumeState.pages?.[0]?.url;
       if (savedUrl) resumeOrigin = new URL(savedUrl).origin;
-    } catch { resumeState = {}; }
+    } catch (error) { throw new Error('não foi possível recuperar progresso: '+error.message); }
     const candidates = tabs.filter((tab) => tab.id && marketplaceOf(tab.url || '') === account.marketplace &&
       (!resumeOrigin || new URL(tab.url).origin === resumeOrigin));
     let matched = null;

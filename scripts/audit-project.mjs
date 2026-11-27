@@ -135,7 +135,7 @@ for (const [file, currentUrl, allowedUrl] of navigationCases) {
   check(info?.authorizedAreaLinks?.length === 1 && info.authorizedAreaLinks[0]?.url === allowedUrl && info.authorizedAreaLinks[0]?.pageKind === 'seller_orders', `navigation links seguros: ${file}`);
 }
 const workerSource = readFileSync(join(root, 'packages/extension/service-worker.js'), 'utf8');
-check(workerSource.includes('Math.min(200') && workerSource.includes("url.protocol !== 'https:'") && workerSource.includes('url.origin !== expectedOrigin'), 'varredura impõe HTTPS, mesmo origin e limite de páginas');
+check(workerSource.includes('Math.min(500') && workerSource.includes("url.protocol !== 'https:'") && workerSource.includes('url.origin !== expectedOrigin'), 'varredura impõe HTTPS, mesmo origin e limite de páginas');
 check(Object.hasOwn(contracts, 'analysis.schedule.runs') && readFileSync(join(root, 'packages/shared/src/types/contracts.ts'), 'utf8').includes("'analysis.schedule.runs'"), 'histórico de análise programada declarado no contrato IPC');
 check(serviceTs.includes("this.register('analysis.schedule.runs'") && serviceTs.includes("this.register('report.schedule.runs'"), 'históricos de execução de análise e relatório registrados');
 check(serviceTs.includes('intervalMinutes: z.number().int().min(15).max(43200)') && serviceTs.includes('retryDecision(schedule.consecutive_failures'), 'agendamentos aceitam intervalo customizado e backoff limitado');

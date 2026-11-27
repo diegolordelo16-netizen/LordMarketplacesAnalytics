@@ -69,25 +69,25 @@ function seedImportAccount(id: string): void {
 
 
 describe('capacidades adicionais 3.10.3', () => {
-  it('persiste mais de 12 páginas, mantém filtros e retoma somente pendências no mesmo lote lógico', async () => {
+  it('persiste mais de 200 páginas, mantém filtros e retoma somente pendências no mesmo lote lógico', async () => {
     seedImportAccount('acct-sync-large');
     const { batchId } = (await call('sync.createAll',{scope:'ACCOUNT',accountId:'acct-sync-large',browserRequest:true})).result as {batchId:string};
     const url = (n:number) => 'https://vendedores.mercadolivre.com.br/pedidos?page='+n+'&start_date=2026-11-01&end_date=2026-11-30';
-    const pages = Array.from({length:16},(_,i)=>({page:i+1,url:url(i+1),pageKind:'seller_orders',ok:true}));
+    const pages = Array.from({length:205},(_,i)=>({page:i+1,url:url(i+1),pageKind:'seller_orders',ok:true}));
     const leaseToken=(await call('sync.claimAccount',{batchId,accountId:'acct-sync-large'})).result as {leaseToken:string};
-    const payload={batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,pagesScanned:16,pagesSucceeded:16,pages,seenUrls:pages.map(p=>p.url),pendingLinks:[{url:url(17),label:'próxima'}],maxPages:16,receiptProtocol:1};
+    const payload={batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,pagesScanned:205,pagesSucceeded:205,pages,seenUrls:pages.map(p=>p.url),pendingLinks:[{url:url(206),label:'próxima'}],maxPages:205,receiptProtocol:1};
     expect((await call('sync.accountProgress',payload)).ok).toBe(true);
-    expect((await call('sync.accountProgress',{...payload,pages:pages.slice(0,15),pagesScanned:15,pagesSucceeded:15,seenUrls:pages.slice(0,15).map(p=>p.url)})).ok).toBe(false);
-    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'COMPLETED',pagesScanned:16,pagesSucceeded:16})).ok).toBe(false);
-    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'PARTIAL',pagesScanned:16,pagesSucceeded:16})).ok).toBe(true);
+    expect((await call('sync.accountProgress',{...payload,pages:pages.slice(0,204),pagesScanned:204,pagesSucceeded:204,seenUrls:pages.slice(0,204).map(p=>p.url)})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'COMPLETED',pagesScanned:205,pagesSucceeded:205})).ok).toBe(false);
+    expect((await call('sync.completeAccount',{batchId,accountId:'acct-sync-large',leaseToken:leaseToken.leaseToken,status:'PARTIAL',pagesScanned:205,pagesSucceeded:205})).ok).toBe(true);
     const retried=await call('sync.retryFailed',{batchId,browserRequest:true});
     expect(retried.ok).toBe(true);
     const retryId=(retried.result as {batchId:string}).batchId;
     const info=(await call('sync.list',{batchId:retryId})).result as any;
     expect(info.batch.logical_batch_id).toBe(batchId);
-    expect(info.accounts[0].pages_succeeded).toBe(16);
-    expect(JSON.parse(info.accounts[0].progress_json).pendingLinks[0].url).toBe(url(17));
-    expect(info.pageRuns).toHaveLength(16);
+    expect(info.accounts[0].pages_succeeded).toBe(205);
+    expect(JSON.parse(info.accounts[0].progress_json).pendingLinks[0].url).toBe(url(206));
+    expect(info.pageRuns).toHaveLength(205);
   });
   it('exclui outro navegador e outro lote; depois de expirar rejeita o token antigo', async () => {
     seedImportAccount('acct-lease');
@@ -566,6 +566,14 @@ describe('banco local', () => {
       });
     });
     expect(db.rows<{ value: string }>('SELECT value FROM nested_tx_probe')).toEqual([{ value: 'commit' }]);
+  });
+
+  it('recupera a profundidade transacional após falha de COMMIT', () => {
+    db.db.exec('CREATE TABLE tx_parent (id TEXT PRIMARY KEY); CREATE TABLE tx_child (id TEXT REFERENCES tx_parent(id) DEFERRABLE INITIALLY DEFERRED)');
+    expect(()=>db.transaction(()=>{db.db.prepare('INSERT INTO tx_child VALUES (?)').run('missing')})).toThrow();
+    db.transaction(()=>{db.db.prepare('INSERT INTO tx_parent VALUES (?)').run('valid')});
+    expect(db.row('SELECT id FROM tx_parent')).toMatchObject({id:'valid'});
+    expect(db.rows('SELECT id FROM tx_child')).toHaveLength(0);
   });
 
   it('gera backup verificável', () => {

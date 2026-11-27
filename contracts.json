@@ -114,7 +114,7 @@
   "analysis.schedule.runs": {
     "payload": {
       "scheduleId": "string",
-      "limit": "integer 1..200 default 50"
+      "limit": "integer 1..500 default 50"
     },
     "result": "histórico de execuções, status, duração, resultado limitado e erro"
   },
@@ -165,7 +165,7 @@
   "report.schedule.runs": {
     "payload": {
       "scheduleId": "string",
-      "limit": "integer 1..200 default 50"
+      "limit": "integer 1..500 default 50"
     },
     "result": "metadados de execuções; JSON integral é obtido sob demanda por report.schedule.run.get"
   },
@@ -190,7 +190,7 @@
   "sync.schedule.runs": {
     "payload": {
       "scheduleId": "string",
-      "limit": "integer 1..200 default 50"
+      "limit": "integer 1..500 default 50"
     },
     "result": "scheduled capture run history, batch ID, counts, status and error"
   },
@@ -242,12 +242,12 @@
       "batchId": "string",
       "accountId": "string",
       "leaseToken": "UUID from exclusive claim",
-      "pagesScanned": "integer 0..200",
+      "pagesScanned": "integer 0..500",
       "pagesSucceeded": "integer 0..pagesScanned",
-      "pages": "array of per-page URL/kind/result (max 200)",
+      "pages": "array of per-page URL/kind/result (max 500)",
       "seenUrls": "same-origin visited URL list",
-      "pendingLinks": "same-origin queued links (max 200)",
-      "maxPages": "integer 1..200",
+      "pendingLinks": "same-origin queued links (max 500)",
+      "maxPages": "integer 1..500",
       "unsupportedLinks": "boolean; indicates untraversed links or unsupported filters",
       "stoppedReason": "optional string"
     },

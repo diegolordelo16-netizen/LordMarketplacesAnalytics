@@ -96,6 +96,21 @@ test('continuação amplia o orçamento quando a janela anterior está concluíd
   assert.equal(result.pagesSucceeded,2);
 });
 
+test('continuação de loja com 205 páginas não perde histórico nem recaptura páginas anteriores', async () => {
+  const urls = Array.from({length:205},(_,i)=>orders+'?page='+(i+1));
+  const next = Object.fromEntries(urls.slice(199,-1).map((url,i)=>[url,urls[200+i]]));
+  const f = scanFixture({current:urls[0],next});
+  const pages=urls.slice(0,200).map((url,i)=>({page:i+1,url,pageKind:'seller_orders',ok:true}));
+  const result=await f.scan(50,{maxPages:200,pages,seenUrls:urls.slice(0,200),pendingLinks:[{url:urls[200]}]});
+  assert.equal(result.pagesSucceeded,205);
+  assert.deepEqual(f.captured,urls.slice(200));
+});
+test('controle de próxima página sem URL não permite conclusão silenciosa', async () => {
+  const f=scanFixture({pageInfo:{[root]:{paginationUnsupported:true}}});
+  const result=await f.scan(50);
+  assert.equal(result.unsupportedLinks,true);
+});
+
 function renderFixture() {
   const pending = [];
   const host = { innerHTML: '' }, title = { textContent: '' };

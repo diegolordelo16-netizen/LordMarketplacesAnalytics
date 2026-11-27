@@ -2112,8 +2112,11 @@ export class LocalService {
     });
 
     this.register('sync.list', (payload) => {
-      const i = z.object({ batchId: z.string().optional(), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
-      if (i.batchId) return { batch: db.row('SELECT * FROM sync_batches WHERE id=?', i.batchId), accounts: db.rows<Record<string,unknown>>('SELECT * FROM sync_batch_accounts WHERE batch_id=? ORDER BY marketplace,account_id', i.batchId).map(({lease_hash:_leaseHash,...account})=>account), pageRuns: db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? ORDER BY account_id,page_no', i.batchId) };
+      const i = z.object({ batchId: z.string().optional(), accountId:z.string().optional(), compact:z.boolean().default(false), limit: z.number().int().min(1).max(100).default(30) }).parse(payload ?? {});
+      if (i.batchId) {
+        const accounts = db.rows<Record<string,unknown>>('SELECT * FROM sync_batch_accounts WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY marketplace,account_id',i.batchId,i.accountId??null,i.accountId??null).map(({lease_hash:_leaseHash,...account})=>account);
+        return { batch:db.row('SELECT * FROM sync_batches WHERE id=?',i.batchId),accounts:i.compact?accounts.map(({progress_json,...account})=>account):accounts,pageRuns:i.compact?[]:db.rows('SELECT * FROM sync_batch_page_runs WHERE batch_id=? AND (? IS NULL OR account_id=?) ORDER BY account_id,page_no',i.batchId,i.accountId??null,i.accountId??null) };
+      }
       return db.rows('SELECT * FROM sync_batches ORDER BY requested_at DESC LIMIT ?', i.limit);
     });
 
@@ -2273,11 +2276,11 @@ export class LocalService {
       const pageKind = z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory']);
       const i = z.object({
         batchId: z.string().min(1), accountId: z.string().min(1), leaseToken:z.string().uuid(),
-        pagesScanned: z.number().int().min(0).max(200), pagesSucceeded: z.number().int().min(0).max(200),
-        pages: z.array(z.object({ page: z.number().int().min(1).max(200), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(200),
-        seenUrls: z.array(z.string().max(2048)).max(200),
-        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80) })).max(200),
-        maxPages: z.number().int().min(1).max(200), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
+        pagesScanned: z.number().int().min(0).max(500), pagesSucceeded: z.number().int().min(0).max(500),
+        pages: z.array(z.object({ page: z.number().int().min(1).max(500), url: z.string().url().max(2048), pageKind, ok: z.boolean(), error: z.string().max(500).optional(), queued: z.boolean().optional() })).max(500),
+        seenUrls: z.array(z.string().max(2048)).max(500),
+        pendingLinks: z.array(z.object({ url: z.string().url().max(2048), label: z.string().max(80) })).max(500),
+        maxPages: z.number().int().min(1).max(500), unsupportedLinks: z.boolean().default(false), receiptProtocol: z.literal(1).or(z.literal(0)).default(0), stoppedReason: z.string().max(300).optional(),
       }).refine((v) => v.pagesSucceeded <= v.pagesScanned && v.pages.length === v.pagesScanned && v.pagesScanned <= v.maxPages, 'contagens do progresso inválidas')
         .refine((v) => v.pages.every((page, index) => page.page === index + 1) && new Set(v.pages.map((page) => page.page)).size === v.pages.length, 'numeração de páginas inválida')
         .refine((v) => v.pages.filter((page) => page.ok).length === v.pagesSucceeded, 'páginas concluídas não correspondem à contagem')
@@ -2341,7 +2344,7 @@ export class LocalService {
     });
 
     this.register('sync.completeAccount', (payload, auth) => db.transaction(() => {
-      const i = z.object({ batchId: z.string(), accountId: z.string(), leaseToken:z.string().uuid(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(200).default(0), pagesSucceeded: z.number().int().min(0).max(200).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
+      const i = z.object({ batchId: z.string(), accountId: z.string(), leaseToken:z.string().uuid(), status: z.enum(['RUNNING','COMPLETED','PARTIAL','FAILED','SKIPPED']), pagesScanned: z.number().int().min(0).max(500).default(0), pagesSucceeded: z.number().int().min(0).max(500).default(0), error: z.string().max(1000).optional() }).refine((v) => v.pagesSucceeded <= v.pagesScanned, 'pagesSucceeded não pode superar pagesScanned').parse(payload);
       const row = db.row<{ id: string; status: string; progress_json: string;lease_hash:string|null;lease_expires_at:string|null;pages_scanned:number;pages_succeeded:number }>('SELECT id,status,progress_json,lease_hash,lease_expires_at,pages_scanned,pages_succeeded FROM sync_batch_accounts WHERE batch_id=? AND account_id=?', i.batchId, i.accountId);
       if (!row) throw new Error('conta não pertence ao lote de sincronização');
       if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(row.status)) {
