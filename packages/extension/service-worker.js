@@ -712,11 +712,19 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     if (existing >= 0) pages[existing] = { ...data, page: existing + 1 };
     else pages.push({ ...data, page: pages.length + 1 });
   };
+  // Demonstrated routes only prioritize links independently found in the live DOM.
+  // Memory never introduces a new URL or permission to navigate.
+  let learnedRoutes=new Set();
+  if(typeof callService==='function'){
+    const learned=await callService('navigation.list',{accountId:expectedAccountId,origin}).catch(()=>null);
+    if(learned?.ok&&Array.isArray(learned.result))learnedRoutes=new Set(learned.result.map(row=>JSON.stringify([row.route,row.page_kind])));
+  }
   const queue = [];
   let unsupportedLinks = Boolean(saved.unsupportedLinks) || legacyQueued;
   const supportedQuery = (url) => [...url.searchParams.entries()].every(([key, value]) => /^(page|page_number|p|offset|limit|sort|order|start_date|end_date|date_from|date_to|from|to|period|status|startDate|endDate|dateFrom|dateTo)$/i.test(key) && /^[A-Za-z0-9_.:-]{1,80}$/.test(value));
   const enqueueLinks = (links) => {
-    for (const link of Array.isArray(links) ? links : []) {
+    const priority=link=>{try{return learnedRoutes.has(JSON.stringify([new URL(link.url).pathname,link.pageKind]))?1:0;}catch{return 0;}};
+    for (const link of (Array.isArray(links) ? [...links] : []).sort((a,b)=>priority(b)-priority(a))) {
       const target = normalizeAuthorizedAreaUrl(link?.url, origin, marketplace);
       if (!target || !AUTHORIZED_AREA_KINDS.has(link?.pageKind)) continue;
       if (!supportedQuery(target)) { unsupportedLinks = true; continue; }
