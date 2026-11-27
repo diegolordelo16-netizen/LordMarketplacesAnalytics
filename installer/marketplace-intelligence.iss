@@ -60,6 +60,8 @@ Source: "{#SourceRoot}\tools\node.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Serviço local
 Source: "{#SourceRoot}\dist\local-agent\main.js"; DestDir: "{app}\local-agent"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\local-agent\package.json"; DestDir: "{app}\local-agent"; Flags: ignoreversion
+Source: "{#SourceRoot}\dist\local-agent\openseo-mcp.mjs"; DestDir: "{app}\local-agent"; Flags: ignoreversion
+Source: "{#SourceRoot}\dist\local-agent\third-party\open-seo\LICENSE"; DestDir: "{app}\local-agent\third-party\open-seo"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\local-agent\migrations\*.sql"; DestDir: "{app}\local-agent\migrations"; Flags: ignoreversion
 ; Host nativo
 Source: "{#SourceRoot}\dist\native-host\native-host.js"; DestDir: "{app}\native-host"; Flags: ignoreversion

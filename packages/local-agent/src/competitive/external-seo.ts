@@ -13,7 +13,7 @@ function similarity(a:Set<string>,b:Set<string>){const union=new Set([...a,...b]
 const rowsOf=(run:Run):Row[]=>JSON.parse(run.result_json) as Row[];
 export function compareKeywordSamples(own:Row[],other:Row[]){
   const have=new Set(own.flatMap(r=>typeof r.keyword==='string'?[normalized(r.keyword)]:[])),seen=new Set<string>();
-  return other.flatMap(r=>{
+  return other.flatMap<Row>(r=>{
     if(typeof r.keyword!=='string')return [];
     const key=normalized(r.keyword);if(have.has(key)||seen.has(key))return [];seen.add(key);
     return [{...r,comparison:'NOT_OBSERVED_IN_OWN_SAMPLE'}];
@@ -101,7 +101,7 @@ export class ExternalSeoWorkspace{
     // Explicit environment opt-in is required in addition to the finite per-watch approval.
     if(process.env.MI_DATAFORSEO_ENABLE_SCHEDULES!=='true'||!process.env.MI_DATAFORSEO_LOGIN?.trim()||!process.env.MI_DATAFORSEO_PASSWORD)return;
     const now=new Date().toISOString();
-    const due=this.db.row<Watch>("SELECT w.* FROM seo_rank_watches w JOIN accounts a ON a.id=w.account_id WHERE w.enabled=1 AND w.remaining>0 AND w.next_run_at<=? AND a.is_active=1 ORDER BY w.next_run_at,w.id LIMIT 1",now);
+    const due=this.db.row<Watch>("SELECT w.* FROM seo_rank_watches w JOIN accounts a ON a.id=w.account_id WHERE w.enabled=1 AND w.remaining>0 AND (w.last_status IS NULL OR w.last_status<>'DISPATCHED') AND w.next_run_at<=? AND a.is_active=1 ORDER BY w.next_run_at,w.id LIMIT 1",now);
     if(!due)return;
     // Reserve one call durably before dispatch. No catch-up bursts or retry on uncertain results.
     const next=new Date(Date.now()+due.interval_days*86400000).toISOString();
