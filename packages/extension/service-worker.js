@@ -841,7 +841,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         stoppedReason = error instanceof Error ? error.message : 'falha ao abrir uma área autorizada';
         break; // o link fica persistido na fila para a próxima retomada
       }
-      const info = await readCapturePageInfo(temporary.id);
+      let info = await readCapturePageInfo(temporary.id);
       const current = await chrome.tabs.get(temporary.id);
       const currentTarget = normalizeAuthorizedAreaUrl(current.url || '', origin, marketplace);
       if (!currentTarget || !info?.ok) {
@@ -856,7 +856,19 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         stoppedReason = 'a área ou a conta da loja mudou durante a navegação';
         break;
       }
-      if(item.filterSignature!==undefined&&item.filterSignature!==info.filterSignature){stoppedReason='filtros da próxima página diferem da página anterior; confirme manualmente';break;}
+      if(item.filterSignature!==undefined&&item.filterSignature!==info.filterSignature){
+        const before=info;
+        const restored=await chrome.tabs.sendMessage(temporary.id,{type:'MI_CAPTURE_REAPPLY_FILTERS',pageKind:before.pageKind,accountId:expectedAccountId,url:before.url,currentSignature:before.filterSignature,targetSignature:item.filterSignature}).catch(()=>null);
+        if(restored?.ok){
+          for(let attempt=0;attempt<10;attempt++){
+            await new Promise(resolve=>setTimeout(resolve,400));
+            info=await readCapturePageInfo(temporary.id);
+            if(!info?.ok||info.accountId!==expectedAccountId||info.url!==before.url||info.pageKind!==before.pageKind||info.loginRequired||info.challenge)break;
+            if(info.filterSignature===item.filterSignature&&!info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO'))break;
+          }
+        }
+        if(!restored?.ok||!info?.ok||info.accountId!==expectedAccountId||info.url!==before.url||info.pageKind!==before.pageKind||info.loginRequired||info.challenge||info.filterSignature!==item.filterSignature||info.coverageWarnings?.includes('FILTRO_NAO_RECONHECIDO')){stoppedReason='filtros da próxima página não puderam ser reaplicados com segurança';break;}
+      }
       if(pages.some(p=>p.spaPage!==undefined&&keyOf(new URL(p.url))===item.key)&&(!info.spaPagination||info.nextPageUrl)){unsupportedLinks=true;stoppedReason='marcador SPA anterior não está disponível';break;}
       if(info.spaPagination&&!info.nextPageUrl){
         const history=pages.filter(p=>keyOf(new URL(p.url))===item.key);
