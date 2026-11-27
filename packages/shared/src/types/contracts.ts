@@ -124,6 +124,7 @@ export const IPC_METHODS = [
   'adapter.diagnostics',
   'keyword.list',
   'keyword.upsert',
+  'seo.external.research',
   'keyword.gap',
   'keyword.suggest',
   'keyword.cluster',

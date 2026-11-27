@@ -429,6 +429,11 @@ async function viewKeywords() {
         <option value="IMPORTACAO">Importação</option></select></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="kw-add">Adicionar termo</button></div>`)
+  + card('Pesquisa SEO externa — OpenSEO / DataForSEO', `
+    <p class="muted small">Google Brasil em português; backlinks da web global. Não representa volume ou posição no Mercado Livre, Shopee ou Amazon. Cada consulta pode ser cobrada pela DataForSEO, inclusive falhas. Configure as credenciais no ambiente do agente local.</p>
+    <div class="form-grid"><label>Pesquisa<select id="seo-external-mode"><option value="suggestions">Sugestões de palavras-chave</option><option value="related">Termos relacionados</option><option value="ideas">Ideias de palavras-chave</option><option value="serp">Resultados Google (SERP)</option><option value="ranked">Palavras-chave de domínio concorrente</option><option value="domain">Visibilidade de domínio</option><option value="backlinks">Resumo de backlinks</option></select></label>
+    <label>Termo ou domínio<input id="seo-external-query" maxlength="200" placeholder="capacete ou exemplo.com.br"></label><label>Limite<input id="seo-external-limit" type="number" min="1" max="100" value="25"></label><label>Dispositivo (SERP)<select id="seo-external-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label></div>
+    <button class="btn" data-act="seo-external-research">Consultar fonte externa</button><div id="seo-external-out" class="out" aria-live="polite"></div>`)
   + card('Banco de palavras-chave', table(['Termo', 'Intenção', 'Marketplace', 'Origem', 'Sinal', 'Confiança'],
     (kws || []).slice(0, 200).map((k) => `<tr>
       <td>${esc(k.term)}</td><td>${esc(k.intent || '—')}</td><td>${esc(k.marketplace || '—')}</td>
@@ -1914,6 +1919,26 @@ const ACTIONS = {
     initializeTables($('#bundle-out'));
   },
 
+  'seo-external-research':async()=>{
+    const host=$('#seo-external-out'),generation=viewRenderSequence,button=document.querySelector('[data-act="seo-external-research"]');
+    const query=$('#seo-external-query').value.trim(),mode=$('#seo-external-mode').value,limit=Number($('#seo-external-limit').value),device=$('#seo-external-device').value;
+    if(!query||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Informe termo/domínio e limite de 1 a 100.');
+    if(!confirm('Autoriza uma consulta externa DataForSEO possivelmente tarifada? Não há retentativa automática.'))return;
+    if(button)button.disabled=true;
+    host.textContent='Consultando DataForSEO…';
+    try{
+      const result=await api('seo.external.research',{query,mode,limit,device,confirmed:true});
+      if(generation!==viewRenderSequence||host!==$('#seo-external-out'))return;
+      const keys=[...new Set((result.rows||[]).flatMap(row=>Object.keys(row)))];
+      const labels={keyword:'Palavra-chave',searchVolume:'Volume Google estimado',cpc:'CPC (USD)',paidCompetition:'Concorrência paga (0–1)',keywordDifficulty:'Dificuldade SEO Google (0–100)',intent:'Intenção Google',position:'Posição absoluta',estimatedTraffic:'Tráfego estimado',organicKeywords:'Palavras-chave orgânicas',domain:'Domínio',url:'URL',title:'Título',type:'Tipo',backlinks:'Backlinks',referringDomains:'Domínios de referência',rank:'Rank DataForSEO (0–100)',brokenBacklinks:'Backlinks quebrados'};
+      host.innerHTML='<p>'+esc(result.status)+' · '+esc(result.scope)+' · '+dt(result.capturedAt)+' · Custo informado pelo provedor (USD): '+esc(result.costUsd??'desconhecido')+'</p>'+
+        (result.providerCode!=null?'<p class="muted small">Código do provedor: '+esc(result.providerCode)+'</p>':'')+
+        table(keys.map(k=>labels[k]||k),(result.rows||[]).map(row=>'<tr>'+keys.map(k=>'<td>'+esc(row[k]??'—')+'</td>').join('')+'</tr>'),'Nenhum dado externo disponível.')+
+        '<p class="muted small">Dados externos não são importados automaticamente como métricas do marketplace. Custo desconhecido não significa gratuito.</p>';
+      initializeTables(host);
+    }catch(error){if(generation===viewRenderSequence&&host===$('#seo-external-out'))host.textContent=String(error?.message||error);throw error;}
+    finally{if(button)button.disabled=false;}
+  },
   'kw-add': async () => {
     await run(() => api('keyword.upsert', {
       term: $('#kw-term').value.trim(),

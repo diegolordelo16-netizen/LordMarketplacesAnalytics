@@ -5,6 +5,7 @@
 import { parseCsvText, parseXlsxBase64 } from './importers/tabular';
 import { parsePdfBase64 } from './importers/pdf';
 import { googleReadTarget, verifyGoogleRead } from './connectors/google';
+import { researchSeo } from './connectors/dataforseo';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -132,6 +133,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'audit.rollback': 'manage_backups',
   'adapter.diagnostics': 'view_reports',
   'keyword.upsert': 'manage_market_intelligence',
+  'seo.external.research': 'manage_connectors',
   'keyword.list': 'view_reports',
   'keyword.gap': 'view_reports',
   'keyword.suggest': 'view_reports',
@@ -1928,6 +1930,17 @@ export class LocalService {
     });
 
     // ------------------------------------------------------------ keywords / rank
+    let externalSeoRunning=false;
+    this.register('seo.external.research',async(payload,auth)=>{
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário para consulta externa tarifada');
+      if(externalSeoRunning)throw Error('Já existe uma consulta SEO externa em andamento');
+      externalSeoRunning=true;
+      try{
+        const result=await researchSeo(payload);
+        this.audit(auth,'SEO_EXTERNAL_RESEARCH','dataforseo',null,result.status,undefined,{mode:result.mode,scope:result.scope,costUsd:result.costUsd,providerCode:result.providerCode});
+        return result;
+      }finally{externalSeoRunning=false;}
+    });
     this.register('keyword.upsert', (payload, auth) => {
       const i = z
         .object({

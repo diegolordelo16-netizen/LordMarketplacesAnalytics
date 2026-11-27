@@ -1,0 +1,10 @@
+# Integração OpenSEO — Etapa 06
+
+Origem: https://github.com/every-app/open-seo/tree/6f68494e92a695db17f4b22da25e84b9bf1e582c (MIT, copyright 2026 Ben Senescu). Licença integral em third-party/open-seo/LICENSE. Normalização de intenção reaproveitada de src/server/features/keywords/services/research/helpers.ts; contratos de requisição adaptados de src/server/lib/dataforseo/{labs,serp,backlinks}.ts. O projeto é alternativa ao Semrush, não API nem homologação Semrush.
+
+## Operação
+No ambiente do processo do agente local, configure MI_DATAFORSEO_LOGIN e MI_DATAFORSEO_PASSWORD com as credenciais API DataForSEO. Exemplo PowerShell para uma sessão de desenvolvimento: `$env:MI_DATAFORSEO_LOGIN = Read-Host "Login API"`; configure a senha por meio do gerenciador seguro de ambiente de sua instalação, sem incluí-la em arquivos versionados. Reinicie o agente nesse ambiente. No painel SEO & Keywords, use Pesquisa SEO externa e confirme cada consulta tarifada. Somente super_admin pode executar. Não há agendamento ou retentativa após falha de transporte. A resposta indica custo reportado em USD, que pode ser desconhecido. Não há teto garantido de cobrança: configure limites e saldo no provedor.
+
+Modos: sugestões, relacionados, ideias, SERP Google (10 posições solicitadas), palavras-chave de domínio concorrente, visibilidade de domínio e resumo de backlinks. Google Brasil/português (2076/pt); backlinks globais. Até 100 linhas, apenas uma chamada por clique, sem clickstream tarifado adicional. Valores ausentes permanecem nulos; não são importados como volume interno do marketplace. Registra auditoria de custo/estado sem credenciais.
+
+Não incluídos: histórico persistente de consultas, agendamento de ranking Google, análise de backlinks individual, auditoria de site, visibilidade em IA, infraestrutura e interface completas do OpenSEO. A autenticação real e o contrato do provedor em produção exigem credenciais/saldo e não foram homologados. Integração isolada na branch de etapa 06, sem alterar master ou PR 5.
