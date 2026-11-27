@@ -994,22 +994,25 @@ export class LocalService {
       const latestPerListingDay = new Map<string, typeof rows[number]>();
       for (const row of rows) latestPerListingDay.set(`${row.listing_id}|${row.captured_at.slice(0,10)}`, row);
       const metricKeys = ['gmv','netRevenue','commission','fixedFee','shippingFee','tax','marketplaceFee','orders','visits','units','adSpend','adAttributedRevenue','stockAvailable','returnsCount','cancellations'];
-      const daily = new Map<string, { date:string; listings:Set<string>; values:Record<string,{sum:number;count:number}> }>();
+      type MetricAggregate = { sum:number; count:number };
+      type DailyAccount = { listings:Set<string>; values:Record<string,MetricAggregate> };
+      const daily = new Map<string,Map<string,DailyAccount>>();
+      const accountDay = (date:string,accountId:string) => {
+        let accounts=daily.get(date);
+        if(!accounts){accounts=new Map();daily.set(date,accounts);}
+        let point=accounts.get(accountId);
+        if(!point){point={listings:new Set<string>(),values:Object.fromEntries(metricKeys.map(key=>[key,{sum:0,count:0}]))};accounts.set(accountId,point);}
+        return point;
+      };
       for (const row of latestPerListingDay.values()) {
-        const date = row.captured_at.slice(0,10);
-        let point = daily.get(date);
-        if (!point) {
-          point = { date, listings: new Set<string>(), values: Object.fromEntries(metricKeys.map((key) => [key,{sum:0,count:0}])) };
-          daily.set(date, point);
-        }
+        const point=accountDay(row.captured_at.slice(0,10),row.account_id);
         point.listings.add(row.listing_id);
-        let metrics: Record<string,unknown>;
-        try { metrics = JSON.parse(row.metrics_json) as Record<string,unknown>; } catch { continue; }
-        for (const key of metricKeys) {
-          const value = metrics[key];
-          if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-            point.values[key]!.sum += value;
-            point.values[key]!.count += 1;
+        let metrics:Record<string,unknown>;
+        try{metrics=JSON.parse(row.metrics_json) as Record<string,unknown>;}catch{continue;}
+        for(const key of metricKeys){
+          const value=metrics[key];
+          if(typeof value==='number'&&Number.isFinite(value)&&value>=0){
+            point.values[key]!.sum+=value;point.values[key]!.count+=1;
           }
         }
       }
@@ -1027,8 +1030,10 @@ export class LocalService {
         const date = row.captured_at.slice(0,10);
         let metrics: Record<string,unknown>;
         try { metrics = JSON.parse(row.metrics_json) as Record<string,unknown>; } catch { continue; }
-        let byMetric = accountDaily.get(date);
-        if (!byMetric) { byMetric = new Map(); accountDaily.set(date, byMetric); }
+        accountDay(date,row.account_id);
+        const accountKey=JSON.stringify([date,row.account_id]);
+        let byMetric = accountDaily.get(accountKey);
+        if (!byMetric) { byMetric = new Map(); accountDaily.set(accountKey, byMetric); }
         for (const key of accountMetricPriority[row.page_kind] ?? []) {
           const value = metrics[key];
           if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue;
@@ -1036,22 +1041,24 @@ export class LocalService {
           if (!existing || row.captured_at > existing.capturedAt) byMetric.set(key,{value,capturedAt:row.captured_at,pageKind:row.page_kind});
         }
       }
-      for (const date of accountDaily.keys()) {
-        if (!daily.has(date)) daily.set(date,{ date, listings:new Set<string>(), values:Object.fromEntries(metricKeys.map((key) => [key,{sum:0,count:0}])) });
-      }
-      const points = [...daily.values()].sort((a,b) => a.date.localeCompare(b.date)).map((point) => {
-        const out: Record<string,unknown> = { date: point.date, listingsCaptured: point.listings.size };
-        for (const key of metricKeys) {
-          const entry = point.values[key]!;
-          out[key] = entry.count ? entry.sum : null;
-          out[`${key}Coverage`] = entry.count;
-        }
-        const accountMetrics = accountDaily.get(point.date);
-        if (accountMetrics) {
-          for (const [key, observed] of accountMetrics) {
-            out[key] = observed.value;
-            out[`${key}Coverage`] = 1;
+      const allMetricKeys=[...new Set([...metricKeys,...Object.values(accountMetricPriority).flat()])];
+      const points=[...daily.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([date,accounts])=>{
+        const out:Record<string,unknown>={date,listingsCaptured:[...accounts.values()].reduce((sum,p)=>sum+p.listings.size,0),accountsCaptured:accounts.size};
+        const metricCoverage:Record<string,number>={},accountSnapshotMetrics:Record<string,number>={};
+        for(const key of allMetricKeys){
+          const values:number[]=[];
+          let observedAccounts=0;
+          for(const [accountId,point] of accounts){
+            const observed=accountDaily.get(JSON.stringify([date,accountId]))?.get(key);
+            if(observed){values.push(observed.value);observedAccounts++;continue;}
+            const entry=point.values[key];
+            if(entry&&entry.count>0&&entry.count===point.listings.size)values.push(entry.sum);
           }
+          // A missing contribution is not zero; ratings must not be added across shops.
+          out[key]=values.length===accounts.size&&(key!=='reviewRating'||accounts.size===1)?values.reduce((sum,value)=>sum+value,0):null;
+          out[`${key}Coverage`]=values.length;
+          metricCoverage[key]=values.length;
+          if(observedAccounts)accountSnapshotMetrics[key]=observedAccounts;
         }
         out.gmvCents = typeof out.gmv === 'number' ? Math.round((out.gmv as number) * 100) : null;
         out.netRevenueCents = typeof out.netRevenue === 'number' ? Math.round((out.netRevenue as number) * 100) : null;
@@ -1060,14 +1067,10 @@ export class LocalService {
         for (const field of ['commission','fixedFee','shippingFee','tax','marketplaceFee']) {
           out[`${field}Cents`] = typeof out[field] === 'number' ? Math.round((out[field] as number) * 100) : null;
         }
-        out.coverage = {
-          totalCapturedListings: point.listings.size,
-          accountSnapshotMetrics: Object.fromEntries(accountMetrics ? [...accountMetrics.keys()].map((key) => [key,1]) : []),
-          metrics: Object.fromEntries(metricKeys.map((key) => [key, point.values[key]!.count || (accountMetrics?.has(key) ? 1 : 0)])),
-        };
+        out.coverage={totalCapturedListings:out.listingsCaptured,accountsCaptured:accounts.size,accountSnapshotMetrics,metrics:metricCoverage,unit:'accounts_with_known_metric'};
         return out;
       });
-      return { from, to: nowIso(), days: i.days, points, source: 'listing_snapshots+account_snapshots', aggregation: 'latest_snapshot_per_listing_per_day_plus_account_page_override', missingValues: 'null_not_zero' };
+      return { from, to: nowIso(), days: i.days, points, source: 'listing_snapshots+account_snapshots', aggregation: 'latest_snapshot_per_listing_per_day_within_account_then_sum_known_accounts', missingValues: 'null_not_zero' };
     });
 
     this.register('kpi.compare.detail', (payload) => {
