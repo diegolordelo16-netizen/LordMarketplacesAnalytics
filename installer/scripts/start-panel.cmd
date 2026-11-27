@@ -24,6 +24,7 @@ set "ERR=%DATA%\logs\service-err.log"
 
 if not exist "%DATA%" mkdir "%DATA%"
 if not exist "%DATA%\logs" mkdir "%DATA%\logs"
+if exist "%DATA%\update-in-progress.json" exit /b 1
 
 set "MODE=panel"
 if /i "%~1"=="--prestart" set "MODE=prestart"
