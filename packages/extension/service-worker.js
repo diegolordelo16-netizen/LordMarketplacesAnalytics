@@ -1215,6 +1215,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if(message.method==='learning.context'){sendResponse({ok:true,result:ctx});return;}
         const requested=message.payload;
         if(!requested||requested.tabId!==ctx.tabId||requested.accountId!==ctx.accountId||requested.origin!==ctx.origin)throw Error('aba, loja ou origem mudou; aprendizado interrompido');
+        if(message.method==='learning.observe'&&(requested.route!==ctx.route||requested.pageKind!==ctx.pageKind))throw Error('a página mudou durante a observação; demonstre novamente');
         const base={accountId:ctx.accountId,origin:ctx.origin};
         const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind}:base);
         sendResponse(result);return;
