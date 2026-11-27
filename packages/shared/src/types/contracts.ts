@@ -231,6 +231,7 @@ export const IPC_METHODS = [
   'ads.dashboard',
   'ads.reconcile',
   'competitor.evidence.record',
+  'competitor.content.record',
   'competitor.evidence.compare',
   'campaign.change.prepare',
   'campaign.change.list',
