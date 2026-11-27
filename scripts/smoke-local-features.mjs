@@ -40,6 +40,22 @@ test('PDF: extrai texto de PDF digital com suporte Poppler opcional e fallback',
   assert.throws(() => parsePdfBase64(Buffer.from('not a PDF').toString('base64')), /PDF/);
 });
 
+test('PDF: fallback sem Poppler lê ASCII85 + Flate com dicionário multilinha', () => {
+  const pdf = readFileSync(join(root, 'packages/local-agent/test/fixtures/digital-report.pdf'));
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = '';
+    const result = parsePdfBase64(pdf.toString('base64'));
+    assert.match(result.text, /Relatorio de vendas/);
+    assert.match(result.text, /12\.345,67/);
+    assert.match(result.text, /Pedidos: 123/);
+    assert.ok(result.warnings.some((warning) => warning.includes('fallback embutido')));
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+});
+
 test('cadência: intervalo customizado aceita 15 a 43200 minutos', () => {
   assert.equal(intervalFor('custom', 15), 900_000);
   assert.equal(intervalFor('custom', 43_200), 2_592_000_000);

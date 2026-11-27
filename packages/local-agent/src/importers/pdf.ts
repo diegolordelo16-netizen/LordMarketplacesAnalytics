@@ -16,6 +16,62 @@ function decodeBytes(bytes: Buffer): string {
   catch { return bytes.toString('latin1'); }
 }
 
+function decodeAscii85(input: Buffer, remaining: number): Buffer {
+  const text = input.toString('latin1').replace(/[\x00\t\n\f\r ]/g, '');
+  const data = text.startsWith('<~') ? text.slice(2) : text;
+  if (!data.endsWith('~>')) throw new Error('ASCII85 sem terminador');
+  const body = data.slice(0, -2);
+  const output = Buffer.alloc(Math.min(body.length * 4, remaining));
+  let offset = 0, value = 0, count = 0;
+  const flush = (bytes: number) => {
+    if (value > 0xffffffff) throw new Error('ASCII85 fora do intervalo');
+    if (offset + bytes > output.length) throw new Error('PDF excede o limite de expansão de 30 MB');
+    for (let i = 0; i < bytes; i += 1) output[offset++] = (value >>> (24 - i * 8)) & 0xff;
+    value = 0; count = 0;
+  };
+  for (const ch of body) {
+    if (ch === 'z') {
+      if (count !== 0) throw new Error('ASCII85 inválido');
+      flush(4); continue;
+    }
+    const digit = ch.charCodeAt(0) - 33;
+    if (digit < 0 || digit > 84) throw new Error('ASCII85 inválido');
+    value = value * 85 + digit;
+    if (++count === 5) flush(4);
+  }
+  if (count === 1) throw new Error('ASCII85 truncado');
+  if (count > 1) {
+    const bytes = count - 1;
+    while (count++ < 5) value = value * 85 + 84;
+    flush(bytes);
+  }
+  return output.subarray(0, offset);
+}
+
+function decodePdfStream(dictionary: string, stream: Buffer, remaining: number): Buffer | null {
+  const filter = /\/Filter\b\s*(\[[^\]]*\]|\/[A-Za-z0-9]+\b)/.exec(dictionary);
+  if (!filter) return /\/Filter\b/.test(dictionary) ? null : stream;
+  const names = filter[1]!.match(/\/[A-Za-z0-9]+/g) ?? [];
+  if (!names.length || names.length > 2 || names.some((name) => !['/ASCII85Decode', '/A85', '/FlateDecode', '/Fl'].includes(name))) return null;
+  let decoded = stream;
+  for (const name of names) {
+    if (remaining <= 0) throw new Error('PDF excede o limite de expansão de 30 MB');
+    if (name === '/ASCII85Decode' || name === '/A85') {
+      try { decoded = decodeAscii85(decoded, remaining); } catch { return null; }
+    } else {
+      let inflated: Buffer | null = null;
+      for (const inflate of [inflateSync, inflateRawSync]) {
+        try { inflated = inflate(decoded, { maxOutputLength: remaining }); break; }
+        catch { /* tenta o modo zlib/raw seguinte */ }
+      }
+      if (!inflated) return null;
+      decoded = inflated;
+    }
+    if (decoded.length > remaining) throw new Error('PDF excede o limite de expansão de 30 MB');
+  }
+  return decoded;
+}
+
 function decodeLiteral(raw: string): string {
   const out: number[] = [];
   for (let i = 0; i < raw.length; i += 1) {
@@ -154,17 +210,30 @@ export function parsePdfBase64(base64: string): { rows: Array<{ line: string }>;
   const source = bytes.toString('latin1');
   const chunks: Buffer[] = [];
   let expanded = 0;
-  const streamPattern = /<<(.*?)>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  for (const match of source.matchAll(streamPattern)) {
+  // Delimita o cabeçalho de cada objeto, inclusive dicionários multilinha.
+  // Usa /Length direto quando presente; o delimitador é apenas fallback.
+  const streamPattern = /\b\d+\s+\d+\s+obj\s*<<((?:(?!\bendobj\b)[\s\S])*?)>>\s*stream(?:\r\n|\n|\r)/g;
+  for (let match = streamPattern.exec(source); match; match = streamPattern.exec(source)) {
     const dictionary = match[1] ?? '';
-    const stream = Buffer.from(match[2] ?? '', 'latin1');
-    let decoded: Buffer | null = null;
-    if (/\/FlateDecode/.test(dictionary)) {
-      for (const inflate of [inflateSync, inflateRawSync]) {
-        try { decoded = inflate(stream, { maxOutputLength: MAX_EXPANDED_BYTES - expanded }); break; }
-        catch { /* tenta o modo zlib/raw seguinte */ }
-      }
-    } else if (!/\/Filter\b/.test(dictionary)) decoded = stream;
+    const start = streamPattern.lastIndex;
+    const lengthMatch = /\/Length\s+(\d+)\b(?!\s+\d+\s+R\b)/.exec(dictionary);
+    const length = lengthMatch ? Number(lengthMatch[1]) : null;
+    let end: number;
+    if (length !== null) {
+      if (!Number.isSafeInteger(length) || length < 0 || start + length > source.length) continue;
+      end = start + length;
+      const marker = /^(?:\r\n|\r|\n)?endstream\b/.exec(source.slice(end, end + 16));
+      if (!marker) continue;
+      streamPattern.lastIndex = end + marker[0].length;
+    } else {
+      const marker = /(?:\r\n|\r|\n)endstream\b/g;
+      marker.lastIndex = start;
+      const found = marker.exec(source);
+      if (!found) continue;
+      end = found.index;
+      streamPattern.lastIndex = marker.lastIndex;
+    }
+    const decoded = decodePdfStream(dictionary, bytes.subarray(start, end), MAX_EXPANDED_BYTES - expanded);
     if (!decoded) continue;
     expanded += decoded.length;
     if (expanded > MAX_EXPANDED_BYTES) throw new Error('PDF excede o limite de expansão de 30 MB');
