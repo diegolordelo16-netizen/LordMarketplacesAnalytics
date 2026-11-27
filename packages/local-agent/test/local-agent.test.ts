@@ -673,6 +673,14 @@ describe('comparação de períodos e entidades', () => {
     const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
     expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
     expect((await call('kpi.compare.detail',{...payload,listingId:'nonexistent'})).result).toMatchObject({rows:[]});
+    const campaignAt='2025-01-14T22:00:00.000Z';
+    const base={marketplace:'mercado_livre',accountId,pageKind:'seller_ads',url:'https://vendedores.mercadolivre.com.br/publicidade',sourceClass:'A_PRIMARY_UI',referenceAt:campaignAt,collectedAt:campaignAt,method:'content_script_dom',listings:[],evidence:{filtersAndPeriod:'start_date=2025-01-08|end_date=2025-01-14|status=all'}};
+    const detail=(externalId:string,adSpend:number,adAttributedRevenue:number)=>({kind:'AD_CAMPAIGN',externalId,metrics:{adSpend,adAttributedRevenue},evidence:{adSpend:'Investimento',adAttributedRevenue:'Receita atribuída'}});
+    expect((await call('capture.ingest',{...base,details:[detail('C-loss',100,30),detail('C-positive',10,40)]})).ok).toBe(true);
+    const campaignResult=(await call('kpi.compare.detail',{...payload,listingId:undefined})).result as any;
+    expect(campaignResult.campaigns).toEqual([expect.objectContaining({campaignId:'C-loss',spend:100,attributedRevenue:30})]);
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({campaigns:[]});
+    expect((await call('kpi.compare.detail',{...payload,listingId:undefined,primaryFrom:'2025-01-09'})).result).toMatchObject({campaigns:[]});
   });
 });
 
