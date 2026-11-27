@@ -45,6 +45,7 @@ import { IMPLEMENTED_ADAPTERS, PLANNED_ADAPTERS } from './adapters';
 import { evaluateGuard, type GuardContext } from './guard/automation-guard';
 import { AGENT_KEYS, runAgents, synthesize, type AgentContext, type AgentKey } from './ai/agents';
 import { listingSeoEvidence } from './ai/agent-evidence';
+import { revenueDrivers } from './growth/revenue-drivers';
 
 const nowIso = () => new Date().toISOString();
 function canonicalJson(value: unknown): string {
@@ -1327,7 +1328,7 @@ export class LocalService {
         for(const metric of ['adSpend','commission','fixedFee','shippingFee','tax','marketplaceFee'])signal('COST_INCREASE',metric,'Custo observado aumentou pelo menos 10%; não somar taxas que podem se sobrepor.',(a,b)=>b>0&&a>=b*1.1);
         signal('CVR_DECLINE','cvr','Conversão caiu pelo menos 1 ponto percentual; volumes de visitas precisam ser suficientes.',(a,b)=>b-a>=1&&(current.metrics.visits??0)>=100&&(previous.metrics.visits??0)>=100);
         if(i.groupBy==='product'||i.groupBy==='listing')signal('GROWTH_REVIEW','orders','Sinal de crescimento observado: pedidos subiram pelo menos 10%, com conversão não inferior e estoque observado positivo. Avaliar margem e demanda antes de agir.',(a,b)=>b>=10&&a>=b*1.1&&typeof current.metrics.cvr==='number'&&typeof previous.metrics.cvr==='number'&&current.metrics.cvr>=previous.metrics.cvr&&(current.metrics.stockAvailable??0)>0);
-        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,diagnostics,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable,coverageVerified:false} };
+        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,diagnostics,revenueDrivers:revenueDrivers(current.metrics,previous.metrics,comparable),comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable,coverageVerified:false} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
       const campaignRows=i.listingId||i.skuId?[]:db.rows<{account_id:string;marketplace:string;external_id:string;parent_external_id:string;label:string|null;metrics_json:string;context_json:string;evidence_json:string;captured_at:string;source_class:string}>(`SELECT account_id,marketplace,external_id,parent_external_id,label,metrics_json,context_json,evidence_json,captured_at,source_class FROM capture_detail_snapshots WHERE kind='AD_CAMPAIGN' AND captured_at>=? AND captured_at<=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) ORDER BY captured_at DESC,id DESC`,primary.start,primary.end,i.accountId??null,i.accountId??null,i.marketplace??null,i.marketplace??null);
       const campaigns=[] as Array<{accountId:string;marketplace:string;campaignId:string;label:string|null;spend:number;attributedRevenue:number;capturedAt:string;note:string}>;
