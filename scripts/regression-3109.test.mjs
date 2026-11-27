@@ -274,3 +274,12 @@ test('atalhos de comparação usam dias UTC completos e meses de duração equiv
   assert.deepEqual(dates('month','2026-03-31T12:00:00Z'),['2026-03-01','2026-03-28','2026-02-01','2026-02-28']);
   assert.equal(dates('month','2026-03-01T12:00:00Z'),null);
 });
+
+test('gráfico histórico mantém distância temporal e não conecta dias sem evidência',()=>{
+  const ctx=vm.createContext({esc:String,brl:String,num:String,Date});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('function renderHistoryChart('),dashboard.indexOf('function dt(')),ctx);
+  const html=vm.runInContext("renderHistoryChart([{date:'2026-11-01',gmvCents:100},{date:'2026-11-02',gmvCents:null},{date:'2026-11-04',gmvCents:150},{date:'2026-11-05',gmvCents:200}])",ctx);
+  const path=html.match(/class="trend-path" d="([^"]+)"/)[1];
+  assert.equal((path.match(/M /g)||[]).length,2);
+  assert.equal((path.match(/L /g)||[]).length,1);
+});
