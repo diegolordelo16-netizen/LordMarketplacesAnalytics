@@ -87,6 +87,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'settings.set': 'manage_financial_limits',
   'gemini.setKey': 'manage_gemini_key',
   'gemini.testKey': 'manage_gemini_key',
+  'gemini.clearKey': 'manage_gemini_key',
   'account.upsert': 'manage_accounts',
   'account.list': 'view_reports',
   'account.setActive': 'manage_accounts',
@@ -644,6 +645,7 @@ export class LocalService {
       return { ok: true, hint: gemini.keyHint() };
     });
 
+    this.register('gemini.clearKey',(payload,auth)=>{z.object({confirmed:z.literal(true)}).strict().parse(payload);gemini.clearKey();this.audit(auth,'GEMINI_KEY_CLEAR','secrets','gemini.apiKey','OK','chave local removida');return {ok:true};});
     this.register('gemini.testKey', async () => {
       const res = await gemini.testKey();
       return res.ok ? { ok: true, model: res.model, latencyMs: res.latencyMs } : { ok: false, error: res.message };
@@ -1786,7 +1788,7 @@ export class LocalService {
         const originalValue = task.kind === 'edit_title' ? baseline?.before_title : baseline?.before_description;
         const capturedAt = baseline?.baseline_captured_at ? Date.parse(baseline.baseline_captured_at) : Number.NaN;
         const rollback=db.row<{before_text:string;after_text:string;rolled_back_at:string|null;account_id:string;listing_id:string}>('SELECT c.before_text,c.after_text,c.rolled_back_at,c.account_id,c.listing_id FROM report_rollback_links r JOIN change_sets c ON c.id=r.change_set_id WHERE r.task_id=?',i.taskId);
-        if(rollback&&(rollback.rolled_back_at||rollback.account_id!==item.account_id||rollback.listing_id!==item.listing_id||baseline?.before_title!==rollback.after_text||item.title!==rollback.before_text))throw Error('estado atual diverge da mudança original; reversão bloqueada');
+        if(rollback&&(rollback.rolled_back_at||rollback.account_id!==item.account_id||rollback.listing_id!==item.listing_id||baseline?.before_title!==rollback.after_text||item.title!==rollback.before_text||db.row('SELECT newer.id FROM report_rollback_links r JOIN change_sets original ON original.id=r.change_set_id JOIN change_sets newer ON newer.account_id=original.account_id AND newer.listing_id=original.listing_id AND newer.field=original.field AND newer.id<>original.id AND newer.applied_at>=original.applied_at WHERE r.task_id=?',i.taskId)))throw Error('estado atual diverge da mudança original; reversão bloqueada');
         if (!baseline?.baseline_source_url || originalValue === null || originalValue === undefined || !Number.isFinite(capturedAt) || Date.now() - capturedAt > 30 * 60_000) {
           throw new Error(`item ${item.id} sem snapshot original recente e verificável; reabra o anúncio e gere novamente o rascunho`);
         }
@@ -1848,6 +1850,7 @@ export class LocalService {
           JOIN accounts ac ON ac.id=a.account_id AND ac.marketplace=a.marketplace AND ac.is_active=1 AND ac.verified_by_user=1
           WHERE a.status='APPROVED' AND a.expires_at>? AND a.marketplace=? AND a.account_id=? AND a.external_listing_id=?
             AND i.status='APPROVED_TO_PUBLISH' AND l.status<>'CLOSED'
+            AND NOT EXISTS(SELECT 1 FROM report_rollback_links r JOIN change_sets original ON original.id=r.change_set_id JOIN change_sets newer ON newer.account_id=original.account_id AND newer.listing_id=original.listing_id AND newer.field=original.field AND newer.id<>original.id AND newer.applied_at>=original.applied_at WHERE r.task_id=t.id)
             AND NOT EXISTS (SELECT 1 FROM listing_api_executions remote WHERE remote.account_id=i.account_id AND remote.listing_id=i.listing_id AND remote.status<>'REMOTE_VERIFIED')
             AND NOT EXISTS (SELECT 1 FROM listing_browser_executions browser WHERE browser.account_id=i.account_id AND browser.listing_id=i.listing_id AND browser.status IN ('CLAIMED','NEEDS_VERIFICATION'))
             AND NOT EXISTS (SELECT 1 FROM task_items busy WHERE busy.account_id=i.account_id AND busy.listing_id=i.listing_id AND busy.id<>i.id AND busy.status IN ('PROCESSING','PUBLISHING','UNCERTAIN'))
@@ -3114,7 +3117,8 @@ export class LocalService {
       const rev=db.row<{id:string;before_json:string|null;after_json:string}>('SELECT id,before_json,after_json FROM financial_limit_revisions WHERE account_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1',i.accountId);
       const current=readAssistedLimits(i.accountId);
       if(!rev||rev.id!==i.revisionId||canonicalJson(current)!==canonicalJson(JSON.parse(rev.after_json)))throw Error('limites atuais divergem da última revisão');
-      const before=rev.before_json?assistedLimitsSchema.parse(JSON.parse(rev.before_json)):null,at=nowIso();
+      const decoded=rev.before_json?JSON.parse(rev.before_json):null;
+      const before=decoded===null?null:assistedLimitsSchema.parse(decoded),at=nowIso();
       if(before)db.db.prepare('UPDATE settings SET value_json=?,updated_at=?,updated_by=? WHERE key=?').run(JSON.stringify(before),at,auth.userId,'assisted_limits:'+i.accountId);
       else db.db.prepare('DELETE FROM settings WHERE key=?').run('assisted_limits:'+i.accountId);
       db.db.prepare('INSERT INTO financial_limit_revisions(id,account_id,before_json,after_json,created_at,created_by,restored_from) VALUES(?,?,?,?,?,?,?)').run(randomUUID(),i.accountId,JSON.stringify(current),JSON.stringify(before),at,auth.userId,rev.id);

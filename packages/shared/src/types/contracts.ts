@@ -69,6 +69,7 @@ export const IPC_METHODS = [
   'settings.set',
   'gemini.setKey',
   'gemini.testKey',
+  'gemini.clearKey',
   'account.upsert',
   'account.list',
   'account.setActive',
