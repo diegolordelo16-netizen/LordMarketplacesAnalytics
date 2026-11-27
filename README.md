@@ -1,3 +1,7 @@
+## Versão 3.11.0 — segurança e estabilidade
+
+Etapa 02: dependências auditadas, revogação de sessões, isolamento de contas, proteção de backup e reservas de rascunho com recuperação manual. Validação automatizada em Linux; homologação real e Windows pendentes.
+
 # Marketplace Intelligence & Autonomous Operations
 
 Plataforma Local First de inteligência e operações para marketplaces. Funciona sobre dados visíveis na sessão autenticada do vendedor e no banco local. Não lê cookies/tokens do marketplace nem chama endpoints privados.
