@@ -488,6 +488,54 @@
    * Publicação assistida: aprovação administrativa prévia + aba ativa + confirmação
    * nativa por anúncio. Sem formulário inequívoco ou mensagem positiva, não declara sucesso.
    */
+  let budgetDocumentNonce=null;
+  function campaignBudgetContext(campaignRef){
+    if(currentPageKind()!=='seller_ads'||window.MI_DOM.hasChallenge(document)||document.querySelector('input[type="password"],form[action*="login"],form[action*="signin"]'))throw Error('abra a publicidade autenticada sem desafio');
+    const identity=visibleAccountIdentity();
+    if(!identity.accountId||!campaignRef||!/^[A-Za-z0-9_.:-]{1,200}$/.test(campaignRef))throw Error('identidade ou campanha não comprovada');
+    const norm=s=>String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+    const rows=Array.from(document.querySelectorAll('[data-campaign-id]')).filter(el=>window.MI_DOM.isVisible(el)&&el.getAttribute('data-campaign-id')===campaignRef);
+    if(rows.length!==1)throw Error('campanha visível ambígua ou ausente');
+    const row=rows[0];
+    const fields=Array.from(row.querySelectorAll('input[type="number"]')).filter(el=>{
+      const label=norm(el.getAttribute('aria-label')||Array.from(el.labels||[]).map(l=>l.textContent).join(' '));
+      return window.MI_DOM.isVisible(el)&&isEditableVisible(el)&&/^(orcamento diario|daily budget)( \(r\$\)| r\$)?$/.test(label)&&!el.getAttribute('form');
+    });
+    if(fields.length!==1)throw Error('orçamento diário numérico explícito não encontrado');
+    const field=fields[0],form=field.closest('form');
+    if(!form||!row.contains(form)||form.querySelectorAll('input[type="number"],input:not([type]),select,textarea,[contenteditable="true"],input[type="checkbox"],input[type="radio"],input[type="text"]').length!==1)throw Error('formulário dedicado de orçamento não comprovado');
+    const buttons=Array.from(form.querySelectorAll('button[type="submit"],button[type="button"]')).filter(el=>window.MI_DOM.isVisible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&!el.getAttribute('formaction')&&!el.getAttribute('form')&&/^(salvar|salvar alteracoes|atualizar orcamento|save|save changes|update budget)$/.test(norm(el.getAttribute('aria-label')||el.textContent)));
+    if(buttons.length!==1)throw Error('botão exclusivo de salvar orçamento não localizado');
+    const raw=String(field.value);
+    if(!/^\d+(?:\.\d{1,2})?$/.test(raw)||!Number.isSafeInteger(Math.round(Number(raw)*100)))throw Error('orçamento monetário inválido');
+    budgetDocumentNonce??=crypto.randomUUID();
+    return {field,button:buttons[0],accountId:identity.accountId,campaignRef,sourcePath:location.origin+location.pathname,documentNonce:budgetDocumentNonce,budgetCents:Math.round(Number(raw)*100)};
+  }
+  function budgetPublicContext(campaignRef){
+    const {field,button,...ctx}=campaignBudgetContext(campaignRef);return ctx;
+  }
+  async function applyCampaignBudget(grant){
+    let touched=false;
+    try{
+      const ctx=campaignBudgetContext(grant.campaignRef);
+      const same=c=>c.accountId===grant.accountId&&c.sourcePath===grant.sourcePath&&c.documentNonce===grant.documentNonce&&Date.parse(grant.expiresAt)>Date.now()&&document.visibilityState==='visible';
+      if(!same(ctx)||ctx.budgetCents!==grant.beforeCents||!Number.isSafeInteger(grant.targetCents)||grant.targetCents<=0||grant.targetCents>100000000||grant.beforeCents===grant.targetCents)throw Error('contexto ou orçamento mudou');
+      if(!window.confirm('Campanha '+grant.campaignRef+'\nOrçamento diário atual: R$ '+(grant.beforeCents/100).toFixed(2)+'\nNovo orçamento diário: R$ '+(grant.targetCents/100).toFixed(2)+'\nConfirma alterar e salvar agora?'))return {outcome:'CANCELLED',message:'cancelado antes de editar'};
+      const again=campaignBudgetContext(grant.campaignRef);
+      if(!same(again)||again.field!==ctx.field||again.button!==ctx.button||again.budgetCents!==grant.beforeCents)throw Error('contexto mudou antes da edição');
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+      if(!setter)throw Error('campo não oferece setter nativo');
+      touched=true;
+      setter.call(again.field,(grant.targetCents/100).toFixed(2));
+      again.field.dispatchEvent(new Event('input',{bubbles:true}));again.field.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(resolve=>setTimeout(resolve,300));
+      const ready=campaignBudgetContext(grant.campaignRef);
+      if(!same(ready)||ready.field!==again.field||ready.button!==again.button||ready.budgetCents!==grant.targetCents||!ready.field.checkValidity())throw Error('valor ou controle não permaneceu verificável; revise manualmente');
+      ready.button.click();
+      return {outcome:'NEEDS_VERIFICATION',message:'controle de salvar acionado; recarregue manualmente a página e verifique a campanha. Não repetir automaticamente.'};
+    }catch(error){return {outcome:touched?'NEEDS_VERIFICATION':'FAILED',message:String(error?.message||error).slice(0,1000)};}
+  }
+
   async function publishApprovedChange(message) {
     const { task, item, externalListingId } = message ?? {};
     if (task?.mode !== 'PUBLISH') throw new Error('tarefa não possui autorização de publicação');
@@ -591,6 +639,13 @@
         authorizedAreaLinks: visibleAuthorizedAreaLinks(),
       });
       return false;
+    }
+    if(message?.type==='MI_CAMPAIGN_BUDGET_CONTEXT'){
+      try{sendResponse({ok:true,...budgetPublicContext(message.campaignRef)});}catch(error){sendResponse({ok:false,error:String(error?.message||error)});}
+      return false;
+    }
+    if(message?.type==='MI_CAMPAIGN_BUDGET_APPLY'){
+      applyCampaignBudget(message.grant).then(sendResponse).catch(error=>sendResponse({outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)}));return true;
     }
     if (message?.type === 'MI_TASK_CONTEXT') {
       const current = currentPageKind();
