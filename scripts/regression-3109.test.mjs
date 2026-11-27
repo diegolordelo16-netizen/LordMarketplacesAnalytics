@@ -310,3 +310,22 @@ test('executivo usa os mesmos filtros em KPIs, histórico e diagnóstico sem mis
   assert.equal(calls.some(c=>c.method.startsWith('finance.realized.')),false);
   assert.ok(html.includes('Diagnósticos automáticos'));assert.ok(html.includes('Aplicar filtros'));
 });
+
+test('cadastro financeiro exige evidência e todos os valores explícitos, inclusive zero',()=>{
+  const ctx=vm.createContext({Date,Number,Math});
+  vm.runInContext(dashboard.slice(dashboard.indexOf('const REALIZED_FIELDS='),dashboard.indexOf('async function viewFinance()')),ctx);
+  const fields=vm.runInContext('REALIZED_FIELDS',ctx);
+  const inputs={'rp-from':'2026-10-01','rp-to':'2026-10-31','rp-evidence':'Relatório conciliado','rp-listing':''};
+  for(const [key] of fields)inputs['rp-'+key]='0';
+  inputs['rp-netRevenueCents']='123,45';
+  ctx.inputs=inputs;
+  const payload=()=>vm.runInContext("realizedPayload(id=>inputs[id],'store-a')",ctx);
+  assert.equal(payload().netRevenueCents,12345);
+  assert.equal(payload().productCostCents,0);
+  assert.equal(payload().sourceClass,'F_USER_INPUT');
+  inputs['rp-productCostCents']='';
+  assert.throws(payload,/Informe Custo/);
+  inputs['rp-productCostCents']='0';
+  inputs['rp-from']='2026-02-30';
+  assert.throws(payload,/período válido/);
+});
