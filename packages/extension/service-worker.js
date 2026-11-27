@@ -1244,6 +1244,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const result=await callService(message.method==='learning.observe'?'navigation.observe':message.method==='learning.list'?'navigation.list':'navigation.clear',message.method==='learning.observe'?{...base,route:ctx.route,pageKind:ctx.pageKind,...(typeof requested.fromRoute==='string'?{fromRoute:requested.fromRoute}:{}),...(actionKind?{actionKind}:{})}:base);
         sendResponse(result);return;
       }
+      if(['campaign.browser.apply','campaign.browser.verify'].includes(message.method)){
+        const input=message.payload??{};
+        if(typeof input.proposalId!=='string'||typeof input.campaignRef!=='string'||input.confirmed!==true)throw Error('proposta, campanha e confirmação explícitas necessárias');
+        const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+        if(!tab?.id||marketplaceOf(tab.url)!=='mercado_livre')throw Error('abra a publicidade do Mercado Livre');
+        const info=await chrome.tabs.sendMessage(tab.id,{type:'MI_CAMPAIGN_BUDGET_CONTEXT',campaignRef:input.campaignRef});
+        if(!info?.ok)throw Error(info?.error||'contexto não reconhecido');
+        const {ok,...ctx}=info;
+        const payload={...ctx,proposalId:input.proposalId};
+        if(message.method==='campaign.browser.verify'){sendResponse(await callService('campaign.budget.verify',payload));return;}
+        const claim=await callService('campaign.budget.claim',{...payload,confirmed:true});
+        if(!claim?.ok||!claim.result){sendResponse(claim);return;}
+        const grant=claim.result;
+        let result;
+        try{
+          const current=await chrome.tabs.get(tab.id);
+          if(!current.active||current.url!==tab.url)throw Error('aba mudou após autorização');
+          result=await chrome.tabs.sendMessage(tab.id,{type:'MI_CAMPAIGN_BUDGET_APPLY',grant});
+        }catch(error){result={outcome:'NEEDS_VERIFICATION',message:String(error?.message||error)};}
+        const outcome=['FAILED','CANCELLED','NEEDS_VERIFICATION'].includes(result?.outcome)?result.outcome:'NEEDS_VERIFICATION';
+        const recorded=await callService('campaign.budget.result',{id:grant.id,token:grant.token,outcome,message:String(result?.message||'resultado desconhecido; não repetir').slice(0,1000)});
+        sendResponse(recorded);return;
+      }
       if (message.method === 'capture.activeTab') {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tab?.id) throw new Error('nenhuma aba ativa');
