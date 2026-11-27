@@ -38,6 +38,10 @@
       <label class="field-label" for="comp-account">Loja</label><select id="comp-account"></select>
       <label class="field-label" for="comp-product">Produto próprio</label><select id="comp-product"></select>
       <button id="comp-refresh">Atualizar lojas e produtos</button>
+      <button id="comp-amazon-permission">Autorizar leitura pública Amazon</button>
+      <label class="field-label" for="comp-kind">Critério do plano</label><select id="comp-kind"><option value="TITLE">Título</option><option value="BRAND_MODEL">Marca/modelo</option><option value="SKU">SKU</option><option value="ATTRIBUTES">Atributos</option></select>
+      <label><input id="comp-ml" type="checkbox" checked> Mercado Livre</label><label><input id="comp-shopee" type="checkbox"> Shopee</label><label><input id="comp-amazon" type="checkbox"> Amazon</label>
+      <button id="comp-plan">Executar plano de busca (até 3 abas)</button>
       <button id="comp-capture">Capturar resultados visíveis</button>
       <p class="hint" id="comp-out" role="status">Nenhuma captura solicitada.</p>
     </section>

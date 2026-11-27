@@ -81,6 +81,9 @@ describe('Plano de busca competitiva',()=>{
     expect((await call('competitor.capturePublicSearch',{...capture,candidates:[{...capture.candidates[0],url:'https://wrong.com/dp/B012345678'}]})).ok).toBe(false);
     expect((await call('competitor.capturePublicSearch',capture)).result).toMatchObject({observedCards:1,coverageVerified:false});
     expect(db.row('SELECT observed_order,price_cents,sponsored FROM competitor_public_search_observations WHERE account_id=?',accountId)).toMatchObject({observed_order:1,price_cents:29900,sponsored:null});
+    const relation=db.row<{id:string}>('SELECT id FROM competitor_relations WHERE own_product_id=?',id)!;
+    expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId})).result).toMatchObject({publicObservations:[{observed_order:1,price_cents:29900}]});
+    expect((await call('competitor.monitoring.history',{relationId:relation.id,accountId:other})).ok).toBe(false);
   });
 });
 describe('Pós-venda lexical por conta',()=>{

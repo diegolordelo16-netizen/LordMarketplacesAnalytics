@@ -584,7 +584,7 @@ async function compCapture(){
   try{
     const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
     if(tab?.url&&new URL(tab.url).hostname==='www.amazon.com.br'){
-      const granted=await chrome.permissions.request({origins:['https://www.amazon.com.br/*']});
+      const granted=await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']});
       if(!granted){out.textContent='Permissão Amazon pública não concedida.';return;}
     }
     const r=await call('competitor.captureCurrentPublicSearch',{accountId,ownProductId,confirmed:true});
@@ -594,6 +594,17 @@ async function compCapture(){
 }
 document.addEventListener('DOMContentLoaded', async () => {
   $('comp-refresh').addEventListener('click',()=>void compAccounts());
+  $('comp-amazon-permission').addEventListener('click',()=>{void chrome.permissions.request({origins:['https://www.amazon.com.br/*']}).then(ok=>$('comp-out').textContent=ok?'Leitura pública Amazon autorizada.':'Permissão não concedida.').catch(e=>$('comp-out').textContent=String(e?.message||e));});
+  $('comp-plan').addEventListener('click',async()=>{
+    const accountId=$('comp-account').value,ownProductId=$('comp-product').value,kind=$('comp-kind').value,out=$('comp-out'),button=$('comp-plan');
+    const marketplaces=[['comp-ml','mercado_livre'],['comp-shopee','shopee'],['comp-amazon','amazon']].filter(([id])=>$(id).checked).map(([,value])=>value);
+    if(!accountId||!ownProductId||!marketplaces.length){out.textContent='Selecione loja, produto e marketplace.';return;}
+    if(!confirm('Abrir até três buscas públicas em abas temporárias e registrar somente cartões reconhecidos?'))return;
+    if(marketplaces.includes('amazon')&&!await chrome.permissions.contains({origins:['https://www.amazon.com.br/*']})){out.textContent='Autorize leitura pública Amazon antes de executar.';return;}
+    button.disabled=true;out.textContent='Lendo buscas públicas autorizadas…';
+    try{const r=await call('competitor.executePublicPlan',{accountId,ownProductId,kind,marketplaces,confirmed:true});out.textContent=r?.ok?JSON.stringify(r.result.outcomes):r?.error?.message||'Busca não concluída.';}
+    finally{button.disabled=false;}
+  });
   $('comp-account').addEventListener('change',()=>void compProducts());
   $('comp-capture').addEventListener('click',()=>void compCapture());
   void compAccounts();

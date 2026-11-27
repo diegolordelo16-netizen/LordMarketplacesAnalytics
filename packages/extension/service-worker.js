@@ -1316,7 +1316,7 @@ function collectPublicCompetitorCards(){
     page.hostname==='shopee.com.br'&&page.pathname==='/search'&&page.searchParams.has('keyword')?'shopee':
     page.hostname==='www.amazon.com.br'&&page.pathname==='/s'&&page.searchParams.has('k')?'amazon':null:null;
   if(!mp)return {error:'Abra uma busca pública reconhecida.'};
-  const visible=el=>Boolean(el&&el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none');
+  const visible=el=>Boolean(el&&el.getClientRects().length&&window.getComputedStyle(el).visibility!=='hidden'&&window.getComputedStyle(el).display!=='none');
   const selector=mp==='mercado_livre'?'.ui-search-layout__item':mp==='shopee'?'.shopee-search-item-result__item, [data-sqe="item"]':'[data-component-type="s-search-result"][data-asin]';
   const cards=[...document.querySelectorAll(selector)].filter(visible),seen=new Set(),candidates=[];
   const text=el=>visible(el)?String(el.innerText||el.textContent||'').trim():'';
@@ -1344,7 +1344,7 @@ function collectPublicCompetitorCards(){
       const id=mp==='mercado_livre'&&raw?'MLB'+raw:raw;
       if(!id||seen.has(id)||(mp==='amazon'&&card.getAttribute('data-asin')!==id))continue;
       seen.add(id);url.search='';url.hash='';
-      const sponsored=/\b(patrocinado|patrocinada|sponsored)\b/i.test(text(card))?true:null;
+      const adLabel=[...card.querySelectorAll('span,small')].some(el=>/^(patrocinad[oa]|sponsored)$/i.test(text(el)));const sponsored=adLabel?true:null;
       candidates.push({externalId:id,title,url:url.href,priceCents:getPrice(card),sponsored,observedOrder:candidates.length+1});
       break;
     }
@@ -1365,6 +1365,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   void (async () => {
     try {
+      if(message.method==='competitor.executePublicPlan'){
+        const input=message.payload??{};
+        if(input.confirmed!==true||!Array.isArray(input.marketplaces)||input.marketplaces.length<1||input.marketplaces.length>3||!['TITLE','BRAND_MODEL','SKU','ATTRIBUTES'].includes(input.kind))throw Error('Confirme o critério e os marketplaces.');
+        const plan=await callService('competitor.searchPlan',{accountId:input.accountId,ownProductId:input.ownProductId,marketplaces:input.marketplaces});
+        if(!plan?.ok)throw Error(plan?.error?.message||'Plano indisponível.');
+        const links=(plan.result?.links??[]).filter(row=>row.kind===input.kind).slice(0,3),outcomes=[];
+        for(const row of links){
+          let temporary;
+          try{
+            const url=new URL(row.url),valid=url.protocol==='https:'&&!url.port&&!url.username&&!url.password&&['lista.mercadolivre.com.br','shopee.com.br','www.amazon.com.br'].includes(url.hostname);
+            if(!valid)throw Error('URL pública fora do escopo.');
+            temporary=await chrome.tabs.create({url:url.href,active:false});
+            await waitForTabComplete(temporary.id,url.href,10000);
+            let captured;
+            for(let attempt=0;attempt<4;attempt++){
+              const results=await chrome.scripting.executeScript({target:{tabId:temporary.id},func:collectPublicCompetitorCards});
+              captured=results[0]?.result;
+              if(captured?.error||captured?.candidates?.length)break;
+              await new Promise(resolve=>setTimeout(resolve,700));
+            }
+            const current=await chrome.tabs.get(temporary.id);
+            if(!captured||captured.error||!captured.candidates?.length||captured.marketplace!==row.marketplace||captured.sourceUrl!==current.url||current.url!==url.href)throw Error(captured?.error||'Página mudou ou não exibiu cartões reconhecidos.');
+            const saved=await callService('competitor.capturePublicSearch',{accountId:input.accountId,ownProductId:input.ownProductId,...captured});
+            if(!saved?.ok)throw Error(saved?.error?.message||'Persistência recusada.');
+            outcomes.push({marketplace:row.marketplace,status:'OBSERVED',observedCards:saved.result.observedCards});
+          }catch(error){outcomes.push({marketplace:row.marketplace,status:'NOT_VERIFIED',reason:String(error?.message||error)});}
+          finally{if(temporary?.id)await chrome.tabs.remove(temporary.id).catch(()=>{});}
+        }
+        sendResponse({ok:true,result:{outcomes,coverageVerified:false}});return;
+      }
       if(message.method==='competitor.captureCurrentPublicSearch'){
         const input=message.payload??{};
         if(input.confirmed!==true||typeof input.accountId!=='string'||typeof input.ownProductId!=='string')throw Error('Confirme a loja e produto.');

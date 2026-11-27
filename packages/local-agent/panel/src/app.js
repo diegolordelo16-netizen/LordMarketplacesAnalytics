@@ -1689,7 +1689,7 @@ const ACTIONS = {
     const out=document.querySelector(`[data-out="${CSS.escape(d.id)}"]`);
     if(!out)return;
     const [h,evidence]=await run(()=>Promise.all([
-      api('competitor.monitoring.history',{relationId:d.id}),
+      api('competitor.monitoring.history',{relationId:d.id,accountId}),
       api('competitor.evidence.compare',{relationId:d.id,accountId}).catch(()=>null),
     ]))||[];
     if(!h||generation!==viewRenderSequence||accountId!==state.accountId||productId!==state.ownProductId||
@@ -1714,6 +1714,7 @@ const ACTIONS = {
       ${table(['Quando', 'Preço', 'Posição', 'Nota', 'Avaliações'],
         pts.map((p) => `<tr><td>${dt(p.captured_at)}</td><td>${brl(p.price_cents)}</td>
           <td>${p.position ?? '—'}</td><td>${p.rating ?? '—'}</td><td>${p.reviews ?? '—'}</td></tr>`), 'Sem pontos coletados.')}
+      <h3>Resultados de busca pública observados</h3>${table(['Data','Marketplace','Ordem nos cartões reconhecidos','Preço','Patrocinado'],(h.publicObservations||[]).map(r=>`<tr><td>${dt(r.observed_at)}</td><td>${esc(r.marketplace)}</td><td>${num(r.observed_order)}</td><td>${brl(r.price_cents)}</td><td>${r.sponsored==null?'—':r.sponsored?'Sim':'Não'}</td></tr>`),'Nenhuma captura pública para este candidato.')}
       ${h.note ? `<div class="muted small">${esc(h.note)}</div>` : ''}`;
   },
   'rebuild-rules': async () => {

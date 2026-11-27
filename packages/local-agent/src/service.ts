@@ -2316,8 +2316,11 @@ export class LocalService {
     });
 
     this.register('competitor.monitoring.history', (payload) => {
-      const i = z.object({ relationId: z.string(), limit: z.number().int().min(1).max(1000).optional() }).parse(payload);
-      return this.competitors.monitoring(i);
+      const i = z.object({ relationId: z.string(), accountId:z.string().optional(),limit: z.number().int().min(1).max(1000).optional() }).parse(payload);
+      const relation=db.row<{candidate_id:string;account_id:string}>('SELECT r.candidate_id,o.account_id FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id WHERE r.id=? AND (? IS NULL OR o.account_id=?)',i.relationId,i.accountId??null,i.accountId??null);
+      if(!relation)throw Error('relação não pertence à conta');
+      const publicObservations=db.rows('SELECT observed_at,marketplace,source_url,observed_order,price_cents,sponsored,title FROM competitor_public_search_observations WHERE account_id=? AND candidate_id=? ORDER BY observed_at DESC,id DESC LIMIT ?',relation.account_id,relation.candidate_id,i.limit??100);
+      return {...this.competitors.monitoring(i),publicObservations};
     });
 
     this.register('competitor.stats', (payload) => {
