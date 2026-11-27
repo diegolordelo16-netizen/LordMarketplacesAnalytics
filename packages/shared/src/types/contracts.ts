@@ -209,6 +209,7 @@ export const IPC_METHODS = [
   'offer.variation.delete',
   'inventory.dashboard',
   'ads.dashboard',
+  'ads.reconcile',
   'competitor.evidence.record',
   'competitor.evidence.compare',
   'campaign.change.prepare',
