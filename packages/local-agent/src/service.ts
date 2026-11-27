@@ -5,7 +5,8 @@
 import { parseCsvText, parseXlsxBase64 } from './importers/tabular';
 import { parsePdfBase64 } from './importers/pdf';
 import { googleAdsTerm } from './connectors/dataforseo';
-import { googleReadTarget, verifyGoogleRead } from './connectors/google';
+import { googleReadTarget } from './connectors/google';
+import { supportedId, providers, validateConfig, validateSecrets, boundedRequest, refreshAccess, readReport, verifyMarketplace, ProviderError, windowDays, type Secrets, type RequestFn } from './connectors/sync';
 import { seoResearchInput } from './connectors/openseo';
 import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/external-seo';
 import { customerInsights, compareCatalogText } from './competitive/customer-insights';
@@ -286,6 +287,9 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'report.schedule.run.get': 'view_reports',
   'connector.configure': 'manage_connectors',
   'connector.test': 'manage_connectors',
+  'connector.sync': 'manage_connectors',
+  'connector.sync.history': 'view_reports',
+  'connector.sync.get': 'view_reports',
   'task.verifySaved': 'execute_task',
   'task.rollbackPlan': 'execute_task',
   'backup.create': 'manage_backups',
@@ -304,6 +308,7 @@ export class LocalService {
   private readonly competitors: CompetitorService;
 
   private scheduledWorkRunning = false;
+  private readonly connectorBusy = new Set<string>();
   private readonly externalSeo:ExternalSeoWorkspace;
 
   constructor(private readonly deps: ServiceDeps) {
@@ -3825,10 +3830,17 @@ export class LocalService {
     this.register('connector.configure', (payload, auth) => {
       const i=z.object({connectorId:z.string().min(1).max(160),provider:z.enum(['GOOGLE_TRENDS','GOOGLE_ANALYTICS4','GOOGLE_SEARCH_CONSOLE','SEO_SERVICE','MARKETPLACE_SERVICE','GENERIC']),publicConfig:z.record(z.string(), z.unknown()).default({}),secrets:z.record(z.string(), z.string().min(1).max(5000)).default({})}).parse(payload ?? {});
       const connector=db.row<{id:string;requires_credentials:number}>('SELECT id,requires_credentials FROM connector_registry WHERE id=?',i.connectorId);if(!connector)throw new Error('conector não cadastrado');
-      const target = googleReadTarget(i.connectorId, i.publicConfig);
-      if (target && (i.provider !== target.provider || Object.keys(i.secrets).length !== 1 || !/^[A-Za-z0-9._~+/=-]+$/.test(i.secrets.accessToken ?? ''))) {
-        throw new Error('informe o token OAuth de acesso do provedor selecionado');
-      }
+      if(supportedId(i.connectorId)){
+        const cfg=validateConfig(i.connectorId,i.publicConfig);
+        validateSecrets(i.connectorId,i.secrets);
+        if(i.provider!==providers[i.connectorId])throw Error('provedor incompatível');
+        if(cfg.accountId){
+          const account=db.row<{marketplace:string}>('SELECT marketplace FROM accounts WHERE id=? AND is_active=1',cfg.accountId);
+          const market:Record<string,string>={mercado_livre_official_api:'mercado_livre',shopee_official_api:'shopee',amazon_sp_api:'amazon'};
+          if(!account||(market[i.connectorId]&&market[i.connectorId]!==account.marketplace))throw Error('conta ativa incompatível com o provedor');
+        }
+      }else if(Object.keys(i.secrets).length)throw Error('adaptador não suportado; não armazene credenciais sem uso');
+      if(this.connectorBusy.has(i.connectorId))throw Error('conector ocupado');
       const configJson = JSON.stringify(i.publicConfig);
       if (Buffer.byteLength(configJson, 'utf8') > 8000) throw new Error('configuração pública excede 8 KB');
       for (const key of Object.keys(i.secrets)) {
@@ -3852,30 +3864,108 @@ export class LocalService {
       return {ok:true,connectorId:i.connectorId,status:'CONFIGURADO_NAO_TESTADO',secretCount:Object.keys(i.secrets).length,secretValuesReturned:false};
     });
 
-    this.register('connector.test', async (payload, auth) => {
-      const i = z.object({ connectorId: z.string().min(1).max(160) }).parse(payload ?? {});
-      const cfg = db.row<{ provider: string; public_config_json: string; secret_namespace: string; updated_at: string }>(
-        'SELECT provider,public_config_json,secret_namespace,updated_at FROM connector_runtime_config WHERE connector_id=?',i.connectorId);
-      if (!cfg) throw new Error('conector ainda não foi configurado');
-      const target = googleReadTarget(i.connectorId, parseJsonObject(cfg.public_config_json));
-      const tokenKey = `${cfg.secret_namespace}accessToken`;
-      const token = target ? this.deps.secrets.get(tokenKey) : null;
-      const result = target && token
-        ? { ...await verifyGoogleRead(target, token), tested: true }
-        : { ok: false, tested: false, status: target ? 'CREDENCIAL_AUSENTE' : 'DEPENDENCY_NOT_IMPLEMENTED',
-            message: target ? 'Configure um token OAuth para esta propriedade.' : 'O provedor ainda está no catálogo de integrações.' };
-      const status = result.ok ? 'CONECTADO' : 'CONFIGURADO_NAO_TESTADO';
-      db.transaction(() => {
-        if (target && this.deps.secrets.get(tokenKey) !== token) throw new Error('a configuração mudou durante o teste');
-        const updated = db.db.prepare(`UPDATE connector_runtime_config SET status=?,last_test_at=?,last_test_status=?,last_test_message=?
-          WHERE connector_id=? AND updated_at=? AND public_config_json=?`)
-          .run(status,nowIso(),result.status,result.message,i.connectorId,cfg.updated_at,cfg.public_config_json);
-        if (!updated.changes) throw new Error('a configuração mudou durante o teste');
-        db.db.prepare('UPDATE connector_registry SET status=? WHERE id=?').run(status,i.connectorId);
-        if (!result.ok) db.db.prepare('UPDATE connector_states SET enabled=0 WHERE connector_id=?').run(i.connectorId);
-        this.audit(auth,'CONNECTOR_TEST','connector',i.connectorId,result.ok ? 'OK' : 'BLOCKED',result.message);
-      });
-      return { ...result, provider: cfg.provider };
+    const connectorOperation=async (connectorId:string,mode:'TEST'|'SYNC',accountId?:string,from?:string,to?:string)=>{
+      if(!supportedId(connectorId))return {ok:false,tested:false,status:'DEPENDENCY_NOT_IMPLEMENTED',message:'Provedor sem adaptador oficial neste build; use importação manual.'};
+      const id=connectorId;
+      if(this.connectorBusy.has(id))throw Error('conector ocupado');
+      this.connectorBusy.add(id);
+      try{
+        const row=db.row<{provider:string;public_config_json:string;secret_namespace:string;updated_at:string;status:string;enabled:number}>('SELECT c.*,COALESCE(s.enabled,0) enabled FROM connector_runtime_config c LEFT JOIN connector_states s ON s.connector_id=c.connector_id WHERE c.connector_id=?',id);
+        if(!row)throw Error('conector ainda não foi configurado');
+        const cfg=validateConfig(id,JSON.parse(row.public_config_json));
+        if(cfg.accountId&&!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',cfg.accountId))throw Error('conta vinculada não está ativa');
+        if(mode==='SYNC'&&(!accountId||cfg.accountId!==accountId||!row.enabled||row.status!=='CONECTADO'))throw Error('sincronização exige conector testado, habilitado e vinculado à conta selecionada');
+        const keys=['accessToken','refreshToken','clientId','clientSecret','partnerKey'] as const;
+        let secrets:Secrets=Object.fromEntries(keys.flatMap(key=>{const v=this.deps.secrets.get(row.secret_namespace+key);return v?[[key,v]]:[];}));
+        validateSecrets(id,secrets);
+        const scopeKey=createHash('sha256').update(row.public_config_json).digest('hex');
+        const runId=randomUUID(),started=nowIso();
+        let requests=0;
+        const request:RequestFn=async(url,init)=>{
+          if(!db.row('SELECT connector_id FROM connector_runtime_config WHERE connector_id=? AND updated_at=? AND public_config_json=?',id,row.updated_at,row.public_config_json))throw new ProviderError('CONFIGURACAO_ALTERADA');
+          db.transaction(()=>{
+            const cutoff=new Date(Date.now()-86400000).toISOString();
+            const count=db.row<{n:number}>('SELECT COUNT(*) n FROM connector_request_log WHERE connector_id=? AND requested_at>=?',id,cutoff)?.n??0;
+            if(count>=30||requests>=5)throw new ProviderError('LIMITE_LOCAL');
+            db.db.prepare('INSERT INTO connector_request_log(id,connector_id,requested_at,operation) VALUES(?,?,?,?)').run(randomUUID(),id,nowIso(),mode);
+          });
+          requests++;
+          return boundedRequest(url,init);
+        };
+        const refresh=async()=>{
+          const before=secrets;
+          const updated=await refreshAccess(id,cfg,before,request);
+          db.transaction(()=>{
+            if(!db.row('SELECT connector_id FROM connector_runtime_config WHERE connector_id=? AND updated_at=? AND public_config_json=?',id,row.updated_at,row.public_config_json)||keys.some(k=>this.deps.secrets.get(row.secret_namespace+k)!==(before[k]??null)))throw new ProviderError('CONFIGURACAO_ALTERADA');
+            this.deps.secrets.set(row.secret_namespace+'accessToken',updated.accessToken!);
+            if(updated.refreshToken)this.deps.secrets.set(row.secret_namespace+'refreshToken',updated.refreshToken);
+          });secrets=updated;
+        };
+        const isGoogle=id==='google_analytics4'||id==='google_search_console';
+        let startDay=from??null,endDay=to??null;
+        if(mode==='SYNC'&&isGoogle){
+          endDay=to??new Date(Date.now()-(id==='google_search_console'?4:1)*86400000).toISOString().slice(0,10);
+          const last=db.row<{period_end:string}>("SELECT period_end FROM connector_sync_runs WHERE connector_id=? AND account_id=? AND scope_key=? AND status='OK' AND partial=0 ORDER BY period_end DESC LIMIT 1",id,accountId!,scopeKey)?.period_end;
+          const lower=new Date(Date.parse(endDay)-29*86400000).toISOString().slice(0,10);
+          startDay=from??(last?[lower,new Date(Date.parse(last)-2*86400000).toISOString().slice(0,10)].sort().at(-1)!:lower);
+          if(startDay>endDay)startDay=endDay;
+          windowDays(startDay,endDay);
+        }
+        let status='CONECTADO',message='Leitura oficial verificada',report:Awaited<ReturnType<typeof readReport>>|null=null;
+        try{
+          if(!secrets.accessToken)await refresh();
+          const execute=async()=>{
+            if(mode==='SYNC'){report=await readReport(id,cfg,secrets,startDay??'',endDay??'',request);return;}
+            if(isGoogle){
+              const target=googleReadTarget(id,cfg)!;
+              const body=await request(target.url,{headers:{authorization:'Bearer '+secrets.accessToken,accept:'application/json'}});
+              if(body[target.field]!==target.expected)throw new ProviderError('RESPOSTA_INESPERADA');
+            }else await verifyMarketplace(id,cfg,secrets,request);
+          };
+          try{await execute();}catch(e){if(e instanceof ProviderError&&e.status==='HTTP_401'&&secrets.refreshToken){await refresh();await execute();}else throw e;}
+        }catch(e){status=e instanceof ProviderError?e.status:'FALHA_DE_CONEXAO';message='Leitura não concluída: '+status;report=null;}
+        const ok=status==='CONECTADO';
+        db.transaction(()=>{
+          if(!db.row('SELECT connector_id FROM connector_runtime_config WHERE connector_id=? AND updated_at=? AND public_config_json=?',id,row.updated_at,row.public_config_json))throw Error('configuração mudou durante leitura');
+          if(mode==='TEST'||(!ok&&['HTTP_401','HTTP_403','CREDENCIAL_EXPIRADA','REFRESH_RECUSADO','IDENTIDADE_DIVERGENTE','HTTP_400'].includes(status))){
+            const state=ok?'CONECTADO':'CONFIGURADO_NAO_TESTADO';
+            db.db.prepare('UPDATE connector_runtime_config SET status=?,last_test_at=?,last_test_status=?,last_test_message=? WHERE connector_id=?').run(state,nowIso(),status,message,id);
+            db.db.prepare('UPDATE connector_registry SET status=? WHERE id=?').run(state,id);
+            if(!ok)db.db.prepare('UPDATE connector_states SET enabled=0 WHERE connector_id=?').run(id);
+          }
+          if(mode==='SYNC'){
+            const result=report as Awaited<ReturnType<typeof readReport>>|null;
+            if(result&&new Set(result.rows.map(x=>x.key)).size!==result.rows.length)throw Error('resposta contém chaves duplicadas');
+            db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(runId,id,accountId!,scopeKey,result?.kind??'UNAVAILABLE',startDay,endDay,started,nowIso(),ok?'OK':status,Number(result?.partial??false),result?.rows.length??0,requests,result?.note??message);
+            const insert=db.db.prepare('INSERT INTO connector_sync_rows(run_id,row_key,reference_date,values_json) VALUES(?,?,?,?)');
+            for(const item of result?.rows??[])insert.run(runId,item.key,item.date??null,JSON.stringify(item.values));
+          }
+        });
+        return {ok,tested:mode==='TEST',status,message,provider:row.provider,runId:mode==='SYNC'?runId:null,requests,periodStart:startDay,periodEnd:endDay,rowCount:(report as Awaited<ReturnType<typeof readReport>>|null)?.rows.length??0,partial:(report as Awaited<ReturnType<typeof readReport>>|null)?.partial??false};
+      }finally{this.connectorBusy.delete(id);}
+    };
+    this.register('connector.test',async(payload,auth)=>{
+      const i=z.object({connectorId:z.string().min(1).max(160)}).strict().parse(payload);
+      const result=await connectorOperation(i.connectorId,'TEST');
+      this.audit(auth,'CONNECTOR_TEST','connector',i.connectorId,result.ok?'OK':'BLOCKED',result.message);
+      return result;
+    });
+    this.register('connector.sync',async(payload,auth)=>{
+      const i=z.object({connectorId:z.string().min(1).max(160),accountId:z.string().min(1),from:z.string().optional(),to:z.string().optional(),confirmedExternal:z.literal(true)}).strict().parse(payload);
+      const result=await connectorOperation(i.connectorId,'SYNC',i.accountId,i.from,i.to);
+      this.audit(auth,'CONNECTOR_SYNC','connector',i.connectorId,result.ok?'OK':'FAILED',result.message);
+      return result;
+    });
+    this.register('connector.sync.history',payload=>{
+      const i=z.object({accountId:z.string().min(1),connectorId:z.string().optional(),limit:z.number().int().min(1).max(100).default(30)}).parse(payload);
+      return db.rows('SELECT * FROM connector_sync_runs WHERE account_id=? AND (? IS NULL OR connector_id=?) ORDER BY finished_at DESC,id DESC LIMIT ?',i.accountId,i.connectorId??null,i.connectorId??null,i.limit);
+    });
+    this.register('connector.sync.get',payload=>{
+      const i=z.object({accountId:z.string().min(1),runId:z.string().min(1)}).strict().parse(payload);
+      const run=db.row('SELECT * FROM connector_sync_runs WHERE id=? AND account_id=?',i.runId,i.accountId);
+      if(!run)throw Error('sincronização não pertence à conta');
+      const rows=db.rows<{row_key:string;reference_date:string|null;values_json:string}>('SELECT * FROM connector_sync_rows WHERE run_id=? ORDER BY row_key LIMIT 1000',i.runId);
+      return {run,rows:rows.map(row=>({key:row.row_key,date:row.reference_date,values:JSON.parse(row.values_json)})),note:'Fonte externa, não somar com métricas do marketplace.'};
     });
 
     this.register('task.verifySaved', (payload, auth) => {
@@ -4201,7 +4291,10 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
     // ------------------------------------------------------------ conectores, previsão, alertas
     this.register('connector.registry', () => db.rows<Record<string, unknown>>(
       `SELECT c.*, COALESCE(s.enabled, CASE WHEN c.status = 'CONECTADO' THEN 1 ELSE 0 END) AS enabled, cfg.last_test_at,cfg.last_test_message,
-              CASE WHEN cfg.connector_id IS NULL THEN 0 ELSE 1 END AS configured
+              CASE WHEN cfg.connector_id IS NULL THEN 0 ELSE 1 END AS configured,
+              (SELECT MAX(finished_at) FROM connector_sync_runs r WHERE r.connector_id=c.id AND r.status='OK') last_sync_at,
+              (SELECT COUNT(*) FROM connector_request_log q WHERE q.connector_id=c.id AND q.requested_at>=datetime('now','-1 day')) requests_24h,
+              json_extract(cfg.public_config_json,'$.accountId') bound_account_id
          FROM connector_registry c LEFT JOIN connector_states s ON s.connector_id = c.id
          LEFT JOIN connector_runtime_config cfg ON cfg.connector_id=c.id ORDER BY c.category, c.label`,
     ));
@@ -4209,6 +4302,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       const i = z.object({ connectorId: z.string().min(1), enabled: z.boolean() }).parse(payload);
       const connector = db.row<{ id: string; requires_credentials: number; status: string }>('SELECT id,requires_credentials,status FROM connector_registry WHERE id=?', i.connectorId);
       if (!connector) throw new Error('conector não encontrado');
+      if(this.connectorBusy.has(i.connectorId))throw Error('conector ocupado');
       if (i.enabled && connector.requires_credentials === 1 && connector.status !== 'CONECTADO') {
         throw new Error('conector não pode ser habilitado: credenciais e teste de conexão ainda não foram configurados. O catálogo não representa uma integração ativa.');
       }
@@ -4224,6 +4318,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       );
       if (!connector) throw new Error('conector não encontrado');
 
+      if(this.connectorBusy.has(i.connectorId))throw Error('conector ocupado; aguarde o término da leitura');
       let secretsRemoved = 0;
       let metadataRemoved = 0;
       db.transaction(() => {
@@ -4344,7 +4439,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       const batch: Array<{ rowNumber: number; listingId: string; capturedAt: string; metrics: Record<string, number> }> = [];
       const duplicates = new Set<string>();
       const parseNumber = (raw: unknown, label: string): number => {
-        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+        if (typeof raw === 'number' && Number.isFinite(raw) && raw>=0) return raw;
         if (typeof raw !== 'string') throw new Error(`${label}: valor numérico inválido`);
         let normalized = raw.trim().replace(/[R$\s]/g, '').replace(/%$/, '');
         if (!normalized) throw new Error(`${label}: valor numérico vazio`);
@@ -4368,7 +4463,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
         if (i.mapping.capturedAt) {
           const rawDate = String(row[i.mapping.capturedAt] ?? '').trim();
           const parsedDate = new Date(rawDate);
-          if (!rawDate || !Number.isFinite(parsedDate.getTime())) throw new Error(`linha ${item.row_number}: data inválida`);
+          if (!rawDate || !Number.isFinite(parsedDate.getTime()) || parsedDate.getTime()>Date.now()) throw new Error(`linha ${item.row_number}: data inválida`);
           capturedAt = parsedDate.toISOString();
         }
         const key = `${listing.id}|${capturedAt}`;

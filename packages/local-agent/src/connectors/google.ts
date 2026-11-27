@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export function googleReadTarget(id: string, config: unknown) {
   if (id === 'google_analytics4') {
-    const data = z.object({ propertyId: z.string().regex(/^\d{1,20}$/) }).strict().parse(config);
+    const data = z.object({ propertyId: z.string().regex(/^\d{1,20}$/), accountId:z.string().optional() }).strict().parse(config);
     const name = `properties/${data.propertyId}/metadata`;
     return { provider: 'GOOGLE_ANALYTICS4', url: `https://analyticsdata.googleapis.com/v1beta/${name}`, field: 'name', expected: name };
   }
@@ -13,7 +13,7 @@ export function googleReadTarget(id: string, config: unknown) {
         const url = new URL(value);
         return /^https?:$/.test(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
       } catch { return false; }
-    }, 'informe uma propriedade HTTPS/HTTP ou sc-domain do Search Console') }).strict().parse(config);
+    }, 'informe uma propriedade HTTPS/HTTP ou sc-domain do Search Console'), accountId:z.string().optional() }).strict().parse(config);
     return { provider: 'GOOGLE_SEARCH_CONSOLE', url: `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(data.siteUrl)}`, field: 'siteUrl', expected: data.siteUrl };
   }
   return null;
