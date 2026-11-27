@@ -484,7 +484,66 @@ chrome.runtime.onMessage.addListener((message) => {
   out.textContent = `${message.message || 'Coleta em andamento.'} ${total ? `(${current}/${total})` : ''} ${label}${message.pagesScanned !== undefined ? `· páginas ${message.pagesSucceeded ?? 0}/${message.pagesScanned}` : ''}${message.currentPage ? ` · atual ${message.currentPage}` : ''}${message.pendingPages ? ` · pendentes ${message.pendingPages}` : ''}`.trim();
 });
 
+let learningSession=null, learningTimer=null, learningBusy=false;
+function stopLearning(message='Aprendizado desligado.'){
+  learningSession=null;clearInterval(learningTimer);learningTimer=null;
+  $('learning-start').disabled=false;$('learning-stop').disabled=true;
+  $('learning-status').textContent=message;
+}
+async function learningTick(){
+  const session=learningSession;
+  if(!session||learningBusy)return;
+  learningBusy=true;
+  try{
+    const res=await call('learning.context');
+    const ctx=res?.result;
+    if(learningSession!==session)return;
+    if(!res?.ok||!ctx||ctx.tabId!==session.tabId||ctx.accountId!==session.accountId||ctx.origin!==session.origin){stopLearning('Aprendizado pausado: aba, loja ou área mudou.');return;}
+    if(ctx.route===session.lastRoute&&ctx.pageKind===session.lastKind)return;
+    const saved=await call('learning.observe',session);
+    if(learningSession!==session)return;
+    if(!saved?.ok||saved.result?.ok!==true){stopLearning('Aprendizado pausado: '+(saved?.error?.message??'rota não reconhecida'));return;}
+    session.lastRoute=ctx.route;session.lastKind=ctx.pageKind;
+    $('learning-status').textContent='Página demonstrada: '+ctx.pageKind+'. Continue navegando na mesma aba.';
+  }finally{learningBusy=false;}
+}
+async function learningAction(action){
+  if(learningBusy)return;
+  if(action==='start'){
+    if(learningSession)return;
+    if(!window.confirm('Registrar apenas rotas estruturais de leitura desta loja enquanto o painel estiver aberto?'))return;
+  }
+  if(action==='clear'&&!window.confirm('Apagar a memória de navegação desta loja e origem?'))return;
+  if(action!=='start'&&learningSession)stopLearning();
+  const res=await call('learning.context'),ctx=res?.result;
+  if(!res?.ok||!ctx){$('learning-status').textContent=res?.error?.message??'Abra uma área de vendedor reconhecida.';return;}
+  if(action==='start'){
+    learningSession={tabId:ctx.tabId,accountId:ctx.accountId,origin:ctx.origin,lastRoute:null,lastKind:null};
+    $('learning-start').disabled=true;$('learning-stop').disabled=false;
+    $('learning-status').textContent='Aprendizado ativo.';
+    learningTimer=setInterval(()=>void learningTick(),2500);
+    await learningTick();return;
+  }
+  const payload={tabId:ctx.tabId,accountId:ctx.accountId,origin:ctx.origin};
+  const out=await call('learning.'+action,payload);
+  if(!out?.ok){$('learning-status').textContent=out?.error?.message??'Operação recusada.';return;}
+  if(action==='list'){
+    const list=$('learning-routes');list.replaceChildren();
+    for(const route of Array.isArray(out.result)?out.result:[]){
+      const li=document.createElement('li');li.textContent=route.page_kind+' · '+route.route+' · '+route.observations+' demonstração(ões)';list.appendChild(li);
+    }
+    $('learning-status').textContent=list.children.length+' rotas conhecidas nesta loja.';
+  }else{
+    $('learning-routes').replaceChildren();
+    $('learning-status').textContent=action==='clear'?'Memória apagada.':'Página demonstrada e salva.';
+  }
+}
 document.addEventListener('DOMContentLoaded', async () => {
+  $('learning-start').addEventListener('click',()=>void learningAction('start'));
+  $('learning-stop').addEventListener('click',()=>stopLearning());
+  $('learning-observe').addEventListener('click',()=>void learningAction('observe'));
+  $('learning-list').addEventListener('click',()=>void learningAction('list'));
+  $('learning-clear').addEventListener('click',()=>void learningAction('clear'));
   $('capture').addEventListener('click', () => void capture());
   $('capture-pages').addEventListener('click', () => void capturePages());
   $('capture-areas').addEventListener('click', () => void captureAreas());
