@@ -205,6 +205,9 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'voc.items': 'view_reports',
   'finance.realized.upsert': 'manage_financial_limits',
   'finance.realized.list': 'view_reports',
+  'finance.profitability': 'view_reports',
+  'inventory.dashboard': 'view_reports',
+  'ads.dashboard': 'view_reports',
   'finance.realized.summary': 'view_reports',
   'competitor.evidence.record': 'manage_competitors',
   'competitor.evidence.compare': 'view_reports',
@@ -2630,6 +2633,88 @@ export class LocalService {
       const total = (field: string) => rows.reduce((sum, row) => sum + Number(row[field] ?? 0), 0);
       const realizedProfitCents = total('net_revenue_cents') - total('product_cost_cents') - total('packaging_cents') - total('shipping_cents') - total('marketplace_fees_cents') - total('taxes_cents') - total('ad_spend_cents') - total('refunds_cents') - total('return_logistics_cents') - total('cancellation_loss_cents') - total('other_costs_cents');
       return { accountId: i.accountId, records: rows.length, realizedProfitCents:rows.length&&!conflict?realizedProfitCents:null, netRevenueCents:rows.length&&!conflict?total('net_revenue_cents'):null, sourceClasses: [...new Set(rows.map((r) => String(r.source_class)))], confidence:conflict?'CONFLICTING_RECORDS':rows.length?'SOURCE_CLASS_DEPENDENT':'NO_DATA', missingVsEstimate: rows.length === 0, scope:!rows.length?'NONE':mixedScope?'MIXED':byEntity.has('ACCOUNT')?'ACCOUNT':'OBSERVED_LISTINGS', overlappingPeriods:overlap, mixedScope, coverageVerified:false };
+    });
+
+    // Explicit, closed source windows only. Never assume a capture date describes the sales window.
+    const observedWindow=(evidence:Record<string,unknown>)=>{
+      if(typeof evidence.filtersAndPeriod!=='string'||evidence.coverageWarnings)return null;
+      const entries=evidence.filtersAndPeriod.split('|').map(x=>x.split('='));
+      if(entries.some(x=>x.length!==2)||new Set(entries.map(x=>x[0])).size!==entries.length)return null;
+      const starts=entries.filter(([k])=>/^(start_date|date_from|data inicial|start date)$/.test(k??''));
+      const ends=entries.filter(([k])=>/^(end_date|date_to|data final|end date)$/.test(k??''));
+      const from=starts[0]?.[1],to=ends[0]?.[1];
+      const valid=(v:string|undefined)=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(Date.parse(v+'T00:00:00Z'))&&new Date(v+'T00:00:00Z').toISOString().slice(0,10)===v;
+      if(starts.length!==1||ends.length!==1||!valid(from)||!valid(to)||!from||!to||from>to||to+'T23:59:59.999Z'>=nowIso())return null;
+      const days=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1;
+      if(days<1||days>366)return null;
+      const filters=JSON.stringify(entries.filter(([k])=>!/^(start_date|date_from|data inicial|start date|end_date|date_to|data final|end date)$/.test(k??'')).sort((a,b)=>(a[0]??'').localeCompare(b[0]??'')));
+      return {from,to,days,filters};
+    };
+    const knownNumber=(o:Record<string,unknown>,key:string)=>typeof o[key]==='number'&&Number.isFinite(o[key])&&(o[key] as number)>=0?o[key] as number:null;
+    const operationAccount=(id:string)=>{
+      const account=db.row<{id:string;marketplace:string}>('SELECT id,marketplace FROM accounts WHERE id=? AND is_active=1 AND verified_by_user=1',id);
+      if(!account)throw new Error('conta ativa e verificada necessária');return account;
+    };
+    const profitFields=['net_revenue_cents','product_cost_cents','packaging_cents','shipping_cents','marketplace_fees_cents','taxes_cents','ad_spend_cents','refunds_cents','return_logistics_cents','cancellation_loss_cents','other_costs_cents'];
+    this.register('finance.profitability',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),periodStart:z.string().datetime(),periodEnd:z.string().datetime()}).strict().parse(payload);
+      operationAccount(i.accountId);
+      if(i.periodStart>i.periodEnd)throw new Error('intervalo inválido');
+      const rows=db.rows<Record<string,unknown>>(`SELECT r.*,l.title,l.external_id,l.sku_id,cp.id product_id,cp.name product_name FROM realized_profit_snapshots r JOIN listings l ON l.id=r.listing_id AND l.account_id=r.account_id LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=l.account_id LEFT JOIN catalog_products cp ON cp.id=s.catalog_product_id AND cp.account_id=l.account_id WHERE r.account_id=? AND r.period_start=? AND r.period_end=? ORDER BY r.listing_id,r.observed_at DESC,r.id`,i.accountId,i.periodStart,i.periodEnd);
+      const listings=db.rows<{id:string;title:string|null;external_id:string;sku_id:string|null;product_id:string|null;product_name:string|null}>(`SELECT l.id,l.title,l.external_id,l.sku_id,cp.id product_id,cp.name product_name FROM listings l LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=l.account_id LEFT JOIN catalog_products cp ON cp.id=s.catalog_product_id AND cp.account_id=l.account_id WHERE l.account_id=? ORDER BY l.id`,i.accountId);
+      const results=listings.map(l=>{
+        const matches=rows.filter(r=>r.listing_id===l.id),r=matches[0];
+        const valid=matches.length===1&&!!r&&profitFields.every(k=>knownNumber(r,k)!==null)&&Object.keys(parseJsonObject(String(r.evidence_json??''))).length>0;
+        const net=valid?knownNumber(r!,'net_revenue_cents'):null;
+        const profit=net===null?null:net-profitFields.slice(1).reduce((s,k)=>s+Number(r![k]),0);
+        return {...l,netRevenueCents:net,profitCents:profit,marginPct:profit!==null&&net!==null&&net>0?profit/net*100:null,negative:profit!==null&&profit<0,status:matches.length>1?'CONFLICT':valid?'RECORDED':'NO_DATA',sourceClass:valid?r!.source_class:null};
+      });
+      const products=new Map<string,typeof results>();
+      for(const row of results){const key=row.product_id??'listing:'+row.id;const group=products.get(key)??[];group.push(row);products.set(key,group);}
+      return {listings:results,products:[...products.entries()].map(([id,group])=>{
+        const complete=group.every(r=>r.profitCents!==null&&r.netRevenueCents!==null);
+        const profit=complete?group.reduce((s,r)=>s+r.profitCents!,0):null,net=complete?group.reduce((s,r)=>s+r.netRevenueCents!,0):null;
+        return {id,label:group[0]?.product_name??group[0]?.title??id,listingCount:group.length,knownListings:group.filter(r=>r.profitCents!==null).length,profitCents:profit,netRevenueCents:net,marginPct:net!==null&&net>0&&profit!==null?profit/net*100:null};
+      }),coverageVerified:false,method:'Somente registros do intervalo exato por anúncio; produtos com anúncio sem dado ou registros conflitantes permanecem nulos. Valores registrados não constituem auditoria contábil.'};
+    });
+    this.register('ads.dashboard',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),from:z.string().datetime(),to:z.string().datetime(),kind:z.enum(['AD','AD_CAMPAIGN']).optional(),externalId:z.string().max(200).optional()}).strict().parse(payload);
+      const account=operationAccount(i.accountId);
+      if(i.from>i.to||Date.parse(i.to)-Date.parse(i.from)>366*86400000)throw new Error('intervalo inválido');
+      const rows=db.rows<Record<string,unknown>>(`SELECT * FROM capture_detail_snapshots WHERE account_id=? AND marketplace=? AND kind IN ('AD','AD_CAMPAIGN') AND captured_at>=? AND captured_at<=? AND (? IS NULL OR kind=?) AND (? IS NULL OR external_id=?) ORDER BY captured_at DESC,id DESC LIMIT 501`,account.id,account.marketplace,i.from,i.to,i.kind??null,i.kind??null,i.externalId??null,i.externalId??null);
+      const seen=new Set<string>();
+      const items=[];
+      for(const r of rows.slice(0,500)){
+        const key=JSON.stringify([r.kind,r.external_id,r.parent_external_id]);
+        if(seen.has(key))continue;seen.add(key);
+        const metrics=parseJsonObject(String(r.metrics_json)),context=parseJsonObject(String(r.context_json)),window=observedWindow(context);
+        const spend=knownNumber(metrics,'adSpend'),revenue=knownNumber(metrics,'adAttributedRevenue');
+        const verified=window!==null&&r.source_class==='A_PRIMARY_UI'&&!parseJsonObject(String(r.evidence_json)).coverageWarnings;
+        items.push({...r,metrics,context,window,verified,signal:verified&&spend!==null&&spend>0&&revenue!==null&&revenue<spend?'REVIEW_SPEND':null});
+      }
+      const snapshots=db.rows<Record<string,unknown>>(`SELECT * FROM account_snapshots WHERE account_id=? AND marketplace=? AND page_kind IN ('seller_ads','seller_dashboard','seller_orders') AND captured_at>=? AND captured_at<=? ORDER BY captured_at DESC,id DESC LIMIT 501`,account.id,account.marketplace,i.from,i.to);
+      const pick=(metric:string,kinds:string[])=>snapshots.find(s=>kinds.includes(String(s.page_kind))&&knownNumber(parseJsonObject(String(s.metrics_json)),metric)!==null);
+      const ad=pick('adSpend',['seller_ads']),sale=pick('gmv',['seller_dashboard','seller_orders']);
+      const aw=ad?observedWindow(parseJsonObject(String(ad.evidence_json))):null,sw=sale?observedWindow(parseJsonObject(String(sale.evidence_json))):null;
+      const spend=ad?knownNumber(parseJsonObject(String(ad.metrics_json)),'adSpend'):null,gmv=sale?knownNumber(parseJsonObject(String(sale.metrics_json)),'gmv'):null;
+      const compatible=!i.kind&&!i.externalId&&rows.length<=500&&snapshots.length<=500&&aw!==null&&sw!==null&&JSON.stringify(aw)===JSON.stringify(sw)&&ad?.source_class==='A_PRIMARY_UI'&&sale?.source_class==='A_PRIMARY_UI';
+      return {items,tacosPct:compatible&&gmv!==null&&gmv>0&&spend!==null?spend/gmv*100:null,window:compatible?aw:null,truncated:rows.length>500||snapshots.length>500,coverageVerified:false};
+    });
+    this.register('inventory.dashboard',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(30)}).strict().parse(payload);
+      const account=operationAccount(i.accountId),cutoff=new Date(Date.now()-i.days*86400000).toISOString();
+      const listings=db.rows<{id:string;sku_id:string|null;external_id:string;title:string|null}>(`SELECT id,sku_id,external_id,title FROM listings WHERE account_id=? ORDER BY id`,account.id);
+      const snapshots=db.rows<Record<string,unknown>>(`SELECT * FROM listing_snapshots WHERE account_id=? AND captured_at>=? ORDER BY captured_at DESC,id DESC`,account.id,cutoff);
+      const latest=new Map<unknown,Record<string,unknown>>();
+      for(const r of snapshots)if(!latest.has(r.listing_id))latest.set(r.listing_id,r);
+      const items=listings.map(l=>{
+        const row=latest.get(l.id),metrics=parseJsonObject(String(row?.metrics_json??'')),evidence=parseJsonObject(String(row?.evidence_json??''));
+        const stock=knownNumber(metrics,'stockAvailable'),units=knownNumber(metrics,'units'),spend=knownNumber(metrics,'adSpend'),pending=knownNumber(metrics,'questionsPending');
+        const window=observedWindow(evidence);
+        const coverage=window&&row?.source_class==='A_PRIMARY_UI'&&stock!==null&&units!==null&&units>0?stock/(units/window.days):null;
+        return {...l,stock,units,adSpend:spend,questionsPending:pending,coverageDays:coverage,capturedAt:row?.captured_at??null,window,signals:[stock===0?'OUT_OF_STOCK':null,coverage!==null&&coverage<=7?'LOW_COVERAGE':null,stock===0&&spend!==null&&spend>0?'ADS_SPEND_WITH_ZERO_STOCK_OBSERVED':null,pending!==null&&pending>0?'PENDING_QUESTIONS':null].filter(Boolean)};
+      });
+      return {items,coverageVerified:false,cutoff,method:'Último snapshot por anúncio. Estoque zero é distinto de ausente; não somar estoque de anúncios que compartilham SKU. Cobertura em dias exige janela de vendas explícita. Investimento e estoque observados não comprovam simultaneidade operacional.'};
     });
 
     this.register('competitor.evidence.record', (payload, auth) => {
