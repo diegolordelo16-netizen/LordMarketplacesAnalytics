@@ -763,19 +763,20 @@ async function viewGrowth() {
 
 // ------------------------------------------------------------------ AGENTES DE IA
 async function viewAgents() {
-  const [runs, budget, memory, recommendations] = await Promise.all([
-    api('agent.runs', {}).catch(() => []),
-    api('agent.budget', {}).catch(() => null),
-    api('agent.memory', {}).catch(() => []),
+  const [runs, budget, memory, recommendations,debates] = await Promise.all([
+    api('agent.runs', {accountId:state.accountId||undefined}).catch(() => []),
+    api('agent.budget', {accountId:state.accountId||undefined}).catch(() => null),
+    api('agent.memory', {accountId:state.accountId||undefined}).catch(() => []),
     api('agent.recommendations', { accountId: state.accountId || undefined, limit: 100 }).catch(() => []),
+    state.accountId?api('agent.workspace.history',{accountId:state.accountId}).catch(()=>[]):Promise.resolve([]),
   ]);
   const b = budget || {};
   return card('Orçamento e consumo do Gemini', `
     <div class="kpi-grid">
-      <div class="kpi"><div class="l">Chamadas hoje</div><div class="v">${num(b.callsToday)}</div></div>
+      <div class="kpi"><div class="l">Chamadas (24h)</div><div class="v">${num(b.callsToday)}</div></div>
       <div class="kpi"><div class="l">Tokens entrada</div><div class="v">${num(b.tokensIn)}</div></div>
       <div class="kpi"><div class="l">Tokens saída</div><div class="v">${num(b.tokensOut)}</div></div>
-      <div class="kpi"><div class="l">Custo hoje (US$)</div><div class="v">${num(b.costUsd, 4)}</div></div>
+      <div class="kpi"><div class="l">Custo estimado (24h, US$)</div><div class="v">${num(b.costUsd, 4)}</div></div>
       <div class="kpi"><div class="l">Limite diário (US$)</div><div class="v">${num(b.dailyCostLimitUsd, 2)}</div></div>
     </div>`)
   + card('Executar agentes especializados', `
@@ -788,7 +789,7 @@ async function viewAgents() {
         <option value="performance_experiments">Performance &amp; Experimentação</option><option value="market_category">Mercado &amp; Categoria</option>
         <option value="keyword_rank">Keyword Intelligence</option><option value="voice_of_customer">Voz do Cliente</option>
         <option value="forecast_planning">Forecast</option><option value="growth_strategy">Growth &amp; Retenção</option></select></label>
-      <label>Marketplace <input id="ag-mp" value="mercado_livre"></label>
+      <label>Escopo <input value="Loja selecionada no topo" disabled></label>
       <label>Anúncio <input id="ag-listing" placeholder="MLB..."></label>
       <label>Janela (dias) <input id="ag-days" type="number" value="30"></label>
     </div>
@@ -798,30 +799,27 @@ async function viewAgents() {
     </div>
     <div id="agent-out" class="out"></div>`)
   + card('Análises operacionais por profundidade', `
-    <div class="form-row"><label>Modo <select id="analysis-mode"><option value="RAPIDA">Rápida — 4 agentes</option><option value="PADRAO" selected>Padrão — 8 agentes</option><option value="FORENSE">Detalhada / Forense — 14 agentes por anúncio</option><option value="360">360° da conta — 14 agentes em todos os anúncios</option></select></label><label>Anúncio (opcional) <input id="analysis-listing" placeholder="ID interno ou deixe vazio"></label><label>Produto (opcional) <input id="analysis-product" placeholder="ID do produto canônico"></label><label>Janela <input id="analysis-days" type="number" min="1" max="365" value="30"></label><button class="btn primary" data-act="analysis-run">Executar análise</button></div>
+    <div class="form-row"><label>Modo <select id="analysis-mode"><option value="RAPIDA">Rápida — 4 agentes</option><option value="PADRAO" selected>Padrão — 8 agentes</option><option value="FORENSE">Detalhada / Forense — 14 agentes por anúncio</option><option value="360">360° da conta — 14 agentes em todos os anúncios</option></select></label><label>Anúncio (opcional) <input id="analysis-listing" placeholder="ID interno ou deixe vazio"></label><label>Produto (opcional) <input id="analysis-product" placeholder="ID do produto canônico"></label><label>Janela <input id="analysis-days" type="number" min="1" max="365" value="30"></label><label>Deslocamento (paginação)<input id="analysis-offset" type="number" min="0" value="0"></label><button class="btn primary" data-act="analysis-run">Executar análise</button></div>
     <div id="analysis-out" class="out"></div>
-    <p class="muted small">A análise usa snapshots locais reais. Dados ausentes são explicitados; FORENSE/360 executam até 300 anúncios por chamada.</p>`)
+    <p class="muted small">A análise usa snapshots locais reais. Dados ausentes são explicitados; FORENSE/360 executam até 300 anúncios por página. Informe janela compatível com a captura.</p>`)
   + card('Workspace de debate com o Gemini', `
     <div class="form-row">
       <label class="grow">Pergunta <textarea id="debate-q" rows="3" placeholder="Minha margem caiu 8% e o concorrente baixou o preço. O que fazer sem destruir margem?"></textarea></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="debate">Debater com o Gemini</button></div>
-    <div id="debate-out" class="out"></div>`)
+    <p class="muted small">Consulta externa paga mediante confirmação. Envia métricas numéricas e referências da loja selecionada, sem textos de clientes ou credenciais. Histórico local por usuário.</p><div id="debate-out" class="out"></div>`)
+  + card('Histórico de debates',table(['Data','Pergunta','Status','Resultado'],(debates||[]).map(r=>`<tr><td>${dt(r.started_at)}</td><td>${esc(r.topic)}</td><td>${esc(r.decision)}</td><td><details><summary>Ver registro</summary><pre class="json">${esc(JSON.stringify(r.context,null,2))}</pre></details></td></tr>`),'Nenhum debate nesta loja.'))
   + card('Histórico de execuções', table(['Quando', 'Agente', 'Recomendações', 'Conflitos'],
-    (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
+    (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.started_at||r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
       <td>${num(r.recommendation_count ?? (r.recommendations || []).length)}</td><td>${num(r.conflict_count ?? 0)}</td></tr>`),
     'Nenhuma execução de agente.'))
   + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
-    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
+    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.scope || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
       <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
-    'Memória vazia.'));
+    'Memória vazia.'))
   + card('Feedback e resultados das recomendações', table(['Diagnóstico','Ação sugerida','Confiança','Status','Registrar resultado'],
     (recommendations || []).map((r) => `<tr><td>${esc(r.diagnosis || '—')}</td><td>${esc(r.action_proposed || '—')}</td><td>${pct((Number(r.confidence)||0)*100)}</td><td>${badge(r.status || 'PROPOSTA')}</td><td><div class="actions"><button class="btn tiny" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="ACEITO">Aceitar</button><button class="btn tiny ghost" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="REJEITADO">Rejeitar</button><button class="btn tiny" data-act="agent-feedback-implemented" data-id="${esc(r.id)}">Implementada</button><button class="btn tiny ghost" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="FALHOU">Falhou</button></div></td></tr>`),
-    'Nenhuma recomendação para a conta selecionada.'))
-  + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
-    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
-      <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
-    'Memória vazia.'));
+    'Nenhuma recomendação para a conta selecionada.'));
 }
 
 /**
@@ -829,19 +827,11 @@ async function viewAgents() {
  * As métricas entram como null quando não foram coletadas: o agente então
  * declara dado ausente em vez de supor número.
  */
-function agentContext() {
-  const days = Number($('#ag-days').value) || 30;
-  const end = new Date();
-  const start = new Date(end.getTime() - days * 86400000);
-  return {
-    accountId: state.accountId || 'local:default',
-    marketplace: $('#ag-mp').value.trim() || 'mercado_livre',
-    listingId: $('#ag-listing').value.trim() || '',
-    window: { start: start.toISOString(), end: end.toISOString(), days },
-    metrics: {},
-    dataConfidence: 0,
-    missingData: ['métricas ainda não coletadas para este anúncio'],
-  };
+function agentContext(){
+  if(!state.accountId)throw Error('Selecione uma loja para executar os agentes.');
+  const days=Number($('#ag-days').value);
+  if(!Number.isInteger(days)||days<1||days>365)throw Error('Janela deve ter 1 a 365 dias.');
+  return {accountId:state.accountId,listingId:$('#ag-listing').value.trim()||undefined,days};
 }
 
 // ------------------------------------------------------------------ TAREFAS
@@ -1608,7 +1598,7 @@ const ACTIONS = {
     const listingId = $('#analysis-listing').value.trim();
     const catalogProductId = $('#analysis-product').value.trim();
     if (listingId && catalogProductId) throw new Error('Escolha um anúncio ou produto, não ambos.');
-    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30 }), 'Análise concluída.');
+    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30,offset:Number($('#analysis-offset').value)||0 }), 'Análise concluída.');
     $('#analysis-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result, null, 2))}</pre>`;
   },
 
@@ -2213,32 +2203,27 @@ const ACTIONS = {
     alert(JSON.stringify(r, null, 2));
   },
 
-  'agent-run': async () => {
-    // O serviço espera { agents, context }: o contexto é o dado que o agente
-    // analisa. Sem ele o pedido é recusado por validação.
-    const r = await run(() => api('agent.run', {
-      agents: [$('#ag-key').value],
-      context: agentContext(),
-    }), 'Agente executado.');
-    $('#agent-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+  'agent-run':async()=>{
+    const context=agentContext(),host=$('#agent-out'),generation=viewRenderSequence;
+    const r=await run(()=>api('analysis.run',{...context,mode:'PADRAO',agents:[$('#ag-key').value]}),'Análise local executada.');
+    if(generation!==viewRenderSequence||context.accountId!==state.accountId||host!==$('#agent-out'))return;
+    host.innerHTML='<pre class="json">'+esc(JSON.stringify(r,null,2))+'</pre>';
   },
-  'agent-all': async () => {
-    const r = await run(() => api('agent.run', {
-      agents: ['seo_demand', 'ads', 'competition', 'conversion_cro', 'finance', 'inventory', 'content_postpurchase',
-        'pricing_offer', 'performance_experiments', 'market_category', 'keyword_rank', 'voice_of_customer',
-        'forecast_planning', 'growth_strategy'],
-      context: agentContext(),
-      listingId: $('#ag-listing').value.trim() || null,
-      window: { days: Number($('#ag-days').value) || 30 },
-    }), '14 agentes executados com síntese do Director.');
-    $('#agent-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+  'agent-all':async()=>{
+    const context=agentContext(),host=$('#agent-out'),generation=viewRenderSequence;
+    const r=await run(()=>api('analysis.run',{...context,mode:'360'}),'14 agentes executados sobre evidências locais.');
+    if(generation!==viewRenderSequence||context.accountId!==state.accountId||host!==$('#agent-out'))return;
+    host.innerHTML='<pre class="json">'+esc(JSON.stringify(r,null,2))+'</pre>';
   },
   debate: async () => {
     const q = $('#debate-q').value.trim();
     if (!q) { toast('Escreva a pergunta.', 'bad'); return; }
-    // O serviço recebe o contexto como TEXTO: é o que vai no prompt.
-    const r = await run(() => api('agent.debate', { topic: q, context: 'sem dados coletados ainda' }));
-    $('#debate-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+    const accountId=state.accountId,generation=viewRenderSequence,host=$('#debate-out');
+    if(!accountId)throw Error('Selecione uma loja.');
+    if(!confirm('Autoriza enviar a pergunta e evidências agregadas desta loja ao Gemini, sujeito ao custo da API?'))return;
+    const r=await run(()=>api('agent.workspace.ask',{accountId,topic:q,confirmedExternal:true}));
+    if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#debate-out'))return;
+    host.innerHTML=`<pre class="json">${esc(JSON.stringify(r,null,2))}</pre>`;
   },
 
   'task-refresh': async () => { if (await renderView()) toast('Progresso atualizado.'); },
