@@ -167,6 +167,10 @@
       const readObserved=()=>{
         const observed=capture();
         observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
+        if(observed.pageKind==='seller_reputation'){
+          const rep=window.MI_DOM.observedReputation?.(document.body,'amazon');
+          if(rep&&Object.keys(rep.metrics).length){observed.accountMetrics={...observed.accountMetrics,...rep.metrics};observed.evidence={...observed.evidence,...rep.evidence};}
+        }
         const filters=window.MI_DOM.collectionFilterState?.(document)??{signature:'',warnings:[]};
         observed.filterSignature=filters.signature;
         observed.spaPage=observed.pageKind==='seller_listings'?window.MI_DOM.spaPaginationState?.(document)?.page:undefined;

@@ -100,6 +100,16 @@ export const capturedListingMetricsSchema = z.object({
 });
 
 export const capturedAccountMetricsSchema = z.object({
+  sellerCancellationRatePct:z.number().finite().min(0).max(100).optional(),
+  complaintRatePct:z.number().finite().min(0).max(100).optional(),
+  onTimeShippingRatePct:z.number().finite().min(0).max(100).optional(),
+  responseRatePct:z.number().finite().min(0).max(100).optional(),
+  orderDefectRatePct:z.number().finite().min(0).max(100).optional(),
+  lateShipmentRatePct:z.number().finite().min(0).max(100).optional(),
+  validTrackingRatePct:z.number().finite().min(0).max(100).optional(),
+  nonFulfillmentRatePct:z.number().finite().min(0).max(100).optional(),
+  chatResponseRatePct:z.number().finite().min(0).max(100).optional(),
+  mediatedComplaintRatePct:z.number().finite().min(0).max(100).optional(),
   conversionRatePct: z.number().finite().min(0).max(100).optional(),
   adConversionRatePct: z.number().finite().min(0).max(100).optional(),
   organicClicks: z.number().int().nonnegative().optional(),

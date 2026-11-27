@@ -386,5 +386,31 @@
     if(!complete)return initial;
     return {...initial,initialListingIds:initialIds,listings:[...byId.values()].sort((a,b)=>a.index-b.index).map(row=>row.data),details:[...details.values()],coverageWarnings:initial.coverageWarnings.filter(x=>x!=='TABELA_VIRTUALIZADA'),evidence:{...initial.evidence,virtualizedRows:String(byId.size),virtualizedDeclaredRows:String(total)}};
   }
-  window.MI_DOM = { collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  function observedReputation(root,marketplace){
+    const common={
+      sellerCancellationRatePct:['taxa de cancelamento pelo vendedor','seller cancellation rate'],
+      complaintRatePct:['taxa de reclamações','complaint rate'],
+      onTimeShippingRatePct:['envios no prazo','taxa de envio no prazo','on-time shipping rate'],
+      responseRatePct:['taxa de resposta','response rate'],
+    };
+    const platform=marketplace==='amazon'?{
+      orderDefectRatePct:['taxa de pedidos com defeito','order defect rate','odr'],
+      lateShipmentRatePct:['taxa de envios atrasados','late shipment rate'],
+      validTrackingRatePct:['taxa de rastreamento válido','valid tracking rate'],
+    }:marketplace==='shopee'?{
+      nonFulfillmentRatePct:['taxa de não cumprimento','non-fulfillment rate'],
+      lateShipmentRatePct:['taxa de envio atrasado','late shipment rate'],
+      chatResponseRatePct:['taxa de resposta do chat','chat response rate'],
+    }:marketplace==='mercado_livre'?{
+      lateShipmentRatePct:['envios com atraso','taxa de envios com atraso'],
+      mediatedComplaintRatePct:['taxa de reclamações mediadas','mediated complaint rate'],
+    }:{};
+    const metrics={},evidence={};
+    for(const [key,labels] of Object.entries({...common,...platform})){
+      const found=explicitPercent(root,labels);
+      if(found){metrics[key]=found.value;evidence[key]=found.evidence;}
+    }
+    return {metrics,evidence};
+  }
+  window.MI_DOM = { observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

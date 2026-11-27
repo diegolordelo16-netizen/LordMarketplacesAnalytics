@@ -152,6 +152,16 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('voc.ingestBatch',{accountId:base.accountId,items:[{...payload.items[0],externalListingId:'MLB999999'}]})).ok).toBe(false);
   });
 
+  it('armazena taxas de reputação sem convertê-las em números de pedidos',async()=>{
+    seedImportAccount('acct-reputation');
+    const at='2026-11-27T12:00:00.000Z';
+    const payload={marketplace:'mercado_livre',accountId:'acct-reputation',pageKind:'seller_reputation',url:'https://vendedores.mercadolivre.com.br/reputacao',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',accountMetrics:{complaintRatePct:1.5,lateShipmentRatePct:2}};
+    expect((await call('capture.ingest',payload)).result).toMatchObject({ok:true,accountSnapshotsIngested:1});
+    const rows=(await call('capture.accountSnapshots',{accountId:payload.accountId})).result as any[];
+    expect(rows[0].metrics).toEqual({complaintRatePct:1.5,lateShipmentRatePct:2});
+    expect((await call('capture.ingest',{...payload,accountMetrics:{complaintRatePct:101}})).result).toMatchObject({ok:false});
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';

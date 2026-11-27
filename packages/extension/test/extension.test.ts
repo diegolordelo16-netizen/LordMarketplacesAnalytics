@@ -611,8 +611,8 @@ describe('extensão: paginação segura', () => {
 
   it('service worker impõe limite de cinco páginas, aba temporária e parada em CAPTCHA/login', () => {
     const worker = readFileSync(join(ext, 'service-worker.js'), 'utf8');
-    expect(worker).toContain('Math.min(5, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 5)');
-    expect(worker).toContain("chrome.tabs.create({ url: source.url, active: false");
+    expect(worker.replace(/\s+/g,'')).toContain('Math.min(5,Number.isInteger(requestedMaxPages)?requestedMaxPages:5)');
+    expect(worker.replace(/\s+/g,"")).toContain("chrome.tabs.create({url:source.url,active:false");
     expect(worker).toContain('info.loginRequired || info.challenge');
     expect(worker).toContain('await chrome.tabs.remove(temporary.id)');
     expect(worker).toContain('snapshot.accountMetrics');
@@ -821,5 +821,22 @@ describe('rolagem de tabela virtualizada',()=>{
     const partial=await window.MI_DOM.collectVirtualizedListings(root,initial,read,async()=>{});
     expect(partial.coverageWarnings).toContain('TABELA_VIRTUALIZADA');
     expect(grid.scrollTop).toBe(25);
+  });
+});
+
+
+describe('reputação explícita por plataforma',()=>{
+  it('preserva métricas específicas sem aceitar números sem porcentagem',()=>{
+    class E{
+      constructor(public innerText:string,public nextElementSibling:E|null=null){}
+      getBoundingClientRect(){return {width:20,height:10}}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const rows=[new E('Order defect rate',new E('0,5%')),new E('Late shipment rate',new E('2%')),new E('Valid tracking rate',new E('99')),new E('Taxa de resposta do chat',new E('98%'))];
+    const root={querySelectorAll:()=>rows};
+    expect(window.MI_DOM.observedReputation(root,'amazon').metrics).toEqual({orderDefectRatePct:0.5,lateShipmentRatePct:2});
+    expect(window.MI_DOM.observedReputation(root,'shopee').metrics).toEqual({lateShipmentRatePct:2,chatResponseRatePct:98});
   });
 });
