@@ -410,9 +410,12 @@ async function viewFinance() {
 
 // ------------------------------------------------------------------ SEO & KEYWORDS
 async function viewKeywords() {
-  const [kws, gaps] = await Promise.all([
+  const accountId=state.accountId;
+  const [kws, gaps, seoHistory, seoWatches] = await Promise.all([
     api('keyword.list', {}).catch(() => []),
     api('keyword.gap', { accountId: state.accountId || 'local:default' }).catch(() => []),
+    accountId?api('seo.external.history',{accountId}).catch(()=>[]):[],
+    accountId?api('seo.watch.list',{accountId}).catch(()=>[]):[],
   ]);
   return card('Adicionar palavra-chave', `
     <div class="form-grid">
@@ -429,11 +432,18 @@ async function viewKeywords() {
         <option value="IMPORTACAO">Importação</option></select></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="kw-add">Adicionar termo</button></div>`)
-  + card('Pesquisa SEO externa — OpenSEO / DataForSEO', `
+  + (accountId?card('Pesquisa SEO externa — OpenSEO / DataForSEO', `
     <p class="muted small">Google Brasil em português; backlinks da web global. Não representa volume ou posição no Mercado Livre, Shopee ou Amazon. Cada consulta pode ser cobrada pela DataForSEO, inclusive falhas. Configure as credenciais no ambiente do agente local.</p>
     <div class="form-grid"><label>Pesquisa<select id="seo-external-mode"><option value="suggestions">Sugestões de palavras-chave</option><option value="related">Termos relacionados</option><option value="ideas">Ideias de palavras-chave</option><option value="serp">Resultados Google (SERP)</option><option value="ranked">Palavras-chave de domínio concorrente</option><option value="domain">Visibilidade de domínio</option><option value="backlinks">Resumo de backlinks</option><option value="overview">Visão geral da palavra-chave</option><option value="competitors">Concorrentes na SERP</option><option value="pages">Páginas orgânicas de domínio</option><option value="backlinkRows">Backlinks individuais</option><option value="referringDomains">Domínios de referência</option><option value="backlinkPages">Páginas com backlinks</option><option value="lighthouse">Auditoria técnica Lighthouse (URL HTTPS)</option><option value="aiGoogle">Menções em IA Google (BR/pt)</option><option value="aiChatGPT">Menções ChatGPT (EUA/en)</option></select></label>
     <label>Termo ou domínio<input id="seo-external-query" maxlength="200" placeholder="capacete ou exemplo.com.br"></label><label>Limite<input id="seo-external-limit" type="number" min="1" max="100" value="25"></label><label>Dispositivo (SERP)<select id="seo-external-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica (somente SERP, opcional)<input id="seo-external-location" maxlength="160" placeholder="Sao Paulo,State of Sao Paulo,Brazil"></label></div>
-    <button class="btn" data-act="seo-external-research">Consultar fonte externa</button><div id="seo-external-out" class="out" aria-live="polite"></div>`)
+    <button class="btn" data-act="seo-external-research">Consultar fonte externa</button><div id="seo-external-out" class="out" aria-live="polite"></div>`):card("SEO externo","Selecione uma conta para guardar o histórico."))
+  + (accountId?card('Histórico SEO externo da loja',table(['Data','Consulta','Modo','Escopo','Status','Custo USD','Ações'],seoHistory.map(r=>'<tr><td>'+dt(r.requested_at)+'</td><td>'+esc(r.query)+'</td><td>'+esc(r.mode)+'</td><td>'+esc(r.scope)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.cost_usd??'—')+'</td><td><button class="btn tiny" data-act="seo-run-show" data-id="'+esc(r.id)+'">Abrir</button> '+(['suggestions','related','ideas','overview','ranked'].includes(r.mode)&&r.status==='OK'?'<button class="btn tiny" data-act="seo-run-groups" data-id="'+esc(r.id)+'">Agrupar</button>':'')+'</td></tr>'),'Nenhuma consulta.')+
+    '<div class="form-grid"><label>Amostra do domínio próprio<select id="seo-gap-own"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Amostra concorrente<select id="seo-gap-other"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label></div><button class="btn" data-act="seo-gap">Comparar Keyword Gap</button><div id="seo-history-out" class="out" aria-live="polite"></div>')+
+    card('Monitoramento Google — opt-in',`
+    <p class="muted small">Desativado por padrão. Para executar agendamentos, configure MI_DATAFORSEO_ENABLE_SCHEDULES=true e credenciais no agente. Cada execução pode ser tarifada; limite finito de consultas, não de dólares. Falhas suspendem o monitoramento; sem retry.</p>
+    <div class="form-grid"><label>Palavra-chave<input id="seo-watch-keyword" maxlength="200"></label><label>Domínio próprio<input id="seo-watch-domain" maxlength="200"></label><label>Dispositivo<select id="seo-watch-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica opcional<input id="seo-watch-location" maxlength="160"></label><label>Intervalo (dias)<input id="seo-watch-interval" type="number" value="7" min="1" max="30"></label><label>Máximo de consultas<input id="seo-watch-max" type="number" value="4" min="1" max="30"></label></div>
+    <button class="btn" data-act="seo-watch-create">Autorizar monitoramento</button>`+
+    table(['Termo','Domínio','Dispositivo','Próxima','Restantes','Estado','Ações'],seoWatches.map(r=>'<tr><td>'+esc(r.keyword)+'</td><td>'+esc(r.domain)+'</td><td>'+esc(r.device)+'</td><td>'+dt(r.next_run_at)+'</td><td>'+num(r.remaining)+'</td><td>'+esc(r.enabled?'Ativo · '+(r.last_status||'Aguardando'):'Desativado · '+(r.last_status||'—'))+'</td><td><button class="btn tiny" data-act="seo-watch-history" data-id="'+esc(r.id)+'">Histórico</button> '+(r.enabled?'<button class="btn tiny" data-act="seo-watch-disable" data-id="'+esc(r.id)+'">Desativar</button>':'')+'</td></tr>'),'Nenhum monitoramento.')+'<div id="seo-watch-out" class="out" aria-live="polite"></div>'):'')
   + card('Banco de palavras-chave', table(['Termo', 'Intenção', 'Marketplace', 'Origem', 'Sinal', 'Confiança'],
     (kws || []).slice(0, 200).map((k) => `<tr>
       <td>${esc(k.term)}</td><td>${esc(k.intent || '—')}</td><td>${esc(k.marketplace || '—')}</td>
@@ -1958,7 +1968,7 @@ const ACTIONS = {
     }
   },
   'seo-external-research':async()=>{
-    const host=$('#seo-external-out'),generation=viewRenderSequence,button=document.querySelector('[data-act="seo-external-research"]');
+    const accountId=state.accountId,host=$('#seo-external-out'),generation=viewRenderSequence,button=document.querySelector('[data-act="seo-external-research"]');
     const query=$('#seo-external-query').value.trim(),mode=$('#seo-external-mode').value,limit=Number($('#seo-external-limit').value),device=$('#seo-external-device').value;
     if(!query||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Informe termo/domínio e limite de 1 a 100.');
     if(!confirm('Autoriza uma consulta externa DataForSEO possivelmente tarifada? Não há retentativa automática.'))return;
@@ -1966,8 +1976,8 @@ const ACTIONS = {
     host.textContent='Consultando DataForSEO…';
     try{
       const locationName=$('#seo-external-location').value.trim()||undefined;
-      const result=await api('seo.external.research',{query,mode,limit,device,locationName,confirmed:true});
-      if(generation!==viewRenderSequence||host!==$('#seo-external-out'))return;
+      const result=await api('seo.external.research',{accountId,query,mode,limit,device,locationName,confirmed:true});
+      if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#seo-external-out'))return;
       const keys=[...new Set((result.rows||[]).flatMap(row=>Object.keys(row)))];
       const labels={keyword:'Palavra-chave',searchVolume:'Volume Google estimado',cpc:'CPC (USD)',paidCompetition:'Concorrência paga (0–1)',keywordDifficulty:'Dificuldade SEO Google (0–100)',intent:'Intenção Google',latestMonth:'Último mês informado',latestMonthVolume:'Volume no mês',monthlyChangePct:'Variação mensal (%)',position:'Posição absoluta',estimatedTraffic:'Tráfego estimado',organicKeywords:'Palavras-chave orgânicas',domain:'Domínio',url:'URL',title:'Título',type:'Tipo',backlinks:'Backlinks',referringDomains:'Domínios de referência',rank:'Rank DataForSEO (0–100)',brokenBacklinks:'Backlinks quebrados',averagePosition:'Posição média',medianPosition:'Posição mediana',visibility:'Visibilidade DataForSEO',keywordsCount:'Termos',targetUrl:'URL de destino',anchor:'Âncora',spamScore:'Spam score',dofollow:'Dofollow',referringPages:'Páginas de referência',metric:'Indicador',value:'Valor',unit:'Unidade',question:'Pergunta',answer:'Resposta observada',aiSearchVolume:'Volume IA estimado',citedSources:'Fontes citadas',firstSeen:'Primeira observação',lastSeen:'Última observação'};
       host.innerHTML='<p>'+esc(result.status)+' · '+esc(result.scope)+' · '+dt(result.capturedAt)+' · Custo informado pelo provedor (USD): '+esc(result.costUsd??'desconhecido')+'</p>'+
@@ -1977,6 +1987,42 @@ const ACTIONS = {
       initializeTables(host);
     }catch(error){if(generation===viewRenderSequence&&host===$('#seo-external-out'))host.textContent=String(error?.message||error);throw error;}
     finally{if(button)button.disabled=false;}
+  },
+  'seo-run-show':async d=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence;
+    const r=await api('seo.external.get',{accountId,id:d.id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    const keys=[...new Set(r.rows.flatMap(row=>Object.keys(row)))];
+    host.innerHTML='<p>'+esc(r.query)+' · '+esc(r.scope)+' · '+esc(r.status)+'</p>'+table(keys,r.rows.map(row=>'<tr>'+keys.map(k=>'<td>'+esc(row[k]??'—')+'</td>').join('')+'</tr>'),'Sem resultados.');
+    initializeTables(host);
+  },
+  'seo-run-groups':async d=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence;
+    const r=await api('seo.external.groups',{accountId,id:d.id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    host.innerHTML='<p>'+esc(r.note)+'</p>'+table(['Grupo','Termo','Volume Google','Dificuldade','Aderência lexical (%)','Sinal exploratório'],r.groups.flatMap(g=>g.members.map(row=>'<tr><td>'+esc(g.label)+'</td><td>'+esc(row.keyword)+'</td><td>'+num(row.searchVolume)+'</td><td>'+num(row.keywordDifficulty)+'</td><td>'+num(row.catalogFit)+'</td><td>'+num(row.opportunitySignal)+'</td></tr>')),'Sem grupos.');
+    initializeTables(host);
+  },
+  'seo-gap':async()=>{
+    const accountId=state.accountId,host=$('#seo-history-out'),generation=viewRenderSequence;
+    const r=await api('seo.external.gap',{accountId,ownId:$('#seo-gap-own').value,otherId:$('#seo-gap-other').value});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-history-out'))return;
+    host.innerHTML='<p>'+esc(r.ownDomain)+' ('+num(r.ownSample)+') × '+esc(r.otherDomain)+' ('+num(r.otherSample)+') · '+esc(r.note)+'</p>'+table(['Termo não observado na amostra própria','Volume Google','KD','Posição concorrente'],r.rows.map(row=>'<tr><td>'+esc(row.keyword)+'</td><td>'+num(row.searchVolume)+'</td><td>'+num(row.keywordDifficulty)+'</td><td>'+num(row.position)+'</td></tr>'),'Nenhuma lacuna observada nas amostras.');
+    initializeTables(host);
+  },
+  'seo-watch-create':async()=>{
+    const accountId=state.accountId,keyword=$('#seo-watch-keyword').value.trim(),domain=$('#seo-watch-domain').value.trim(),device=$('#seo-watch-device').value,locationName=$('#seo-watch-location').value.trim()||undefined;
+    const intervalDays=Number($('#seo-watch-interval').value),maxRuns=Number($('#seo-watch-max').value);
+    if(!Number.isInteger(maxRuns)||maxRuns<1||maxRuns>30||!Number.isInteger(intervalDays)||intervalDays<1||intervalDays>30)throw Error('Limite e intervalo entre 1 e 30.');
+    if(!confirm('Autoriza até '+maxRuns+' consultas tarifadas, uma a cada '+intervalDays+' dias, quando o agente estiver habilitado?'))return;
+    await run(()=>api('seo.watch.create',{accountId,keyword,domain,device,locationName,intervalDays,maxRuns,confirmedPaidSchedule:true}),'Monitoramento registrado.');await renderView();
+  },
+  'seo-watch-disable':async d=>{await run(()=>api('seo.watch.disable',{accountId:state.accountId,id:d.id}),'Monitoramento desativado.');await renderView();},
+  'seo-watch-history':async d=>{
+    const accountId=state.accountId,host=$('#seo-watch-out'),generation=viewRenderSequence;
+    const r=await api('seo.watch.history',{accountId,id:d.id});
+    if(generation!==viewRenderSequence||accountId!==state.accountId||host!==$('#seo-watch-out'))return;
+    host.innerHTML=table(['Data','Posição Google','URL','Evidência','Consulta','Custo USD'],r.map(row=>'<tr><td>'+dt(row.at)+'</td><td>'+num(row.position)+'</td><td>'+esc(row.url??'—')+'</td><td>'+esc(row.status)+'</td><td>'+esc(row.requestStatus)+'</td><td>'+esc(row.costUsd??'—')+'</td></tr>'),'Nenhuma execução registrada.');initializeTables(host);
   },
   'kw-add': async () => {
     await run(() => api('keyword.upsert', {

@@ -13,3 +13,6 @@ Também apresenta volume mensal mais recente e variação percentual quando há 
 
 ## Expansão de módulos
 Foram adaptados os contratos OpenSEO Labs (overview, serp_competitors, relevant_pages), backlinks (lista, domínios, páginas), Lighthouse (resumo de categorias, métricas e problemas numéricos) e AI Optimization (menções de domínio em Google BR/pt ou ChatGPT EUA/en; não é consulta ao modelo desta sessão). SERP aceita localização canônica opcional. Respostas limitadas a 16 MiB. Escopos separados. A lista não equivale a uma reprodução integral do OpenSEO.
+
+## Histórico e monitoramento
+Migration 042 cria tabelas isoladas por conta, guarda estado e custo inclusive desconhecido antes/depois do envio, sem credenciais. Comparação de amostras de ranking do mesmo escopo e até 7 dias de diferença; ausência na amostra não significa ausência no ranking. Agrupamento lexical com aderência ao catálogo e sinal exploratório, não substitui score interno, margem ou conversão. Monitoramento Google usa o agendador existente, requer super_admin, confirmação de até 30 consultas por monitoramento, intervalo mínimo de um dia, credenciais de ambiente e MI_DATAFORSEO_ENABLE_SCHEDULES=true. Cada ciclo reserva uma chamada antes do envio; falhas desativam e não há retry/catch-up. Limite de chamadas não garante teto em USD. Nenhuma consulta real foi executada.

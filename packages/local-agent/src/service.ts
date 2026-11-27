@@ -6,7 +6,8 @@ import { parseCsvText, parseXlsxBase64 } from './importers/tabular';
 import { parsePdfBase64 } from './importers/pdf';
 import { googleAdsTerm, lookupGoogleAdsVolume } from './connectors/dataforseo';
 import { googleReadTarget, verifyGoogleRead } from './connectors/google';
-import { researchSeo } from './connectors/openseo';
+import { seoResearchInput } from './connectors/openseo';
+import { ExternalSeoWorkspace } from './competitive/external-seo';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -135,6 +136,14 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'adapter.diagnostics': 'view_reports',
   'keyword.upsert': 'manage_market_intelligence',
   'seo.external.research': 'manage_connectors',
+  'seo.external.history': 'view_reports',
+  'seo.external.get': 'view_reports',
+  'seo.external.gap': 'view_reports',
+  'seo.external.groups': 'view_reports',
+  'seo.watch.create': 'manage_connectors',
+  'seo.watch.list': 'view_reports',
+  'seo.watch.disable': 'manage_connectors',
+  'seo.watch.history': 'view_reports',
   'keyword.list': 'view_reports',
   'keyword.gap': 'view_reports',
   'keyword.suggest': 'view_reports',
@@ -278,9 +287,11 @@ export class LocalService {
   private readonly competitors: CompetitorService;
 
   private scheduledWorkRunning = false;
+  private readonly externalSeo:ExternalSeoWorkspace;
 
   constructor(private readonly deps: ServiceDeps) {
     this.competitors = new CompetitorService(deps.db);
+    this.externalSeo=new ExternalSeoWorkspace(this.deps.db);
     this.registerAll();
   }
 
@@ -439,6 +450,7 @@ export class LocalService {
         });
         syncs += 1;
       }
+      try{await this.externalSeo.processDue();}catch{errors.push('falha no ciclo SEO externo');}
       return { analyses, reports, syncs, errors };
     } finally {
       this.scheduledWorkRunning = false;
@@ -1932,17 +1944,40 @@ export class LocalService {
     });
 
     // ------------------------------------------------------------ keywords / rank
-    let externalSeoRunning=false;
+    const seoAccount=z.object({accountId:z.string().min(1)});
+    const seoRun=seoAccount.extend({id:z.string().uuid()}).strict();
     this.register('seo.external.research',async(payload,auth)=>{
       if(auth?.role!=='super_admin')throw Error('super_admin necessário para consulta externa tarifada');
-      if(externalSeoRunning)throw Error('Já existe uma consulta SEO externa em andamento');
-      externalSeoRunning=true;
-      try{
-        const result=await researchSeo(payload);
-        this.audit(auth,'SEO_EXTERNAL_RESEARCH','dataforseo',null,result.status,undefined,{mode:result.mode,scope:result.scope,costUsd:result.costUsd,providerCode:result.providerCode});
-        return result;
-      }finally{externalSeoRunning=false;}
+      const {accountId,...input}=seoResearchInput.extend({accountId:z.string().min(1)}).strict().parse(payload);
+      const result=await this.externalSeo.execute(accountId,input);
+      this.audit(auth,'SEO_EXTERNAL_RESEARCH','account',accountId,result.status,undefined,{mode:result.mode,scope:result.scope,costUsd:result.costUsd,providerCode:result.providerCode});
+      return result;
     });
+    this.register('seo.external.history',payload=>{
+      const i=seoAccount.extend({limit:z.number().int().min(1).max(200).default(50)}).strict().parse(payload);
+      return this.externalSeo.history(i.accountId,i.limit);
+    });
+    this.register('seo.external.get',payload=>{
+      const i=seoRun.parse(payload),run=this.externalSeo.get(i.accountId,i.id);
+      const {result_json,...meta}=run;return {...meta,rows:JSON.parse(result_json)};
+    });
+    this.register('seo.external.gap',payload=>{
+      const i=seoAccount.extend({ownId:z.string().uuid(),otherId:z.string().uuid()}).strict().parse(payload);
+      return this.externalSeo.gap(i.accountId,i.ownId,i.otherId);
+    });
+    this.register('seo.external.groups',payload=>{
+      const i=seoRun.parse(payload);return this.externalSeo.groups(i.accountId,i.id);
+    });
+    this.register('seo.watch.create',(payload,auth)=>{
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário para agendamento tarifado');
+      const result=this.externalSeo.addWatch(payload);this.audit(auth,'SEO_WATCH_CREATE','seo_rank_watch',result.id,'OK');return result;
+    });
+    this.register('seo.watch.list',payload=>this.externalSeo.watches(seoAccount.strict().parse(payload).accountId));
+    this.register('seo.watch.disable',(payload,auth)=>{
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário');
+      const i=seoRun.parse(payload);return this.externalSeo.disable(i.accountId,i.id);
+    });
+    this.register('seo.watch.history',payload=>{const i=seoRun.parse(payload);return this.externalSeo.rankHistory(i.accountId,i.id);});
     this.register('keyword.upsert', (payload, auth) => {
       const i = z
         .object({

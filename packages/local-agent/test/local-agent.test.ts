@@ -68,6 +68,38 @@ function seedImportAccount(id: string): void {
 }
 
 
+describe('SEO externo integrado',()=>{
+  it('isola histórico por loja, compara amostras e executa monitoramento opt-in sem repetir',async()=>{
+    const accountId='seo-local-a',other='seo-local-b';seedImportAccount(accountId);seedImportAccount(other);
+    vi.stubEnv('MI_DATAFORSEO_LOGIN','fixture-user');vi.stubEnv('MI_DATAFORSEO_PASSWORD','fixture-secret');vi.stubEnv('MI_DATAFORSEO_ENABLE_SCHEDULES','false');
+    let count=0;
+    vi.stubGlobal('fetch',vi.fn(async(_url:string,init:RequestInit)=>{
+      count++;
+      const request=JSON.parse(String(init.body))[0];
+      const items=request.target?[{keyword_data:{keyword:request.target==='own.com'?'capacete':'luva moto',keyword_info:{search_volume:100},keyword_properties:{keyword_difficulty:20}},ranked_serp_element:{serp_item:{rank_absolute:3}}}]:
+        [{type:'organic',domain:'own.com',rank_absolute:4,url:'https://own.com/'}];
+      return Response.json({status_code:20000,cost:0.01,tasks:[{status_code:20000,result:[{items,total_count:1}]}]});
+    }));
+    try{
+      const query=(target:string)=>call('seo.external.research',{accountId,mode:'ranked',query:target,confirmed:true});
+      const first=(await query('own.com')).result as {id:string},second=(await query('rival.com')).result as {id:string};
+      expect(first.id).toBeTruthy();expect(second.id).toBeTruthy();
+      expect((await call('seo.external.get',{accountId:other,id:first.id})).ok).toBe(false);
+      expect((await call('seo.external.history',{accountId:other})).result).toEqual([]);
+      expect((await call('seo.external.gap',{accountId,ownId:first.id,otherId:second.id})).result).toMatchObject({rows:[{keyword:'luva moto',comparison:'NOT_OBSERVED_IN_OWN_SAMPLE'}]});
+      expect((await call('seo.external.groups',{accountId,id:first.id})).result).toMatchObject({groups:[{members:[{keyword:'capacete',opportunitySignal:null}]}]});
+      expect(JSON.stringify((await call('seo.external.history',{accountId})).result)).not.toContain('fixture-secret');
+      const watch=(await call('seo.watch.create',{accountId,keyword:'capacete',domain:'own.com',intervalDays:1,maxRuns:1,confirmedPaidSchedule:true})).result as {id:string};
+      expect(watch.id).toBeTruthy();db.db.prepare("UPDATE seo_rank_watches SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(watch.id);
+      await service.processScheduledWork();expect(count).toBe(2);
+      vi.stubEnv('MI_DATAFORSEO_ENABLE_SCHEDULES','true');await service.processScheduledWork();await service.processScheduledWork();expect(count).toBe(3);
+      expect((await call('seo.watch.history',{accountId,id:watch.id})).result).toMatchObject([{position:4,status:'OBSERVED',costUsd:0.01}]);
+      expect((await call('seo.watch.history',{accountId:other,id:watch.id})).ok).toBe(false);
+      expect((await call('seo.watch.list',{accountId})).result).toMatchObject([{id:watch.id,remaining:0,enabled:0}]);
+    }finally{vi.unstubAllGlobals();vi.unstubAllEnvs();}
+  });
+});
+
 describe('capacidades adicionais 3.10.3', () => {
   it('persiste mais de 200 páginas, mantém filtros e retoma somente pendências no mesmo lote lógico', async () => {
     seedImportAccount('acct-sync-large');

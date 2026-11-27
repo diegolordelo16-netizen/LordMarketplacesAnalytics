@@ -1,6 +1,14 @@
 {
   "keyword.upsert": "term | marketplace | intent | language",
-  "seo.external.research": {"mode":"suggestions|related|ideas|overview|serp|ranked|domain|competitors|pages|backlinks|backlinkRows|referringDomains|backlinkPages|lighthouse|aiGoogle|aiChatGPT","query":"keyword or public domain","limit":"integer 1..100","device":"desktop|mobile","locationName":"optional canonical SERP location","confirmed":true},
+  "seo.external.research": {
+    "accountId": "active account",
+    "mode": "suggestions|related|ideas|overview|serp|ranked|domain|competitors|pages|backlinks|backlinkRows|referringDomains|backlinkPages|lighthouse|aiGoogle|aiChatGPT",
+    "query": "keyword or public domain",
+    "limit": "integer 1..100",
+    "device": "desktop|mobile",
+    "locationName": "optional canonical SERP location",
+    "confirmed": true
+  },
   "keyword.googleVolume": {
     "accountId": "string",
     "terms": "1..20 Google Ads terms",
@@ -518,5 +526,43 @@
       "maxVariationPriceChangePct": "0–100"
     },
     "confirmed": true
+  },
+  "seo.external.history": {
+    "accountId": "string",
+    "limit": "1..200"
+  },
+  "seo.external.get": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.external.gap": {
+    "accountId": "string",
+    "ownId": "uuid",
+    "otherId": "uuid"
+  },
+  "seo.external.groups": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.watch.create": {
+    "accountId": "string",
+    "keyword": "string",
+    "domain": "public domain",
+    "device": "desktop|mobile",
+    "locationName": "optional canonical location",
+    "intervalDays": "1..30",
+    "maxRuns": "1..30",
+    "confirmedPaidSchedule": true
+  },
+  "seo.watch.list": {
+    "accountId": "string"
+  },
+  "seo.watch.disable": {
+    "accountId": "string",
+    "id": "uuid"
+  },
+  "seo.watch.history": {
+    "accountId": "string",
+    "id": "uuid"
   }
 }
