@@ -162,6 +162,19 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((await call('capture.ingest',{...payload,accountMetrics:{complaintRatePct:101}})).result).toMatchObject({ok:false});
   });
 
+  it('persiste gráfico isolado com evidência e conta, sem criar total de loja',async()=>{
+    seedImportAccount('acct-chart');seedImportAccount('acct-chart-other');
+    const at='2026-11-27T12:00:00.000Z';
+    const point={chartId:'sales',chartTitle:'Vendas por dia',series:'Receita (R$)',dimension:'2026-11-26',value:100.5,unit:'BRL',raw:'R$ 100,50'};
+    const payload={marketplace:'mercado_livre',accountId:'acct-chart',pageKind:'seller_dashboard',url:'https://vendedores.mercadolivre.com.br/resumo',sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',captureKey:'c'.repeat(64),chartPoints:[point]};
+    const result=await call('capture.ingest',payload);
+    expect(result.result).toMatchObject({ok:true,chartPointsIngested:1,accountSnapshotsIngested:0});
+    expect((await call('capture.ingest',payload)).result).toEqual(result.result);
+    expect((await call('capture.chartPoints',{accountId:payload.accountId})).result).toEqual([expect.objectContaining({chart_id:'sales',dimension:'2026-11-26',value:100.5,raw_text:'R$ 100,50'})]);
+    expect((await call('capture.chartPoints',{accountId:'acct-chart-other'})).result).toEqual([]);
+    expect((await call('capture.ingest',{...payload,captureKey:'d'.repeat(64),chartPoints:[point,point]})).ok).toBe(false);
+  });
+
   it('recibo de captura evita snapshots duplicados após resposta perdida e vincula URL e conta', async () => {
     seedImportAccount('acct-receipt');
     const at='2026-11-27T12:00:00.000Z';

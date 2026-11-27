@@ -95,6 +95,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'capture.snapshot': 'view_reports',
   'capture.accountSnapshots': 'view_reports',
   'capture.details':'view_reports',
+  'capture.chartPoints':'view_reports',
   'kpi.listing': 'view_reports',
   'kpi.dashboard': 'view_reports',
   'kpi.history': 'view_reports',
@@ -735,6 +736,10 @@ export class LocalService {
       });
     });
 
+    this.register('capture.chartPoints',(payload)=>{
+      const i=z.object({accountId:z.string().min(1),limit:z.number().int().min(1).max(200).default(100)}).parse(payload);
+      return db.rows('SELECT id,chart_id,chart_title,series,dimension,value,unit,raw_text,page_kind,filter_signature,captured_at,source_class FROM capture_chart_points WHERE account_id=? ORDER BY captured_at DESC,id LIMIT ?',i.accountId,i.limit);
+    });
     this.register('capture.details',(payload)=>{
       const i=z.object({accountId:z.string().min(1),kind:z.enum(['AD_CAMPAIGN','AD','LISTING_VARIANT','WAREHOUSE_STOCK']).optional(),limit:z.number().int().min(1).max(100).default(50)}).parse(payload);
       return db.rows<Record<string,unknown>>('SELECT * FROM capture_detail_snapshots WHERE account_id=? AND (? IS NULL OR kind=?) ORDER BY captured_at DESC,id LIMIT ?',i.accountId,i.kind??null,i.kind??null,i.limit).map(row=>({...row,metrics:parseJsonObject(String(row.metrics_json)),evidence:parseJsonObject(String(row.evidence_json)),context:parseJsonObject(String(row.context_json))}));

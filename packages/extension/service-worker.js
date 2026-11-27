@@ -435,12 +435,13 @@ async function captureTab(tabId, expected = {}) {
     ...(typeof snapshot.filterSignature==='string'?{filterSignature:snapshot.filterSignature}:{}),
     listings: snapshot.listings ?? [],
     details: Array.isArray(snapshot.details) ? snapshot.details.slice(0,100) : [],
+    chartPoints: Array.isArray(snapshot.chartPoints) ? snapshot.chartPoints.slice(0,200) : [],
     ...(snapshot.accountMetrics ? { accountMetrics: snapshot.accountMetrics } : {}),
     evidence: { ...(snapshot.evidence ?? {}), missing: (snapshot.missing ?? []).join(','), ...(snapshot.coverageWarnings?.length?{coverageWarnings:snapshot.coverageWarnings.join(',')}: {}) },
   };
 
   const customerVoice = Array.isArray(snapshot.customerVoice) ? snapshot.customerVoice.slice(0, 200) : [];
-  if (payload.listings.length === 0 && !payload.accountMetrics && payload.details.length===0 && customerVoice.length === 0) {
+  if (payload.listings.length === 0 && !payload.accountMetrics && payload.details.length===0 && payload.chartPoints.length===0 && customerVoice.length === 0) {
     return { ok: false, error: 'nenhum dado visível para capturar nesta página', snapshot };
   }
   if (!payload.accountId) return { ok: false, error: 'identidade da conta não identificada; abra uma área do vendedor que mostre o nome da conta', snapshot };
@@ -450,7 +451,7 @@ async function captureTab(tabId, expected = {}) {
   // antes do envio — sem inventar nome nem identificador.
   const account = { marketplace: payload.marketplace, accountHandle: snapshot.accountHandle };
   const pending = [];
-  if (payload.listings.length || payload.accountMetrics || payload.details.length) pending.push({ method: 'capture.ingest', payload, account, queuedAt: now });
+  if (payload.listings.length || payload.accountMetrics || payload.details.length || payload.chartPoints.length) pending.push({ method: 'capture.ingest', payload, account, queuedAt: now });
   if (customerVoice.length) pending.push({
     method: 'voc.ingestBatch',
     payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice, ...(expected.captureKey ? { captureKey: expected.captureKey, sourceUrl: payload.url, filterSignature:payload.filterSignature } : {}) },
@@ -459,7 +460,7 @@ async function captureTab(tabId, expected = {}) {
   try {
     await ensureAccount(payload.marketplace, payload.accountId, snapshot);
     let captureResult = null;
-    if (payload.listings.length || payload.accountMetrics || payload.details.length) {
+    if (payload.listings.length || payload.accountMetrics || payload.details.length || payload.chartPoints.length) {
       captureResult = await callService('capture.ingest', payload);
       if (!captureAccepted(captureResult)) return { ok: false, error: captureResult.error?.message ?? captureResult.result?.errors?.[0] ?? 'falha no serviço', res: captureResult };
       pending.shift();

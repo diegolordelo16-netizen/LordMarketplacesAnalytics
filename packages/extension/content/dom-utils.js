@@ -295,11 +295,7 @@
       const visible=Array.from(grid.querySelectorAll('tbody tr,[role="row"]')).filter(isVisible).length;
       if(Number.isInteger(total)&&total>visible)warnings.push('TABELA_VIRTUALIZADA');
     }
-    for(const chart of root.querySelectorAll('[data-testid*="chart"] canvas,[class*="chart"] canvas')){
-      if(!isVisible(chart))continue;
-      const parent=chart.parentElement;
-      if(!parent||!Array.from(parent.querySelectorAll('span,td,svg text')).some(el=>isVisible(el)&&parseNumberPtBr(el.innerText??el.textContent)!==null))warnings.push('GRAFICO_SEM_DADOS_TEXTUAIS');
-    }
+    if(visibleChartPoints(root).incomplete)warnings.push('GRAFICO_SEM_DADOS_TEXTUAIS');
     return [...new Set(warnings)];
   }
   function visibleMoneyParts(fraction){
@@ -459,5 +455,51 @@
     }
     return true;
   }
-  window.MI_DOM = { restoreVisibleFilters, observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
+  // A chart can be read only when it exposes an explicit visible data table.
+  // Axis ticks, pixels and an isolated numeric label are not a data series.
+  function visibleChartPoints(root){
+    const points=[],keys=new Set(),covered=new Set();
+    const regions=Array.from(root.querySelectorAll('[data-chart-id]')).filter(isVisible);
+    let incomplete=false;
+    for(const region of regions){
+      const chartId=String(region.getAttribute('data-chart-id')||'');
+      if(!/^[A-Za-z0-9_.:-]{1,120}$/.test(chartId)||regions.filter(el=>el.getAttribute('data-chart-id')===chartId).length!==1){incomplete=true;continue;}
+      const tables=String(region.tagName||'').toUpperCase()==='TABLE'?[region]:Array.from(region.querySelectorAll('table')).filter(isVisible);
+      if(tables.length!==1){incomplete=true;continue;}
+      const table=tables[0],headers=table.tHead?.rows?.length===1?Array.from(table.tHead.rows[0].cells):[];
+      const title=String(table.caption&&isVisible(table.caption)?table.caption.innerText??table.caption.textContent??'':region.getAttribute('aria-label')||'').trim();
+      if(!title||title.length>150||headers.length<2||headers.length>12||headers.some(el=>!isVisible(el)||(el.colSpan??1)!==1||(el.rowSpan??1)!==1)){incomplete=true;continue;}
+      const names=headers.map(el=>String(el.innerText??el.textContent??'').trim());
+      if(names.some(name=>!name||name.length>120)||new Set(names.map(normalizeLabel)).size!==names.length||!/^(data|date|período|periodo|period|dia|day|mês|mes|month|hora|hour|categoria|category)$/i.test(names[0])){incomplete=true;continue;}
+      const rows=Array.from(table.tBodies||[]).flatMap(body=>Array.from(body.rows||[]));
+      if(!rows.length||rows.length>200||Number(table.getAttribute('aria-rowcount')||rows.length+1)>rows.length+1){incomplete=true;continue;}
+      const batch=[],seenDimensions=new Set();let ok=true;
+      for(const row of rows){
+        const cells=Array.from(row.cells||[]);
+        if(!isVisible(row)||cells.length!==headers.length||cells.some(el=>!isVisible(el)||(el.colSpan??1)!==1||(el.rowSpan??1)!==1)){ok=false;break;}
+        const dimension=String(cells[0].innerText??cells[0].textContent??'').trim();
+        if(!dimension||dimension.length>100||seenDimensions.has(dimension)){ok=false;break;}
+        seenDimensions.add(dimension);
+        for(let k=1;k<cells.length;k++){
+          const raw=String(cells[k].innerText??cells[k].textContent??'').trim(),value=parseNumberPtBr(raw),series=names[k];
+          if(value===null||raw.length>80){ok=false;break;}
+          const unit=/%\s*$/.test(raw)||/\(%\)$/.test(series)?'PERCENT':/^R\$\s*/.test(raw)||/\(R\$\)$/.test(series)?'BRL':'UNSPECIFIED';
+          const key=JSON.stringify([chartId,series,dimension]);
+          if(keys.has(key)||batch.length+points.length>=200){ok=false;break;}
+          batch.push({chartId,chartTitle:title,series,dimension,value,unit,raw});
+        }
+        if(!ok)break;
+      }
+      if(!ok){incomplete=true;continue;}
+      for(const point of batch){keys.add(JSON.stringify([point.chartId,point.series,point.dimension]));points.push(point);}
+      covered.add(region);
+    }
+    for(const chart of root.querySelectorAll('[data-testid*="chart"] canvas,[class*="chart"] canvas,[data-chart-id] canvas,[data-testid*="chart"] svg,[class*="chart"] svg,[data-chart-id] svg')){
+      if(!isVisible(chart))continue;
+      const region=chart.closest?.('[data-chart-id]');
+      if(!region||!covered.has(region))incomplete=true;
+    }
+    return {points,incomplete};
+  }
+  window.MI_DOM = { visibleChartPoints, restoreVisibleFilters, observedReputation, collectVirtualizedListings, spaPaginationState, advanceSpaPage, visibleMoneyParts, collectionFilterState, collectionCoverage, visibleDetailRows, paginationUnsupported, observedExtraMetrics, explicitPercent, visibleCustomerVoice, parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

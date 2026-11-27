@@ -280,5 +280,9 @@
   "voc.items": {
     "payload": "accountId | limit?",
     "permission": "view_reports"
+  },
+  "capture.chartPoints": {
+    "payload": "accountId | limit?",
+    "permission": "view_reports"
   }
 }

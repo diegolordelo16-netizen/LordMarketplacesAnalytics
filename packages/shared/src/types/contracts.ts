@@ -87,6 +87,7 @@ export const IPC_METHODS = [
   'capture.snapshot',
   'capture.accountSnapshots',
   'capture.details',
+  'capture.chartPoints',
   'kpi.listing',
   'kpi.dashboard',
   'kpi.history',

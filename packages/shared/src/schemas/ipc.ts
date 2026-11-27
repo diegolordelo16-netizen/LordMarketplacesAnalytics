@@ -168,6 +168,7 @@ const capturedDetailSchema=z.object({
 });
 
 export const captureIngestSchema = z.object({
+  chartPoints:z.array(z.object({chartId:z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/),chartTitle:z.string().trim().min(1).max(150),series:z.string().trim().min(1).max(120),dimension:z.string().trim().min(1).max(100),value:z.number().finite(),unit:z.enum(['PERCENT','BRL','UNSPECIFIED']),raw:z.string().trim().min(1).max(80)})).max(200).default([]),
   details:z.array(capturedDetailSchema).max(100).default([]),
   captureKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   filterSignature:z.string().max(512).optional(),
@@ -184,7 +185,9 @@ export const captureIngestSchema = z.object({
   accountMetrics: capturedAccountMetricsSchema.optional(),
   /** Evidências textuais curtas (rótulo → valor lido), para auditoria. */
   evidence: z.record(z.string(), z.string().max(2000)).refine((value) => Object.keys(value).length <= 40 && JSON.stringify(value).length <= 12_000, 'evidências excedem os limites permitidos').optional(),
-}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined || payload.details.length>0, 'captura sem anúncios, detalhes nem métricas de conta').superRefine((payload,ctx)=>{
+}).refine((payload) => payload.listings.length > 0 || payload.accountMetrics !== undefined || payload.details.length>0 || payload.chartPoints.length>0, 'captura sem anúncios, detalhes nem métricas de conta ou gráficos').superRefine((payload,ctx)=>{
+  if(payload.chartPoints.length&&!['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(payload.pageKind))ctx.addIssue({code:'custom',message:'gráfico fora da área de leitura'});
+  if(new Set(payload.chartPoints.map(p=>JSON.stringify([p.chartId,p.series,p.dimension]))).size!==payload.chartPoints.length)ctx.addIssue({code:'custom',message:'pontos de gráfico duplicados'});
   if(payload.details.some(row=>['AD_CAMPAIGN','AD'].includes(row.kind)?payload.pageKind!=='seller_ads':!['seller_listings','seller_inventory','seller_listing_edit'].includes(payload.pageKind)))ctx.addIssue({code:'custom',message:'detalhes fora da área correspondente'});
 });
 

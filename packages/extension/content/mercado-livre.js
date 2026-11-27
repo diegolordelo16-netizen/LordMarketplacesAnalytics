@@ -528,6 +528,7 @@
       const readObserved=()=>{
         const observed=snapshot();
         observed.details=window.MI_DOM.visibleDetailRows?.(document,observed.pageKind)??[];
+        if(['seller_dashboard','seller_orders','seller_ads','seller_reputation','seller_returns','seller_complaints','seller_inventory'].includes(observed.pageKind)) observed.chartPoints=window.MI_DOM.visibleChartPoints?.(document)?.points??[];
         if(observed.pageKind==='seller_reputation'){
           const rep=window.MI_DOM.observedReputation?.(document.body,'mercado_livre');
           if(rep&&Object.keys(rep.metrics).length){observed.accountMetrics={...observed.accountMetrics,...rep.metrics};observed.evidence={...observed.evidence,...rep.evidence};}

@@ -868,3 +868,23 @@ describe('reaplicação segura de filtros nativos',()=>{
     expect(control.value).toBe('30');
   });
 });
+
+
+describe('dados tabulares explícitos de gráficos',()=>{
+  it('extrai série, dimensão, unidade e valor somente de tabela reconhecida',()=>{
+    class E{
+      constructor(public innerText:string='',public attrs:Record<string,string>={}){}
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return this.attrs[n]??null}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    const ctx=vm.createContext({window,Element:E});
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),ctx);
+    const row=Object.assign(new E(),{cells:[new E('2026-11-26'),new E('R$ 100,50')]});
+    const chart=Object.assign(new E('',{'data-chart-id':'sales'}),{tagName:'TABLE',caption:new E('Vendas por dia'),tHead:{rows:[{cells:[new E('Data'),new E('Receita (R$)')]}]},tBodies:[{rows:[row]}]});
+    const root={querySelectorAll:(sel:string)=>sel==='[data-chart-id]'?[chart]:[]};
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:false,points:[{chartId:'sales',chartTitle:'Vendas por dia',series:'Receita (R$)',dimension:'2026-11-26',value:100.5,unit:'BRL',raw:'R$ 100,50'}]});
+    row.cells[1].innerText='valor não disponível';
+    expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
+  });
+});
