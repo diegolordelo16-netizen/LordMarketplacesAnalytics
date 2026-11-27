@@ -933,3 +933,17 @@ describe('marcas explícitas de gráficos sem tabela',()=>{
     expect(window.MI_DOM.visibleChartPoints(root)).toEqual({incomplete:true,points:[]});
   });
 });
+
+describe('filtro personalizado sem leitura comprovada',()=>{
+  it('sinaliza combobox de período sem interpretar valores arbitrários',()=>{
+    class E{
+      tagName='DIV';
+      getBoundingClientRect(){return {width:20,height:10}}
+      getAttribute(n:string){return n==='aria-label'?'Período':null}
+    }
+    const window:any={getComputedStyle:()=>({visibility:'visible',display:'block',opacity:'1'})};
+    vm.runInContext(readFileSync(join(ext,'content','dom-utils.js'),'utf8'),vm.createContext({window,Element:E}));
+    const root={querySelectorAll:(s:string)=>s.startsWith('[role="combobox"]')?[new E()]:[]};
+    expect(window.MI_DOM.collectionFilterState(root)).toEqual({signature:'',warnings:['FILTRO_NAO_RECONHECIDO']});
+  });
+});
