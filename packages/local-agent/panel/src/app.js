@@ -1009,10 +1009,11 @@ async function viewBrowserSync() {
   ]);
   const memory=state.accountId?await api('navigation.summary',{accountId:state.accountId}).catch(error=>({error:error.message})):null;
   const navigationCard=card('Inteligência de navegação',!memory?'<p class="muted">Selecione uma loja para consultar sua memória.</p>':memory.error?'<p>'+esc(memory.error)+'</p>':
-    '<p><strong>'+memory.routes.length+'</strong> rotas demonstradas · <strong>'+memory.transitions.length+'</strong> transições observadas.</p>'
+    '<p><strong>'+memory.routes.length+'</strong> rotas demonstradas · <strong>'+memory.transitions.length+'</strong> transições observadas · <strong>'+memory.actions.length+'</strong> tipos de ações internas.</p>'
     +'<p class="muted small">Use o painel lateral para ensinar ou apagar a memória. A extensão prioriza apenas links de leitura reconhecidos. Contagem de observações não é garantia de cobertura.</p>'
     +table(['Área','Rota','Demonstrações','Última observação'],memory.routes.map(r=>'<tr><td>'+esc(r.page_kind)+'</td><td>'+esc(r.origin+r.route)+'</td><td>'+esc(r.observations)+'</td><td>'+dt(r.last_seen_at)+'</td></tr>'),'Nenhuma rota demonstrada.')
-    +table(['Origem','Destino','Observações'],memory.transitions.map(r=>'<tr><td>'+esc(r.from_route)+'</td><td>'+esc(r.to_route)+'</td><td>'+esc(r.observations)+'</td></tr>'),'Nenhuma transição observada.'));
+    +table(['Origem','Destino','Observações'],memory.transitions.map(r=>'<tr><td>'+esc(r.from_route)+'</td><td>'+esc(r.to_route)+'</td><td>'+esc(r.observations)+'</td></tr>'),'Nenhuma transição observada.')
+    +table(['Rota','Ação observada','Observações'],memory.actions.map(r=>'<tr><td>'+esc(r.route)+'</td><td>'+esc(r.action_kind)+'</td><td>'+esc(r.observations)+'</td></tr>'),'Nenhuma ação interna observada.'));
   const transport = connection.diagnosis;
   return navigationCard + card('Conexão com a extensão', `
     <p>${connection.error ? esc(connection.error) : connection.connected ? 'A extensão respondeu ao serviço local.' : 'Aguardando sinal da extensão.'}</p>
