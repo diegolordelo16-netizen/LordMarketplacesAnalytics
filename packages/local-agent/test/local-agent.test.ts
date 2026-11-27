@@ -400,6 +400,33 @@ describe('capacidades adicionais 3.10.3', () => {
   });
 
 
+  it('orçamento diário autorizado exige baseline, conta e documento novos, sem repetição',async()=>{
+    const accountId='acct-budget-5',other='acct-budget-other-5';seedImportAccount(accountId);seedImportAccount(other);
+    const campaignRef='C-BUDGET',proposal=(await call('campaign.change.prepare',{accountId,marketplace:'mercado_livre',campaignRef,baseline:{dailyBudgetCents:1000},changes:{dailyBudgetCents:1200},reason:'Teste orçamento'})).result as any;
+    const ctx={accountId,campaignRef,sourcePath:'https://vendedores.mercadolivre.com.br/publicidade',documentNonce:'11111111-1111-4111-8111-111111111111',budgetCents:1000,proposalId:proposal.id};
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    expect((await call('campaign.change.review',{accountId,proposalId:proposal.id,decision:'APPROVED',reason:'Teste'})).ok).toBe(true);
+    for(const bad of [{accountId:other},{budgetCents:999},{sourcePath:'https://www.mercadolivre.com.br/publicidade'},{sourcePath:'https://vendedores.mercadolivre.com.br/publicidade?token=abc'},{campaignRef:'OTHER'},{confirmed:false}]){
+      expect((await call('campaign.budget.claim',{...ctx,confirmed:true,...bad})).ok).toBe(false);
+    }
+    const claim=await call('campaign.budget.claim',{...ctx,confirmed:true});
+    expect(claim.ok).toBe(true);
+    const grant=claim.result as any;
+    expect(grant).toMatchObject({beforeCents:1000,targetCents:1200,accountId,campaignRef});
+    expect((await call('campaign.budget.claim',{...ctx,confirmed:true})).ok).toBe(false);
+    expect((await call('campaign.budget.result',{id:grant.id,token:'22222222-2222-4222-8222-222222222222',outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(false);
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(true);
+    expect((await call('campaign.budget.result',{id:grant.id,token:grant.token,outcome:'NEEDS_VERIFICATION',message:'Teste'})).ok).toBe(false);
+    expect((await call('campaign.budget.verify',{...ctx,budgetCents:1200})).ok).toBe(false);
+    const reload={...ctx,documentNonce:'33333333-3333-4333-8333-333333333333'};
+    expect((await call('campaign.budget.verify',{...reload,budgetCents:999})).result).toMatchObject({status:'NEEDS_VERIFICATION',remoteVerified:false});
+    expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).result).toMatchObject({status:'UI_READBACK_MATCHED',remoteVerified:false,uiReadbackMatched:true});
+    expect((await call('campaign.budget.verify',{...reload,budgetCents:1200})).ok).toBe(false);
+    const items=(await call('campaign.budget.list',{accountId})).result as any[];
+    expect(items).toHaveLength(1);expect(items[0].status).toBe('UI_READBACK_MATCHED');expect(items[0].token_hash).toBeUndefined();
+    expect((await call('campaign.budget.list',{accountId:other})).result).toEqual([]);
+  });
+
   it('protege propostas de capa e variação por conta, aprovação e relato humano sem simular execução',async()=>{
     const accountId='acct-ops-5',other='acct-ops-other-5';seedImportAccount(accountId);seedImportAccount(other);
     const listingId='listing-ops-5',at='2025-01-07T23:59:59.999Z';
