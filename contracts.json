@@ -585,5 +585,17 @@
     "proposalId": "approved User Product offer proposal",
     "accessToken": "transient Mercado Livre OAuth token",
     "confirmed": true
+  },
+  "seo.config.status": {},
+  "seo.config.save": {
+    "login": "API login",
+    "password": "API password",
+    "enableSchedules": "boolean"
+  },
+  "seo.config.clear": {},
+  "seo.external.volume": {
+    "accountId": "active account",
+    "terms": "1..20 Google Ads terms",
+    "confirmed": true
   }
 }

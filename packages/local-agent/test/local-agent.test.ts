@@ -102,6 +102,8 @@ describe('SEO externo integrado',()=>{
       expect((await call('seo.watch.history',{accountId,id:watch.id})).result).toMatchObject([{position:4,status:'OBSERVED',costUsd:0.01}]);
       expect((await call('seo.watch.history',{accountId:other,id:watch.id})).ok).toBe(false);
       expect((await call('seo.watch.list',{accountId})).result).toMatchObject([{id:watch.id,remaining:0,enabled:0}]);
+      const config=await call('seo.config.save',{login:'encrypted-login',password:'encrypted-password',enableSchedules:false});expect(config.result).toMatchObject({configured:true,source:'LOCAL_ENCRYPTED',schedulesEnabled:false});expect(JSON.stringify(config)).not.toContain('encrypted-password');
+      expect((await call('seo.config.clear',{})).result).toMatchObject({configured:false,schedulesEnabled:false});
     }finally{vi.unstubAllGlobals();vi.unstubAllEnvs();}
   });
 });

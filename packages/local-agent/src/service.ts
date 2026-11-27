@@ -4,7 +4,7 @@
  */
 import { parseCsvText, parseXlsxBase64 } from './importers/tabular';
 import { parsePdfBase64 } from './importers/pdf';
-import { googleAdsTerm, lookupGoogleAdsVolume } from './connectors/dataforseo';
+import { googleAdsTerm } from './connectors/dataforseo';
 import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { seoResearchInput } from './connectors/openseo';
 import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/external-seo';
@@ -136,6 +136,10 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'adapter.diagnostics': 'view_reports',
   'keyword.upsert': 'manage_market_intelligence',
   'seo.external.research': 'manage_connectors',
+  'seo.config.status': 'view_reports',
+  'seo.config.save': 'manage_connectors',
+  'seo.config.clear': 'manage_connectors',
+  'seo.external.volume': 'manage_connectors',
   'seo.external.history': 'view_reports',
   'seo.external.get': 'view_reports',
   'seo.external.gap': 'view_reports',
@@ -294,7 +298,7 @@ export class LocalService {
 
   constructor(private readonly deps: ServiceDeps) {
     this.competitors = new CompetitorService(deps.db);
-    this.externalSeo=new ExternalSeoWorkspace(this.deps.db);
+    this.externalSeo=new ExternalSeoWorkspace(this.deps.db,this.deps.secrets);
     this.registerAll();
   }
 
@@ -1950,6 +1954,15 @@ export class LocalService {
     // ------------------------------------------------------------ keywords / rank
     const seoAccount=z.object({accountId:z.string().min(1)});
     const seoRun=seoAccount.extend({id:z.string().uuid()}).strict();
+    this.register('seo.config.status',()=>this.externalSeo.status());
+    this.register('seo.config.save',(payload,auth)=>{if(auth?.role!=='super_admin')throw Error('super_admin necessário');const result=this.externalSeo.configure(payload);this.audit(auth,'SEO_CONFIG_SAVE','dataforseo',null,'OK');return result;});
+    this.register('seo.config.clear',(_payload,auth)=>{if(auth?.role!=='super_admin')throw Error('super_admin necessário');const result=this.externalSeo.disconnect();this.audit(auth,'SEO_CONFIG_CLEAR','dataforseo',null,'OK');return result;});
+    this.register('seo.external.volume',async(payload,auth)=>{
+      if(auth?.role!=='super_admin')throw Error('super_admin necessário para consulta externa tarifada');
+      const i=z.object({accountId:z.string().min(1),terms:z.array(googleAdsTerm).min(1).max(20),confirmed:z.literal(true)}).strict().parse(payload);
+      const result=await this.externalSeo.volume(i.accountId,i.terms);
+      this.audit(auth,'GOOGLE_ADS_SEARCH_VOLUME','account',i.accountId,'OK',String(result.items.length)+' termos');return result;
+    });
     this.register('seo.external.research',async(payload,auth)=>{
       if(auth?.role!=='super_admin')throw Error('super_admin necessário para consulta externa tarifada');
       const {accountId,...input}=seoResearchInput.extend({accountId:z.string().min(1)}).strict().parse(payload);
@@ -2033,7 +2046,7 @@ export class LocalService {
         password:z.string().min(1).max(256),confirmedPaidRequest:z.literal(true),
       }).strict().parse(payload);
       if(!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',input.accountId))throw Error('conta ativa não encontrada');
-      const result=await lookupGoogleAdsVolume(input.login,input.password,input.terms);
+      const result=await this.externalSeo.volume(input.accountId,input.terms,{login:input.login,password:input.password});
       this.audit(auth,'GOOGLE_ADS_SEARCH_VOLUME','account',input.accountId,'OK',String(result.items.length)+' termos');
       return result;
     });

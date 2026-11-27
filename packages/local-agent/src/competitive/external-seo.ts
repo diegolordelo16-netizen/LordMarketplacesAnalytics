@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import type { LocalDatabase } from '../db/database';
+import type { SecretStore } from '../security/secrets';
+import { googleAdsTerm, lookupGoogleAdsVolume } from '../connectors/dataforseo';
 import { researchSeo, seoResearchInput, seoRequest, seoScope, safeDomain } from '../connectors/openseo';
 type Input=z.infer<typeof seoResearchInput>;
 type Result=Awaited<ReturnType<typeof researchSeo>>;
@@ -63,25 +65,45 @@ export const watchInput=z.object({accountId:z.string().min(1),keyword:z.string()
   maxRuns:z.number().int().min(1).max(30),confirmedPaidSchedule:z.literal(true)}).strict();
 export class ExternalSeoWorkspace{
   private busy=false;
-  constructor(private readonly db:LocalDatabase){}
+  constructor(private readonly db:LocalDatabase,private readonly secrets:SecretStore){}
+  private credentials(){const login=this.secrets.get('seo:dataforseo:login'),password=this.secrets.get('seo:dataforseo:password');if(login&&password)return {login,password,source:'LOCAL_ENCRYPTED'};if(this.secrets.get('seo:dataforseo:disabled')==='true')return null;const l=process.env.MI_DATAFORSEO_LOGIN?.trim(),p=process.env.MI_DATAFORSEO_PASSWORD;return l&&p?{login:l,password:p,source:'ENVIRONMENT'}:null;}
+  private scheduleEnabled(){const value=this.secrets.get('seo:dataforseo:schedules');return value!==null?value==='true':process.env.MI_DATAFORSEO_ENABLE_SCHEDULES==='true';}
+  status(){return {configured:!!this.credentials(),source:this.credentials()?.source??null,schedulesEnabled:this.scheduleEnabled(),busy:this.busy};}
+  configure(payload:unknown){const i=z.object({login:z.string().trim().min(1).max(254).regex(/^[^:\r\n]+$/),password:z.string().min(1).max(256),enableSchedules:z.boolean().default(false)}).strict().parse(payload);if(this.busy)throw Error('Aguarde a consulta em andamento.');this.db.transaction(()=>{this.secrets.set('seo:dataforseo:login',i.login);this.secrets.set('seo:dataforseo:password',i.password);this.secrets.set('seo:dataforseo:schedules',String(i.enableSchedules));this.secrets.delete('seo:dataforseo:disabled');if(!i.enableSchedules)this.db.db.prepare('UPDATE seo_rank_watches SET enabled=0').run();});return this.status();}
+  disconnect(){if(this.busy)throw Error('Aguarde a consulta em andamento.');this.db.transaction(()=>{this.secrets.deletePrefix('seo:dataforseo:');this.secrets.set('seo:dataforseo:disabled','true');this.secrets.set('seo:dataforseo:schedules','false');this.db.db.prepare('UPDATE seo_rank_watches SET enabled=0').run();});return this.status();}
   account(accountId:string){if(!this.db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',accountId))throw Error('Selecione uma conta ativa.');}
   async execute(accountId:string,input:Input,scheduleId:string|null=null){
     this.account(accountId);
     const parsed=seoResearchInput.parse(input),request=seoRequest(parsed);
-    if(!process.env.MI_DATAFORSEO_LOGIN?.trim()||!process.env.MI_DATAFORSEO_PASSWORD)throw Error('Configure as credenciais DataForSEO no ambiente do agente.');
+    const credentials=this.credentials();if(!credentials)throw Error('Configure DataForSEO no painel SEO & Keywords.');
     if(this.busy)throw Error('Já existe uma consulta externa em andamento.');
     this.busy=true;
     const id=randomUUID();
     try{
       this.db.db.prepare('INSERT INTO seo_external_runs(id,account_id,mode,query,device,location_name,scope,requested_at,status,schedule_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
         .run(id,accountId,parsed.mode,request.query,parsed.device,parsed.locationName??null,seoScope(parsed),new Date().toISOString(),'DISPATCHED',scheduleId);
-      const result=await researchSeo(parsed);
+      const result=await researchSeo(parsed,{MI_DATAFORSEO_LOGIN:credentials.login,MI_DATAFORSEO_PASSWORD:credentials.password});
       this.db.db.prepare('UPDATE seo_external_runs SET captured_at=?,status=?,cost_usd=?,total_count=?,provider_code=?,result_json=? WHERE id=? AND account_id=?')
         .run(result.capturedAt,result.status,result.costUsd,result.totalCount,result.providerCode,JSON.stringify(result.rows),id,accountId);
       return {...result,id,accountId};
     }catch(error){
       this.db.db.prepare("UPDATE seo_external_runs SET status='LOCAL_ERROR',captured_at=? WHERE id=? AND status='DISPATCHED'").run(new Date().toISOString(),id);
       throw error;
+    }finally{this.busy=false;}
+  }
+  async volume(accountId:string,terms:string[],transient?:{login:string;password:string}){
+    this.account(accountId);const input=z.array(googleAdsTerm).min(1).max(20).parse(terms);
+    const credentials=transient??this.credentials();if(!credentials)throw Error('Configure DataForSEO no painel SEO & Keywords.');
+    if(this.busy)throw Error('Já existe uma consulta externa em andamento.');
+    this.busy=true;const id=randomUUID(),at=new Date().toISOString();
+    try{
+      this.db.db.prepare('INSERT INTO seo_external_runs(id,account_id,mode,query,device,scope,requested_at,status) VALUES(?,?,?,?,?,?,?,?)').run(id,accountId,'googleVolume',input.join(' | '),'desktop','GOOGLE_ADS_BR_PT',at,'DISPATCHED');
+      const result=await lookupGoogleAdsVolume(credentials.login,credentials.password,input);
+      const rows=result.items.map(r=>({keyword:r.term,searchVolume:r.volume,paidCompetition:r.competition,competitionIndex:r.competitionIndex,keywordDifficulty:null,monthlyHistory:r.monthly.map(p=>p.year+'-'+String(p.month).padStart(2,'0')+'='+String(p.volume??'—')).join(' | ')}));
+      this.db.db.prepare("UPDATE seo_external_runs SET captured_at=?,status='OK',cost_usd=?,total_count=?,result_json=? WHERE id=? AND account_id=?").run(new Date().toISOString(),result.providerCostUsd,rows.length,JSON.stringify(rows),id,accountId);
+      return {...result,id,accountId,rows,scope:'GOOGLE_ADS_BR_PT',status:'OK',costUsd:result.providerCostUsd,capturedAt:new Date().toISOString(),providerCode:null};
+    }catch(error){
+      this.db.db.prepare("UPDATE seo_external_runs SET status='LOCAL_ERROR',captured_at=? WHERE id=? AND status='DISPATCHED'").run(new Date().toISOString(),id);throw error;
     }finally{this.busy=false;}
   }
   history(accountId:string,limit:number){this.account(accountId);return this.db.rows<Omit<Run,'result_json'>>('SELECT id,account_id,mode,query,device,location_name,scope,requested_at,captured_at,status,cost_usd,total_count,provider_code,schedule_id FROM seo_external_runs WHERE account_id=? ORDER BY requested_at DESC,id DESC LIMIT ?',accountId,limit);}
@@ -92,10 +114,10 @@ export class ExternalSeoWorkspace{
     const rows=compareKeywordSamples(rowsOf(own),rowsOf(other));
     return {scope:own.scope,ownDomain:own.query,otherDomain:other.query,ownSample:rowsOf(own).length,otherSample:rowsOf(other).length,rows,note:'Ausência na amostra não comprova ausência no ranking completo.'};
   }
-  keywords(accountId:string,id:string){const run=this.get(accountId,id);if(!['suggestions','related','ideas','overview','ranked'].includes(run.mode)||run.status!=='OK')throw Error('Escolha uma consulta de palavras-chave bem-sucedida.');return rowsOf(run);}
+  keywords(accountId:string,id:string){const run=this.get(accountId,id);if(!['suggestions','related','ideas','overview','ranked','googleVolume'].includes(run.mode)||run.status!=='OK')throw Error('Escolha uma consulta de palavras-chave bem-sucedida.');return rowsOf(run);}
   groups(accountId:string,id:string){
     const run=this.get(accountId,id);
-    if(!['suggestions','related','ideas','overview','ranked'].includes(run.mode)||run.status!=='OK')throw Error('Escolha uma consulta de palavras-chave bem-sucedida.');
+    if(!['suggestions','related','ideas','overview','ranked','googleVolume'].includes(run.mode)||run.status!=='OK')throw Error('Escolha uma consulta de palavras-chave bem-sucedida.');
     const titles=this.db.rows<{title:string}>('SELECT title FROM listings WHERE account_id=? AND title IS NOT NULL ORDER BY id LIMIT 1000',accountId).map(x=>x.title);
     return {scope:run.scope,groups:groupSeoKeywords(rowsOf(run),titles),catalogTitles:titles.length,note:'Agrupamento lexical e sinal exploratório baseado em demanda Google, dificuldade e aderência lexical; não mede margem ou conversão.'};
   }
@@ -116,7 +138,7 @@ export class ExternalSeoWorkspace{
   async processDue(){
     if(this.busy)return;
     // Explicit environment opt-in is required in addition to the finite per-watch approval.
-    if(process.env.MI_DATAFORSEO_ENABLE_SCHEDULES!=='true'||!process.env.MI_DATAFORSEO_LOGIN?.trim()||!process.env.MI_DATAFORSEO_PASSWORD)return;
+    if(!this.scheduleEnabled()||!this.credentials())return;
     const now=new Date().toISOString();
     const due=this.db.row<Watch>("SELECT w.* FROM seo_rank_watches w JOIN accounts a ON a.id=w.account_id WHERE w.enabled=1 AND w.remaining>0 AND (w.last_status IS NULL OR w.last_status<>'DISPATCHED') AND w.next_run_at<=? AND a.is_active=1 ORDER BY w.next_run_at,w.id LIMIT 1",now);
     if(!due)return;

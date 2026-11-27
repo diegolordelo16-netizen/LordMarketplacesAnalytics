@@ -22,3 +22,6 @@ O script scripts/openseo-mcp.mjs (também distribuído com o agente) expõe apen
 
 ## Cruzamento com os indicadores existentes
 O painel cruza termos de pesquisa com até três anúncios da mesma conta por similaridade lexical, reutilizando finance.profitability e inventory.dashboard, sem alterar os cálculos originais. Margem/lucro exigem intervalo financeiro explícito; estoque, vendas e Ads exibem o último snapshot disponível de 30 dias com sua data. Estoque zero, margem negativa e dados insuficientes ficam explícitos. O sinal é revisão humana, não decisão automática de investimento. Disponível também via ferramenta MCP somente leitura.
+
+## Fusão da etapa 06
+Conexão única no painel, armazenada no SecretStore criptografado existente. Google Ads (até 20 termos) integrado à mesma pesquisa, histórico e trava de consultas; o IPC anterior permanece compatível. Desconectar desativa todos os monitores, remove credenciais locais e impede fallback de ambiente até nova configuração. O opt-in de agendamentos pode ser configurado no painel. A configuração não faz teste tarifado. Consultas externas nunca substituem indicadores internos.

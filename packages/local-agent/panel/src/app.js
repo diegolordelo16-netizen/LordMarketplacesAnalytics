@@ -411,11 +411,12 @@ async function viewFinance() {
 // ------------------------------------------------------------------ SEO & KEYWORDS
 async function viewKeywords() {
   const accountId=state.accountId;
-  const [kws, gaps, seoHistory, seoWatches] = await Promise.all([
+  const [kws, gaps, seoHistory, seoWatches, seoConfig] = await Promise.all([
     api('keyword.list', {}).catch(() => []),
     api('keyword.gap', { accountId: state.accountId || 'local:default' }).catch(() => []),
     accountId?api('seo.external.history',{accountId}).catch(()=>[]):[],
     accountId?api('seo.watch.list',{accountId}).catch(()=>[]):[],
+    api('seo.config.status').catch(()=>({configured:false,schedulesEnabled:false})),
   ]);
   return card('Adicionar palavra-chave', `
     <div class="form-grid">
@@ -432,15 +433,16 @@ async function viewKeywords() {
         <option value="IMPORTACAO">Importação</option></select></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="kw-add">Adicionar termo</button></div>`)
+  + card('Conexão SEO externa — DataForSEO',`<p class="muted small">${seoConfig.configured?'Credencial disponível · '+esc(seoConfig.source):'Não configurado'} · Agendamento ${seoConfig.schedulesEnabled?'habilitado':'desabilitado'}. Nenhum teste pago automático.</p><div class="form-grid"><label>Login da API<input id="seo-config-login" autocomplete="off" maxlength="254"></label><label>Senha da API<input id="seo-config-password" type="password" autocomplete="off" maxlength="256"></label><label><input id="seo-config-schedules" type="checkbox" ${seoConfig.schedulesEnabled?'checked':''}> Permitir agendamentos tarifados autorizados individualmente</label></div><button class="btn" data-act="seo-config-save">Salvar conexão local</button> <button class="btn ghost" data-act="seo-config-clear">Desconectar</button>`)
   + (accountId?card('Pesquisa SEO externa — OpenSEO / DataForSEO', `
-    <p class="muted small">Google Brasil em português; ChatGPT externo EUA/en; backlinks da web global. Selecione outra localização canônica somente para SERP. Não representa volume ou posição no Mercado Livre, Shopee ou Amazon. Cada consulta pode ser cobrada pela DataForSEO, inclusive falhas. Configure as credenciais no ambiente do agente local.</p>
-    <div class="form-grid"><label>Pesquisa<select id="seo-external-mode"><option value="suggestions">Sugestões de palavras-chave</option><option value="related">Termos relacionados</option><option value="ideas">Ideias de palavras-chave</option><option value="serp">Resultados Google (SERP)</option><option value="ranked">Palavras-chave de domínio concorrente</option><option value="domain">Visibilidade de domínio</option><option value="backlinks">Resumo de backlinks</option><option value="overview">Visão geral da palavra-chave</option><option value="competitors">Concorrentes na SERP</option><option value="pages">Páginas orgânicas de domínio</option><option value="backlinkRows">Backlinks individuais</option><option value="referringDomains">Domínios de referência</option><option value="backlinkPages">Páginas com backlinks</option><option value="lighthouse">Auditoria técnica Lighthouse (URL HTTPS)</option><option value="aiGoogle">Menções em IA Google (BR/pt)</option><option value="aiChatGPT">Menções ChatGPT (EUA/en)</option></select></label>
-    <label>Termo ou domínio<input id="seo-external-query" maxlength="200" placeholder="capacete ou exemplo.com.br"></label><label>Limite<input id="seo-external-limit" type="number" min="1" max="100" value="25"></label><label>Dispositivo (SERP)<select id="seo-external-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica (somente SERP, opcional)<input id="seo-external-location" maxlength="160" placeholder="Sao Paulo,State of Sao Paulo,Brazil"></label></div>
+    <p class="muted small">Google Brasil em português; ChatGPT externo EUA/en; backlinks da web global. Selecione outra localização canônica somente para SERP. Não representa volume ou posição no Mercado Livre, Shopee ou Amazon. Cada consulta pode ser cobrada pela DataForSEO, inclusive falhas. Configure a conexão acima; as consultas ficam no histórico da loja.</p>
+    <div class="form-grid"><label>Pesquisa<select id="seo-external-mode"><option value="suggestions">Sugestões de palavras-chave</option><option value="googleVolume">Volume Google Ads (até 20 termos, um por linha)</option><option value="related">Termos relacionados</option><option value="ideas">Ideias de palavras-chave</option><option value="serp">Resultados Google (SERP)</option><option value="ranked">Palavras-chave de domínio concorrente</option><option value="domain">Visibilidade de domínio</option><option value="backlinks">Resumo de backlinks</option><option value="overview">Visão geral da palavra-chave</option><option value="competitors">Concorrentes na SERP</option><option value="pages">Páginas orgânicas de domínio</option><option value="backlinkRows">Backlinks individuais</option><option value="referringDomains">Domínios de referência</option><option value="backlinkPages">Páginas com backlinks</option><option value="lighthouse">Auditoria técnica Lighthouse (URL HTTPS)</option><option value="aiGoogle">Menções em IA Google (BR/pt)</option><option value="aiChatGPT">Menções ChatGPT (EUA/en)</option></select></label>
+    <label>Termo, domínio ou termos Google Ads<textarea id="seo-external-query" maxlength="1620" rows="2" placeholder="capacete ou exemplo.com.br"></textarea></label><label>Limite<input id="seo-external-limit" type="number" min="1" max="100" value="25"></label><label>Dispositivo (SERP)<select id="seo-external-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica (somente SERP, opcional)<input id="seo-external-location" maxlength="160" placeholder="Sao Paulo,State of Sao Paulo,Brazil"></label></div>
     <button class="btn" data-act="seo-external-research">Consultar fonte externa</button><div id="seo-external-out" class="out" aria-live="polite"></div>`):card("SEO externo","Selecione uma conta para guardar o histórico."))
-  + (accountId?card('Histórico SEO externo da loja',table(['Data','Consulta','Modo','Escopo','Status','Custo USD','Ações'],seoHistory.map(r=>'<tr><td>'+dt(r.requested_at)+'</td><td>'+esc(r.query)+'</td><td>'+esc(r.mode)+'</td><td>'+esc(r.scope)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.cost_usd??'—')+'</td><td><button class="btn tiny" data-act="seo-run-show" data-id="'+esc(r.id)+'">Abrir</button> '+(['suggestions','related','ideas','overview','ranked'].includes(r.mode)&&r.status==='OK'?'<button class="btn tiny" data-act="seo-run-groups" data-id="'+esc(r.id)+'">Agrupar</button>':'')+'</td></tr>'),'Nenhuma consulta.')+
-    '<div class="form-grid"><label>Amostra do domínio próprio<select id="seo-gap-own"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Amostra concorrente<select id="seo-gap-other"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label></div><button class="btn" data-act="seo-gap">Comparar Keyword Gap</button><div class="form-grid"><label>Pesquisa de termos<select id="seo-opportunities-run"><option value="">Selecione</option>'+seoHistory.filter(r=>['suggestions','related','ideas','overview','ranked'].includes(r.mode)&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Início do período financeiro (UTC)<input id="seo-opportunities-from" type="date"></label><label>Fim do período financeiro (UTC)<input id="seo-opportunities-to" type="date"></label></div><button class="btn" data-act="seo-opportunities">Cruzar com margem, estoque, vendas e Ads</button><div id="seo-history-out" class="out" aria-live="polite"></div>')+
+  + (accountId?card('Histórico SEO externo da loja',table(['Data','Consulta','Modo','Escopo','Status','Custo USD','Ações'],seoHistory.map(r=>'<tr><td>'+dt(r.requested_at)+'</td><td>'+esc(r.query)+'</td><td>'+esc(r.mode)+'</td><td>'+esc(r.scope)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.cost_usd??'—')+'</td><td><button class="btn tiny" data-act="seo-run-show" data-id="'+esc(r.id)+'">Abrir</button> '+(['suggestions','related','ideas','overview','ranked','googleVolume'].includes(r.mode)&&r.status==='OK'?'<button class="btn tiny" data-act="seo-run-groups" data-id="'+esc(r.id)+'">Agrupar</button>':'')+'</td></tr>'),'Nenhuma consulta.')+
+    '<div class="form-grid"><label>Amostra do domínio próprio<select id="seo-gap-own"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Amostra concorrente<select id="seo-gap-other"><option value="">Selecione</option>'+seoHistory.filter(r=>r.mode==='ranked'&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label></div><button class="btn" data-act="seo-gap">Comparar Keyword Gap</button><div class="form-grid"><label>Pesquisa de termos<select id="seo-opportunities-run"><option value="">Selecione</option>'+seoHistory.filter(r=>['suggestions','related','ideas','overview','ranked','googleVolume'].includes(r.mode)&&r.status==='OK').map(r=>'<option value="'+esc(r.id)+'">'+esc(r.query)+' · '+dt(r.requested_at)+'</option>').join('')+'</select></label><label>Início do período financeiro (UTC)<input id="seo-opportunities-from" type="date"></label><label>Fim do período financeiro (UTC)<input id="seo-opportunities-to" type="date"></label></div><button class="btn" data-act="seo-opportunities">Cruzar com margem, estoque, vendas e Ads</button><div id="seo-history-out" class="out" aria-live="polite"></div>')+
     card('Monitoramento Google — opt-in',`
-    <p class="muted small">Desativado por padrão. Para executar agendamentos, configure MI_DATAFORSEO_ENABLE_SCHEDULES=true e credenciais no agente. Cada execução pode ser tarifada; limite finito de consultas, não de dólares. Falhas suspendem o monitoramento; sem retry.</p>
+    <p class="muted small">Desativado por padrão. Habilite os agendamentos na conexão SEO acima e autorize cada monitoramento. Cada execução pode ser tarifada; limite finito de consultas, não de dólares. Falhas suspendem o monitoramento; sem retry.</p>
     <div class="form-grid"><label>Palavra-chave<input id="seo-watch-keyword" maxlength="200"></label><label>Domínio próprio<input id="seo-watch-domain" maxlength="200"></label><label>Dispositivo<select id="seo-watch-device"><option value="desktop">Desktop</option><option value="mobile">Mobile</option></select></label><label>Localização canônica opcional<input id="seo-watch-location" maxlength="160"></label><label>Intervalo (dias)<input id="seo-watch-interval" type="number" value="7" min="1" max="30"></label><label>Máximo de consultas<input id="seo-watch-max" type="number" value="4" min="1" max="30"></label></div>
     <button class="btn" data-act="seo-watch-create">Autorizar monitoramento</button>`+
     table(['Termo','Domínio','Dispositivo','Próxima','Restantes','Estado','Ações'],seoWatches.map(r=>'<tr><td>'+esc(r.keyword)+'</td><td>'+esc(r.domain)+'</td><td>'+esc(r.device)+'</td><td>'+dt(r.next_run_at)+'</td><td>'+num(r.remaining)+'</td><td>'+esc(r.enabled?'Ativo · '+(r.last_status||'Aguardando'):'Desativado · '+(r.last_status||'—'))+'</td><td><button class="btn tiny" data-act="seo-watch-history" data-id="'+esc(r.id)+'">Histórico</button> '+(r.enabled?'<button class="btn tiny" data-act="seo-watch-disable" data-id="'+esc(r.id)+'">Desativar</button>':'')+'</td></tr>'),'Nenhum monitoramento.')+'<div id="seo-watch-out" class="out" aria-live="polite"></div>'):'')
@@ -454,15 +456,6 @@ async function viewKeywords() {
     <div class="form-row"><button class="btn" data-act="kw-suggest">Sugerir termos pelos títulos</button><button class="btn" data-act="kw-cluster">Agrupar termos</button><button class="btn" data-act="kw-visibility">Calcular visibilidade</button><button class="btn" data-act="kw-cannibal">Detectar canibalização</button></div>
     <p class="muted small">Sugestões são extraídas do catálogo local, sem estimar volume de busca. Visibilidade usa apenas SERPs capturadas e não representa participação de mercado.</p>
     <div id="kw-intelligence-out" class="out"></div>`)
-  + (state.accountId?card('Volume de busca no Google',`
-    <div class="form-grid">
-      <label class="wide">Termos (até 20, um por linha) <textarea id="google-volume-terms" rows="4" maxlength="1620"></textarea></label>
-      <label>Login da API DataForSEO <input id="google-volume-login" autocomplete="off" maxlength="254"></label>
-      <label>Senha da API DataForSEO <input id="google-volume-password" type="password" autocomplete="off" maxlength="256"></label>
-    </div>
-    <p class="muted small">Brasil, português. O DataForSEO cobra pela consulta. Os resultados descrevem buscas no Google.</p>
-    <button class="btn" id="google-volume-submit" data-act="kw-google-volume">Consultar volume</button>
-    <div id="google-volume-out" class="out" aria-live="polite"></div>`):'')
   + card('Rank tracker', `
     <div class="form-row">
       <label class="grow">Anúncio (MLB...) <input id="rk-listing" placeholder="MLB1234567890"></label>
@@ -1959,35 +1952,8 @@ const ACTIONS = {
     initializeTables($('#bundle-out'));
   },
 
-  'kw-google-volume': async()=>{
-    const accountId=state.accountId,generation=viewRenderSequence,host=$('#google-volume-out'),button=$('#google-volume-submit');
-    if(!accountId||button.disabled)return;
-    const terms=$('#google-volume-terms').value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
-    const login=$('#google-volume-login').value.trim(),passwordInput=$('#google-volume-password'),password=passwordInput.value;
-    if(!login||!password||!terms.length||terms.length>20)throw Error('Informe as credenciais da API e de 1 a 20 termos.');
-    if(!confirm('Confirma uma consulta paga no DataForSEO para '+terms.length+' termo(s)?'))return;
-    const current=()=>generation===viewRenderSequence&&state.accountId===accountId&&host===$('#google-volume-out');
-    passwordInput.value='';
-    button.disabled=true;
-    host.textContent='Consultando Google Ads via DataForSEO…';
-    try{
-      const result=await api('keyword.googleVolume',{accountId,terms,login,password,confirmedPaidRequest:true});
-      if(!current())return;
-      const competition={LOW:'Baixa',MEDIUM:'Média',HIGH:'Alta'};
-      const rows=result.items.map(row=>{
-        const history=row.monthly.map(point=>point.year+'-'+String(point.month).padStart(2,'0')+' · '+num(point.volume)).join(' | ');
-        return '<tr><td>'+esc(row.term)+'</td><td>'+num(row.volume)+'</td><td>'+esc(competition[row.competition]||'—')+'</td><td>'+num(row.competitionIndex)+'</td><td>'+esc(history||'—')+'</td></tr>';
-      });
-      host.innerHTML=table(['Termo','Volume médio mensal','Concorrência em Ads','Índice em Ads','Histórico mensal'],rows,'Nenhum termo retornado.')+
-        '<p class="muted small">Google Ads via DataForSEO · Brasil · português'+
-        (result.providerCostUsd==null?'':' · Custo informado: US$ '+num(result.providerCostUsd,6))+'</p>';
-      initializeTables(host);
-    }catch(error){
-      if(current())host.textContent=error.message;
-    }finally{
-      button.disabled=false;
-    }
-  },
+  'seo-config-save':async()=>{const password=$('#seo-config-password'),login=$('#seo-config-login').value.trim(),enableSchedules=$('#seo-config-schedules').checked;if(!login||!password.value)throw Error('Informe login e senha da API.');if(enableSchedules&&!confirm('Permitir agendamentos tarifados previamente autorizados?'))return;const value=password.value;password.value='';await run(()=>api('seo.config.save',{login,password:value,enableSchedules}),'Conexão salva com proteção local.');await renderView();},
+  'seo-config-clear':async()=>{if(!confirm('Desconectar e desativar todos os monitoramentos SEO?'))return;await run(()=>api('seo.config.clear',{}),'Conexão removida.');await renderView();},
   'seo-external-research':async()=>{
     const accountId=state.accountId,host=$('#seo-external-out'),generation=viewRenderSequence,button=document.querySelector('[data-act="seo-external-research"]');
     const query=$('#seo-external-query').value.trim(),mode=$('#seo-external-mode').value,limit=Number($('#seo-external-limit').value),device=$('#seo-external-device').value;
@@ -1997,10 +1963,10 @@ const ACTIONS = {
     host.textContent='Consultando DataForSEO…';
     try{
       const locationName=$('#seo-external-location').value.trim()||undefined;
-      const result=await api('seo.external.research',{accountId,query,mode,limit,device,locationName,confirmed:true});
+      const result=mode==='googleVolume'?await api('seo.external.volume',{accountId,terms:query.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),confirmed:true}):await api('seo.external.research',{accountId,query,mode,limit,device,locationName,confirmed:true});
       if(generation!==viewRenderSequence||state.accountId!==accountId||host!==$('#seo-external-out'))return;
       const keys=[...new Set((result.rows||[]).flatMap(row=>Object.keys(row)))];
-      const labels={keyword:'Palavra-chave',searchVolume:'Volume Google estimado',cpc:'CPC (USD)',paidCompetition:'Concorrência paga (0–1)',keywordDifficulty:'Dificuldade SEO Google (0–100)',intent:'Intenção Google',latestMonth:'Último mês informado',latestMonthVolume:'Volume no mês',monthlyChangePct:'Variação mensal (%)',position:'Posição absoluta',estimatedTraffic:'Tráfego estimado',organicKeywords:'Palavras-chave orgânicas',domain:'Domínio',url:'URL',title:'Título',type:'Tipo',backlinks:'Backlinks',referringDomains:'Domínios de referência',rank:'Rank DataForSEO (0–100)',brokenBacklinks:'Backlinks quebrados',averagePosition:'Posição média',medianPosition:'Posição mediana',visibility:'Visibilidade DataForSEO',keywordsCount:'Termos',targetUrl:'URL de destino',anchor:'Âncora',spamScore:'Spam score',dofollow:'Dofollow',referringPages:'Páginas de referência',metric:'Indicador',value:'Valor',unit:'Unidade',question:'Pergunta',answer:'Resposta observada',aiSearchVolume:'Volume IA estimado',citedSources:'Fontes citadas',firstSeen:'Primeira observação',lastSeen:'Última observação'};
+      const labels={keyword:'Palavra-chave',searchVolume:'Volume Google estimado',cpc:'CPC (USD)',paidCompetition:'Concorrência paga',competitionIndex:'Índice Google Ads (0–100)',monthlyHistory:'Histórico mensal',keywordDifficulty:'Dificuldade SEO Google (0–100)',intent:'Intenção Google',latestMonth:'Último mês informado',latestMonthVolume:'Volume no mês',monthlyChangePct:'Variação mensal (%)',position:'Posição absoluta',estimatedTraffic:'Tráfego estimado',organicKeywords:'Palavras-chave orgânicas',domain:'Domínio',url:'URL',title:'Título',type:'Tipo',backlinks:'Backlinks',referringDomains:'Domínios de referência',rank:'Rank DataForSEO (0–100)',brokenBacklinks:'Backlinks quebrados',averagePosition:'Posição média',medianPosition:'Posição mediana',visibility:'Visibilidade DataForSEO',keywordsCount:'Termos',targetUrl:'URL de destino',anchor:'Âncora',spamScore:'Spam score',dofollow:'Dofollow',referringPages:'Páginas de referência',metric:'Indicador',value:'Valor',unit:'Unidade',question:'Pergunta',answer:'Resposta observada',aiSearchVolume:'Volume IA estimado',citedSources:'Fontes citadas',firstSeen:'Primeira observação',lastSeen:'Última observação'};
       host.innerHTML='<p>'+esc(result.status)+' · '+esc(result.scope)+' · '+dt(result.capturedAt)+' · Custo informado pelo provedor (USD): '+esc(result.costUsd??'desconhecido')+'</p>'+
         (result.providerCode!=null?'<p class="muted small">Código do provedor: '+esc(result.providerCode)+'</p>':'')+
         table(keys.map(k=>labels[k]||k),(result.rows||[]).map(row=>'<tr>'+keys.map(k=>'<td>'+esc(row[k]??'—')+'</td>').join('')+'</tr>'),'Nenhum dado externo disponível.')+
