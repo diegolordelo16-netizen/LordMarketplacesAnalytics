@@ -112,6 +112,7 @@ try{
     port = Number(readFileSync(join(data,'port.txt'),'utf8').trim());
     assert.notEqual(port,occupiedPort,'O serviço deve usar uma porta livre');
   } finally {
+    occupied.closeAllConnections();
     await new Promise(resolve => occupied.close(resolve));
   }
   const url = 'http://127.0.0.1:'+port+'/';
@@ -142,5 +143,17 @@ try{
   console.log('OK instalador real, registro Chrome/Edge, frame nativo, atalhos interativos, porta ocupada, preservação de dados e desinstalação.');
 }finally{
   try{if(existsSync(join(root,'node.exe')))await windowsQuiesce(root);}
-  finally{try{uninstall();}finally{rmSync(work,{recursive:true,force:true,maxRetries:20,retryDelay:250});}}
+  finally{
+    try{uninstall();}
+    finally{
+      const cleanup = { recursive:true, force:true, maxRetries:3, retryDelay:250 };
+      rmSync(data,cleanup);
+      try{rmSync(work,cleanup);}
+      catch(error){
+        // O navegador real pode manter aberto o perfil temporário até o runner encerrar.
+        if(!['EBUSY','EPERM','ENOTEMPTY'].includes(error.code) || !error.path?.startsWith(local+'\\'))throw error;
+        console.log('O runner descartará o perfil temporário do navegador ao terminar.');
+      }
+    }
+  }
 }
