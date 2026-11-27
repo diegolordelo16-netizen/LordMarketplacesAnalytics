@@ -205,6 +205,13 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'voc.items': 'view_reports',
   'finance.realized.upsert': 'manage_financial_limits',
   'finance.realized.list': 'view_reports',
+  'listing.change.prepare': 'manage_market_intelligence',
+  'listing.change.list': 'view_reports',
+  'listing.change.review': 'manage_accounts',
+  'operation.receipt.record': 'manage_accounts',
+  'operation.receipt.list': 'view_reports',
+  'offer.variation.update': 'manage_market_intelligence',
+  'offer.variation.delete': 'manage_market_intelligence',
   'finance.profitability': 'view_reports',
   'inventory.dashboard': 'view_reports',
   'ads.dashboard': 'view_reports',
@@ -2796,6 +2803,67 @@ export class LocalService {
       db.db.prepare('UPDATE offer_variation_proposals SET status=?,updated_at=? WHERE id=?').run(i.decision,nowIso(),i.id);
       this.audit(auth,'OFFER_VARIATION_REVIEW','offer_variation_proposal',i.id,i.decision,i.reason);
       return {ok:true,status:i.decision,published:false,execution:'REQUIRES_MARKETPLACE_UI_VALIDATION'};
+    });
+
+    this.register('listing.change.prepare',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),listingId:z.string().min(1),kind:z.enum(['COVER','DUPLICATE']),mediaId:z.string().min(1).optional(),reason:z.string().trim().min(5).max(2000)}).strict().parse(payload);
+      operationAccount(i.accountId);
+      const baseline=db.row<{id:string}>(`SELECT s.id FROM listing_snapshots s JOIN listings l ON l.id=s.listing_id AND l.account_id=s.account_id WHERE s.account_id=? AND s.listing_id=? AND s.source_class='A_PRIMARY_UI' ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`,i.accountId,i.listingId);
+      if(!baseline)throw Error('capture o anúncio da conta antes de preparar uma alteração');
+      const image=i.mediaId?db.row<{sha256:string}>('SELECT sha256 FROM media_library WHERE id=? AND account_id=?',i.mediaId,i.accountId):null;
+      if(i.kind==='COVER'&&!image)throw Error('selecione uma imagem da mesma loja');
+      if(i.kind==='DUPLICATE'&&i.mediaId)throw Error('duplicação não permite alterar capa na mesma proposta');
+      const id=randomUUID(),now=nowIso();
+      db.db.prepare('INSERT INTO listing_change_proposals(id,account_id,listing_id,kind,media_id,media_sha256,baseline_snapshot_id,reason,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,i.accountId,i.listingId,i.kind,i.mediaId??null,image?.sha256??null,baseline.id,i.reason,auth?.userId??null,now,now);
+      this.audit(auth,'LISTING_CHANGE_PREPARE','listing_change_proposal',id,'OK','rascunho local; disponibilidade de operação remota não comprovada');
+      return {id,status:'DRAFT',published:false};
+    });
+    this.register('listing.change.list',(payload)=>{
+      const i=z.object({accountId:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
+      return db.rows('SELECT p.*,l.external_id,l.title,m.filename FROM listing_change_proposals p JOIN listings l ON l.id=p.listing_id AND l.account_id=p.account_id LEFT JOIN media_library m ON m.id=p.media_id AND m.account_id=p.account_id WHERE p.account_id=? ORDER BY p.created_at DESC,p.id LIMIT 200',i.accountId);
+    });
+    this.register('listing.change.review',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),id:z.string().min(1),decision:z.enum(['APPROVED','REJECTED']),reason:z.string().trim().min(3).max(1000)}).strict().parse(payload);
+      operationAccount(i.accountId);
+      if(auth?.role!=='super_admin')throw Error('somente super_admin pode revisar');
+      const p=db.row<{kind:string;status:string;media_id:string|null;media_sha256:string|null}>('SELECT kind,status,media_id,media_sha256 FROM listing_change_proposals WHERE id=? AND account_id=?',i.id,i.accountId);
+      if(!p||p.status!=='DRAFT')throw Error('proposta não disponível');
+      if(i.decision==='APPROVED'&&p.kind==='COVER'&&!db.row('SELECT id FROM media_library WHERE id=? AND account_id=? AND sha256=?',p.media_id,i.accountId,p.media_sha256))throw Error('a imagem original não está mais disponível');
+      const now=nowIso();
+      const changed=db.db.prepare("UPDATE listing_change_proposals SET status=?,approved_by=?,approved_at=?,updated_at=? WHERE id=? AND account_id=? AND status='DRAFT'").run(i.decision,i.decision==='APPROVED'?auth.userId:null,i.decision==='APPROVED'?now:null,now,i.id,i.accountId);
+      if(changed.changes!==1)throw Error('proposta já revisada');
+      this.audit(auth,'LISTING_CHANGE_REVIEW','listing_change_proposal',i.id,i.decision,i.reason);
+      return {status:i.decision,published:false,execution:'MANUAL_ONLY_NOT_VERIFIED'};
+    });
+    this.register('offer.variation.update',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),id:z.string().min(1),variationName:z.string().trim().min(1).max(120),options:z.array(z.record(z.string(),z.unknown())).min(1).max(100),proposedPriceCents:z.number().int().min(0).nullable().optional(),proposedStock:z.number().int().min(0).nullable().optional()}).strict().parse(payload);
+      operationAccount(i.accountId);
+      const serialized=JSON.stringify(i.options);if(serialized.length>20000)throw Error('opções muito extensas');
+      const result=db.db.prepare("UPDATE offer_variation_proposals SET variation_name=?,options_json=?,proposed_price_cents=?,proposed_stock=?,updated_at=? WHERE id=? AND account_id=? AND status='DRAFT'").run(i.variationName,serialized,i.proposedPriceCents??null,i.proposedStock??null,nowIso(),i.id,i.accountId);
+      if(result.changes!==1)throw Error('somente rascunho da mesma conta pode ser editado');
+      this.audit(auth,'OFFER_VARIATION_UPDATE','offer_variation_proposal',i.id,'OK');return {ok:true,status:'DRAFT',published:false};
+    });
+    this.register('offer.variation.delete',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),id:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
+      const result=db.db.prepare("DELETE FROM offer_variation_proposals WHERE id=? AND account_id=? AND status='DRAFT'").run(i.id,i.accountId);
+      if(result.changes!==1)throw Error('somente rascunho da mesma conta pode ser excluído');
+      this.audit(auth,'OFFER_VARIATION_DELETE','offer_variation_proposal',i.id,'OK');return {ok:true};
+    });
+    this.register('operation.receipt.record',(payload,auth)=>{
+      const i=z.object({accountId:z.string().min(1),proposalKind:z.enum(['CAMPAIGN','VARIATION','LISTING_CHANGE']),proposalId:z.string().min(1),performedAt:z.string().datetime(),evidenceReference:z.string().trim().min(5).max(1000),confirmedManualExecution:z.literal(true)}).strict().parse(payload);
+      operationAccount(i.accountId);
+      if(auth?.role!=='super_admin'||!auth.userId)throw Error('somente super_admin pode registrar execução manual');
+      const tables={CAMPAIGN:'campaign_change_proposals',VARIATION:'offer_variation_proposals',LISTING_CHANGE:'listing_change_proposals'} as const;
+      const p=db.row<{status:string;updated_at:string}>(`SELECT status,updated_at FROM ${tables[i.proposalKind]} WHERE id=? AND account_id=?`,i.proposalId,i.accountId);
+      if(!p||p.status!=='APPROVED'||i.performedAt<p.updated_at||i.performedAt>nowIso())throw Error('proposta aprovada da mesma conta e data posterior à revisão são obrigatórias');
+      const id=randomUUID();
+      db.db.prepare('INSERT INTO operation_manual_receipts(id,account_id,proposal_kind,proposal_id,performed_at,evidence_reference,reported_by,reported_at) VALUES(?,?,?,?,?,?,?,?)').run(id,i.accountId,i.proposalKind,i.proposalId,i.performedAt,i.evidenceReference,auth.userId,nowIso());
+      this.audit(auth,'OPERATION_MANUAL_RECEIPT','operation_manual_receipt',id,'OK','relato humano; não comprova alteração no marketplace');
+      return {id,status:'HUMAN_REPORTED',remoteVerified:false};
+    });
+    this.register('operation.receipt.list',(payload)=>{
+      const i=z.object({accountId:z.string().min(1)}).strict().parse(payload);operationAccount(i.accountId);
+      return db.rows('SELECT * FROM operation_manual_receipts WHERE account_id=? ORDER BY performed_at DESC,id LIMIT 200',i.accountId).map(row=>({...row,status:'HUMAN_REPORTED',remoteVerified:false}));
     });
 
     const defaultOperationPolicy = { readCapture: true, prepareDrafts: true, editListings: false, publish: false, changeCampaigns: false, changeOffers: false, requireHumanApproval: true, requirePostSaveVerification: true };
