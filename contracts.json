@@ -397,5 +397,17 @@
     "sourceReference": "string",
     "confirmedSameScope": true,
     "result": "reported attributed profit, not audited or incremental"
+  },
+  "campaign.change.review": {
+    "accountId": "string",
+    "proposalId": "string",
+    "decision": "APPROVED|REJECTED",
+    "reason": "string"
+  },
+  "offer.variation.review": {
+    "accountId": "string",
+    "id": "string",
+    "decision": "APPROVED|REJECTED",
+    "reason": "string"
   }
 }
