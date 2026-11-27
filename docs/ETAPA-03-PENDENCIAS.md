@@ -36,3 +36,7 @@ Em 27/11/2026 o usuário autorizou a integração e o avanço para a etapa 04, d
 - Interfaces sem marcador/ID verificável, seletores arbitrários, widgets desconhecidos e gráficos exclusivamente em pixels permanecem fora da cobertura comprovada. Não interpretar essas limitações como implementação universal; coleta parcial é indicada e ações incertas são recusadas. Não usar APIs privadas ou simular números.
 - Homologação real com contas dos marketplaces, Chrome/Edge e Windows: dispensada para a entrega, não executada. Conciliação com relatórios reais permanece recomendada.
 - A etapa 04 deve partir da versão integrada, após aprovação dos testes automatizados disponíveis. Não alterar testes para esconder falhas.
+
+## Revisão após a integração
+
+O PR #3 foi integrado em `ac59f94` após a CI aprovar o commit `2e23ccba`. A revisão da coleta confirmou que a checagem de área antes do envio estava vinculada à paginação SPA. A captura inicial, a navegação por URL e a coleta dedicada também passam a exigir a mesma área e o mesmo marketplace observados antes do envio. A regressão reproduz a troca de contexto mantendo a URL e a conta.

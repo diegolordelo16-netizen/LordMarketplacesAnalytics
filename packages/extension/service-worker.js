@@ -415,7 +415,11 @@ async function captureTab(tabId, expected = {}) {
     return { ok: false, error: response?.error ?? 'página sem captura disponível' };
   }
   const snapshot = response.snapshot;
-  if(expected.spaRecordIds!==undefined&&(JSON.stringify(spaRecordIds(snapshot))!==expected.spaRecordIds||snapshot.pageKind!==expected.pageKind))return {ok:false,error:'registros SPA mudaram antes da captura'};
+  if (!snapshot || (expected.pageKind !== undefined && snapshot.pageKind !== expected.pageKind) ||
+      (expected.marketplace !== undefined && snapshot.marketplace !== expected.marketplace)) {
+    return { ok: false, error: 'a área ou o marketplace mudou antes da captura' };
+  }
+  if(expected.spaRecordIds!==undefined&&JSON.stringify(spaRecordIds(snapshot))!==expected.spaRecordIds)return {ok:false,error:'registros SPA mudaram antes da captura'};
   const listingFingerprint=JSON.stringify((snapshot.initialListingIds??(snapshot.listings??[]).map(row=>String(row.listingId))).sort());
   if(expected.excludedListingIds&&(snapshot.listings??[]).some(row=>expected.excludedListingIds.has(String(row.listingId))))return {ok:false,error:'anúncios já capturados nesta varredura'};
   if ((expected.spaPage!==undefined&&snapshot.spaPage!==expected.spaPage)||(expected.listingFingerprint!==undefined&&listingFingerprint!==expected.listingFingerprint)||(expected.accountId && snapshot.accountId !== expected.accountId) ||
@@ -589,7 +593,7 @@ async function captureListingPages(sourceTabId, requestedMaxPages = 5,options={}
         if(!await persist())break;
         const canonicalUrl=new URL(info.url);canonicalUrl.searchParams.sort();canonicalUrl.hash='';
         const captureKey=options.logicalBatchId?await digest(JSON.stringify([options.logicalBatchId,info.accountId,canonicalUrl.href,info.spaPagination?.page??null,info.filterSignature])):undefined;
-        const captured=await captureTab(temporary.id,{accountId:info.accountId,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint,virtualized:true,excludedListingIds:seenIds,...(captureKey?{captureKey,bindPageIdentity:true}:{})});
+        const captured=await captureTab(temporary.id,{accountId:info.accountId,marketplace,pageKind:info.pageKind,url:info.url,filterSignature:info.filterSignature,spaPage:info.spaPagination?.page,listingFingerprint:fingerprint,virtualized:true,excludedListingIds:seenIds,...(captureKey?{captureKey,bindPageIdentity:true}:{})});
         const observedIds=(captured.snapshot?.listings??preview.listings).map(row=>String(row.listingId));
         pages[index]={...base,ok:Boolean(captured.ok),listingIds:observedIds,listings:observedIds.length,error:captured.error,coverageWarnings:captured.snapshot?.coverageWarnings??info.coverageWarnings};
         if(!await persist())break;
@@ -802,7 +806,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
   if (!rootTemporary&&currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
     if (options.beforeCapture) await options.beforeCapture();
-    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url, filterSignature:initialInfo.filterSignature, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
+    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, marketplace, pageKind: initialInfo.pageKind, url: initialInfo.url, filterSignature:initialInfo.filterSignature, ...(options.logicalBatchId ? { captureKey: await keyForCapture(currentUrl) } : {}) });
     recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued), filterSignature:initialInfo.filterSignature, coverageWarnings:firstCapture.snapshot?.coverageWarnings??initialInfo.coverageWarnings });
     if(firstCapture.snapshot?.coverageWarnings?.length)unsupportedLinks=true;
     if (firstCapture.ok || (firstCapture.queued && !options.logicalBatchId)) {
@@ -909,7 +913,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
             pages[position]=base;
             if(!await persistProgress()){failed=true;break;}
             const captureKey=options.logicalBatchId?await digest(JSON.stringify([options.logicalBatchId,expectedAccountId,item.key,expectedPage])):undefined;
-            const captured=await captureTab(temporary.id,{accountId:expectedAccountId,url:info.url,pageKind:info.pageKind,filterSignature:info.filterSignature,spaPage:expectedPage,spaRecordIds:fingerprint,spaFingerprint:hash,virtualized:Boolean(state.coverageWarnings?.includes('TABELA_VIRTUALIZADA')),skipAreaTotals:step>0,...(captureKey?{captureKey}:{})});
+            const captured=await captureTab(temporary.id,{accountId:expectedAccountId,marketplace,url:info.url,pageKind:info.pageKind,filterSignature:info.filterSignature,spaPage:expectedPage,spaRecordIds:fingerprint,spaFingerprint:hash,virtualized:Boolean(state.coverageWarnings?.includes('TABELA_VIRTUALIZADA')),skipAreaTotals:step>0,...(captureKey?{captureKey}:{})});
             pages[position]={...base,ok:Boolean(captured.ok),queued:Boolean(captured.queued),error:captured.ok?undefined:captured.error,coverageWarnings:captured.snapshot?.coverageWarnings??state.coverageWarnings};
             if(!await persistProgress()){failed=true;break;}
             if(!captured.ok){stoppedReason='captura SPA não confirmada';failed=true;break;}
@@ -930,7 +934,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       }
 
       if (options.beforeCapture) await options.beforeCapture();
-      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url, filterSignature:info.filterSignature, spaPage:info.spaPagination?.page, virtualized:Boolean(info.coverageWarnings?.includes('TABELA_VIRTUALIZADA')), ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
+      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, marketplace, pageKind: info.pageKind, url: info.url, filterSignature:info.filterSignature, spaPage:info.spaPagination?.page, virtualized:Boolean(info.coverageWarnings?.includes('TABELA_VIRTUALIZADA')), ...(options.logicalBatchId ? { captureKey: await keyForCapture(target) } : {}) });
       recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued), filterSignature:info.filterSignature, coverageWarnings:captured.snapshot?.coverageWarnings??info.coverageWarnings });
       if((captured.snapshot?.coverageWarnings??info.coverageWarnings)?.length)unsupportedLinks=true;
       if (captured.ok || (captured.queued && !options.logicalBatchId)) {
