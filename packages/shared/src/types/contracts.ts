@@ -90,6 +90,7 @@ export const IPC_METHODS = [
   'capture.chartPoints',
   'navigation.observe',
   'navigation.list',
+  'navigation.graph',
   'navigation.clear',
   'kpi.listing',
   'kpi.dashboard',
