@@ -585,3 +585,13 @@ test('serviço não persiste nem imprime token na URL do launcher', () => {
   assert.ok(!main.includes('?token=\${app.token}'));
   assert.ok(main.includes("const panelUrl = app.url ?? '';"));
 });
+
+test('manifesto Windows registra arquivo real do host e instalador inclui o wrapper', () => {
+  const register=readFileSync(new URL('../packages/native-host/src/register-cli.ts',import.meta.url),'utf8');
+  const build=readFileSync(new URL('../scripts/build-native-host.mjs',import.meta.url),'utf8');
+  const iss=readFileSync(new URL('../installer/marketplace-intelligence.iss',import.meta.url),'utf8');
+  assert.ok(register.includes("const hostPath = join(hostDir, 'native-host.bat')"));
+  assert.ok(register.includes("!existsSync(hostPath)"));
+  assert.ok(build.includes("writeFileSync(join(outdir, 'native-host.bat')"));
+  assert.ok(iss.includes('native-host\\native-host.bat'));
+});

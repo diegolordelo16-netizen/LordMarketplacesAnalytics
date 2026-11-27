@@ -39,6 +39,15 @@ await build({
   outfile: join(outdir, 'register.js'),
 });
 
+// O manifesto Windows aponta para um arquivo real (.bat), conforme o exemplo Chromium.
+writeFileSync(join(outdir, 'native-host.bat'), [
+  '@echo off',
+  'setlocal',
+  '"%~dp0..\\node.exe" "%~dp0native-host.js" "%~1" "%~2"',
+  'exit /b %ERRORLEVEL%',
+  ''
+].join('\r\n'));
+
 // O pacote raiz é ESM: o bundle CJS precisa de package.json próprio para ser lido como CommonJS.
 writeFileSync(join(outdir, 'package.json'), JSON.stringify({ type: 'commonjs' }, null, 2));
 

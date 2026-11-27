@@ -66,6 +66,7 @@ Source: "{#SourceRoot}\dist\local-agent\third-party\open-seo\LICENSE"; DestDir: 
 Source: "{#SourceRoot}\dist\local-agent\migrations\*.sql"; DestDir: "{app}\local-agent\migrations"; Flags: ignoreversion
 ; Host nativo
 Source: "{#SourceRoot}\dist\native-host\native-host.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
+Source: "{#SourceRoot}\dist\native-host\native-host.bat"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\register.js"; DestDir: "{app}\native-host"; Flags: ignoreversion
 Source: "{#SourceRoot}\dist\native-host\package.json"; DestDir: "{app}\native-host"; Flags: ignoreversion
 ; Extensão (para carregar no navegador)

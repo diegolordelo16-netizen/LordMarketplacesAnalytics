@@ -49,7 +49,7 @@ function deriveExtensionId(manifestPath) {
   return id;
 }
 
-for (const required of ['dist/local-agent/main.js', 'dist/native-host/native-host.js', 'dist/native-host/register.js', 'dist/extension/manifest.json']) {
+for (const required of ['dist/local-agent/main.js', 'dist/native-host/native-host.js', 'dist/native-host/native-host.bat', 'dist/native-host/register.js', 'dist/extension/manifest.json']) {
   if (!existsSync(join(root, required))) {
     console.error(`ERRO: artefato ausente: ${required}. Rode npm run agent:build host:build ext:build antes.`);
     process.exit(1);
