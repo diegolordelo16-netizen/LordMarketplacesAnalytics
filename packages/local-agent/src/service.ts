@@ -2797,7 +2797,9 @@ export class LocalService {
     this.register('campaign.change.prepare', (payload, auth) => {
       const i = z.object({ accountId: z.string(), marketplace: z.string(), campaignRef: z.string().min(1).max(200), baseline: z.record(z.string(), z.unknown()), changes: z.record(z.string(), z.unknown()), reason: z.string().min(5).max(2000) }).parse(payload ?? {});
       if (!db.row('SELECT id FROM accounts WHERE id=? AND marketplace=? AND is_active=1', i.accountId, i.marketplace)) throw new Error('conta ativa e marketplace não correspondem');
-      if (!Object.keys(i.changes).length) throw new Error('nenhuma alteração proposta');
+      operationAccount(i.accountId);
+      if (!Object.keys(i.changes).length||!Object.keys(i.baseline).length) throw new Error('estado inicial e alteração proposta são obrigatórios');
+      if(JSON.stringify(i.baseline).length>20000||JSON.stringify(i.changes).length>20000)throw new Error('proposta muito extensa');
       const id = randomUUID(); const now = nowIso();
       db.db.prepare('INSERT INTO campaign_change_proposals (id,account_id,marketplace,campaign_ref,baseline_json,changes_json,reason,status,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'DRAFT\',?,?,?)')
         .run(id,i.accountId,i.marketplace,i.campaignRef,JSON.stringify(i.baseline),JSON.stringify(i.changes),i.reason,auth?.userId ?? null,now,now);
@@ -2809,18 +2811,22 @@ export class LocalService {
       return db.rows<Record<string, unknown>>('SELECT * FROM campaign_change_proposals WHERE (? IS NULL OR account_id=?) AND (? IS NULL OR status=?) ORDER BY created_at DESC LIMIT ?',i.accountId ?? null,i.accountId ?? null,i.status ?? null,i.status ?? null,i.limit).map((r)=>({...r,baseline:parseJsonObject(String(r.baseline_json)),changes:parseJsonObject(String(r.changes_json))}));
     });
     this.register('campaign.change.review', (payload, auth) => {
-      const i = z.object({ proposalId: z.string(), decision: z.enum(['APPROVED','REJECTED']), reason: z.string().min(3).max(1000) }).parse(payload ?? {});
+      const i = z.object({ accountId:z.string().min(1),proposalId: z.string(), decision: z.enum(['APPROVED','REJECTED']), reason: z.string().min(3).max(1000) }).parse(payload ?? {});
       if (auth?.role !== 'super_admin') throw new Error('somente super_admin pode aprovar alterações de campanha');
-      const row = db.row<{ id: string; status: string }>('SELECT id,status FROM campaign_change_proposals WHERE id=?',i.proposalId);
+      operationAccount(i.accountId);
+      const row = db.row<{ id: string; status: string }>('SELECT id,status FROM campaign_change_proposals WHERE id=? AND account_id=?',i.proposalId,i.accountId);
       if (!row || row.status !== 'DRAFT') throw new Error('proposta inexistente ou já revisada');
-      db.db.prepare('UPDATE campaign_change_proposals SET status=?,approved_by=?,approved_at=?,updated_at=? WHERE id=?')
-        .run(i.decision, i.decision==='APPROVED' ? auth.userId : null, i.decision==='APPROVED' ? nowIso() : null, nowIso(), i.proposalId);
+      const changed=db.db.prepare("UPDATE campaign_change_proposals SET status=?,approved_by=?,approved_at=?,updated_at=? WHERE id=? AND account_id=? AND status='DRAFT'")
+        .run(i.decision, i.decision==='APPROVED' ? auth.userId : null, i.decision==='APPROVED' ? nowIso() : null, nowIso(), i.proposalId,i.accountId);
+      if(changed.changes!==1)throw Error('proposta já revisada');
       this.audit(auth, 'CAMPAIGN_CHANGE_REVIEW', 'campaign_change_proposal', i.proposalId, i.decision, i.reason);
       return { ok: true, status: i.decision, execution: 'BLOCKED_UNTIL_MARKETPLACE_ADAPTER_AND_SESSION_ARE_VERIFIED', changedRemotely: false };
     });
 
     this.register('offer.variation.prepare', (payload, auth) => {
       const i = z.object({ accountId: z.string(), listingId: z.string(), variationName: z.string().min(1).max(120), options: z.array(z.record(z.string(), z.unknown())).min(1).max(100), proposedPriceCents: z.number().int().min(0).nullable().optional(), proposedStock: z.number().int().min(0).nullable().optional() }).parse(payload ?? {});
+      operationAccount(i.accountId);
+      if(JSON.stringify(i.options).length>20000||i.options.some(o=>Object.keys(o).length===0))throw Error('opções vazias ou muito extensas');
       const listing = db.row<{ id: string; account_id: string }>('SELECT id,account_id FROM listings WHERE id=? AND account_id=?',i.listingId,i.accountId);
       if (!listing) throw new Error('anúncio não pertence à conta');
       const id=randomUUID(); const now=nowIso();
@@ -2834,11 +2840,13 @@ export class LocalService {
       return db.rows<Record<string,unknown>>('SELECT * FROM offer_variation_proposals WHERE (? IS NULL OR account_id=?) AND (? IS NULL OR listing_id=?) ORDER BY created_at DESC LIMIT ?',i.accountId ?? null,i.accountId ?? null,i.listingId ?? null,i.listingId ?? null,i.limit).map((r)=>({...r,options:JSON.parse(String(r.options_json))}));
     });
     this.register('offer.variation.review', (payload, auth) => {
-      const i=z.object({id:z.string(),decision:z.enum(['APPROVED','REJECTED']),reason:z.string().min(3).max(1000)}).parse(payload ?? {});
+      const i=z.object({accountId:z.string().min(1),id:z.string(),decision:z.enum(['APPROVED','REJECTED']),reason:z.string().min(3).max(1000)}).parse(payload ?? {});
       if(auth?.role!=='super_admin') throw new Error('somente super_admin pode aprovar variações');
-      const row=db.row<{id:string;status:string}>('SELECT id,status FROM offer_variation_proposals WHERE id=?',i.id);
+      operationAccount(i.accountId);
+      const row=db.row<{id:string;status:string}>('SELECT id,status FROM offer_variation_proposals WHERE id=? AND account_id=?',i.id,i.accountId);
       if(!row || row.status!=='DRAFT') throw new Error('proposta inexistente ou já revisada');
-      db.db.prepare('UPDATE offer_variation_proposals SET status=?,updated_at=? WHERE id=?').run(i.decision,nowIso(),i.id);
+      const changed=db.db.prepare("UPDATE offer_variation_proposals SET status=?,updated_at=? WHERE id=? AND account_id=? AND status='DRAFT'").run(i.decision,nowIso(),i.id,i.accountId);
+      if(changed.changes!==1)throw Error('proposta já revisada');
       this.audit(auth,'OFFER_VARIATION_REVIEW','offer_variation_proposal',i.id,i.decision,i.reason);
       return {ok:true,status:i.decision,published:false,execution:'REQUIRES_MARKETPLACE_UI_VALIDATION'};
     });
@@ -2876,7 +2884,7 @@ export class LocalService {
     this.register('offer.variation.update',(payload,auth)=>{
       const i=z.object({accountId:z.string().min(1),id:z.string().min(1),variationName:z.string().trim().min(1).max(120),options:z.array(z.record(z.string(),z.unknown())).min(1).max(100),proposedPriceCents:z.number().int().min(0).nullable().optional(),proposedStock:z.number().int().min(0).nullable().optional()}).strict().parse(payload);
       operationAccount(i.accountId);
-      const serialized=JSON.stringify(i.options);if(serialized.length>20000)throw Error('opções muito extensas');
+      const serialized=JSON.stringify(i.options);if(serialized.length>20000||i.options.some(o=>Object.keys(o).length===0))throw Error('opções vazias ou muito extensas');
       const result=db.db.prepare("UPDATE offer_variation_proposals SET variation_name=?,options_json=?,proposed_price_cents=?,proposed_stock=?,updated_at=? WHERE id=? AND account_id=? AND status='DRAFT'").run(i.variationName,serialized,i.proposedPriceCents??null,i.proposedStock??null,nowIso(),i.id,i.accountId);
       if(result.changes!==1)throw Error('somente rascunho da mesma conta pode ser editado');
       this.audit(auth,'OFFER_VARIATION_UPDATE','offer_variation_proposal',i.id,'OK');return {ok:true,status:'DRAFT',published:false};
