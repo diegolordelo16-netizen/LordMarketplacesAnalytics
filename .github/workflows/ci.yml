@@ -30,11 +30,21 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
-      - name: Test
-        run: npm test
       - name: Build local agent
         run: npm run agent:build
       - name: Build native host
         run: npm run host:build
       - name: Build extension
         run: npm run ext:build
+      - name: Test
+        run: npm test
+      - name: Regressões de coleta e dashboard
+        run: node --test scripts/regression-3109.test.mjs
+      - name: Auditoria estática
+        run: npm run audit
+      - name: Smoke local
+        run: npm run smoke:local
+      - name: Smoke de publicação assistida
+        run: npm run audit:publish
+      - name: Integridade do schema
+        run: npm run db:generate -- --check

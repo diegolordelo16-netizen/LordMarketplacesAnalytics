@@ -651,6 +651,18 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
     ...(page.error ? { error: String(page.error).slice(0, 500) } : {}),
     queued: Boolean(page.queued),
   }));
+  // Uma tentativa falha continua ocupando o mesmo registro de página, não uma
+  // nova posição a cada retomada. Páginas entregues ou enfileiradas não são refeitas.
+  const failedIndex = (url) => pages.findIndex((page) => {
+    const target = normalizeAuthorizedAreaUrl(page.url, origin, marketplace);
+    return target && keyOf(target) === keyOf(url) && !page.ok && !page.queued;
+  });
+  const canCapture = (url) => pages.length < maxPages || failedIndex(url) >= 0;
+  const recordPage = (url, data) => {
+    const existing = failedIndex(url);
+    if (existing >= 0) pages[existing] = { ...data, page: existing + 1 };
+    else pages.push({ ...data, page: pages.length + 1 });
+  };
   const queue = [];
   const enqueueLinks = (links) => {
     for (const link of Array.isArray(links) ? links : []) {
@@ -696,12 +708,22 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
   };
 
   // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
-  if (currentUrl && !seen.has(keyOf(currentUrl)) && pages.length < maxPages) {
+  if (currentUrl && !seen.has(keyOf(currentUrl)) && canCapture(currentUrl)) {
     const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url });
-    pages.push({ page: pages.length + 1, url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued) });
-    if (firstCapture.ok || firstCapture.queued) seen.add(keyOf(currentUrl));
+    recordPage(currentUrl, { url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued) });
+    if (firstCapture.ok || firstCapture.queued) {
+      seen.add(keyOf(currentUrl));
+      const duplicate = queue.findIndex((item) => item.key === keyOf(currentUrl));
+      if (duplicate >= 0) queue.splice(duplicate, 1);
+    } else {
+      if (!queue.some((item) => item.key === keyOf(currentUrl))) {
+        if (queue.length >= 100) queue.pop();
+        queue.unshift({ key: keyOf(currentUrl), url: currentUrl.href, label: 'página inicial' });
+      }
+      stoppedReason = 'captura da página inicial falhou; retome antes de navegar para outras áreas';
+    }
     enqueueLinks(initialInfo.authorizedAreaLinks);
-    if (!(await persistProgress())) {
+    if (!(await persistProgress()) || (!firstCapture.ok && !firstCapture.queued)) {
       return { ok: pages.some((page) => page.ok), marketplace, pagesScanned: pages.length, pagesSucceeded: pages.filter((page) => page.ok).length, pagesQueued: pages.filter((page) => page.queued).length, pendingPages: queue.length, areas: [...new Set(pages.map((page) => page.pageKind))], stoppedReason, progressError, pages };
     }
   } else {
@@ -710,11 +732,11 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
 
   let temporary = null;
   try {
-    if (queue.length && pages.length < maxPages) {
+    if (queue.length && canCapture(new URL(queue[0].url))) {
       temporary = await chrome.tabs.create({ url: source.url, active: false, windowId: source.windowId });
       await readCapturePageInfo(temporary.id);
     }
-    while (queue.length && pages.length < maxPages && temporary?.id) {
+    while (queue.length && canCapture(new URL(queue[0].url)) && temporary?.id) {
       const item = queue[0];
       const target = normalizeAuthorizedAreaUrl(item.url, origin, marketplace);
       if (!target) { queue.shift(); continue; }
@@ -741,7 +763,7 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
         break;
       }
       const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url });
-      pages.push({ page: pages.length + 1, url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued) });
+      recordPage(target, { url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued) });
       if (captured.ok || captured.queued) {
         seen.add(item.key);
         queue.shift();
@@ -752,9 +774,9 @@ async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, option
       }
       if (!(await persistProgress())) break;
       if (!captured.ok && !captured.queued) break;
-      if (queue.length && pages.length < maxPages) await new Promise((resolve) => setTimeout(resolve, 900));
+      if (queue.length && canCapture(new URL(queue[0].url))) await new Promise((resolve) => setTimeout(resolve, 900));
     }
-    if (pages.length >= maxPages && queue.length) stoppedReason = `limite de segurança de ${maxPages} páginas atingido`;
+    if (queue.length && !canCapture(new URL(queue[0].url))) stoppedReason = `limite de segurança de ${maxPages} páginas atingido`;
   } finally {
     if (temporary?.id) await chrome.tabs.remove(temporary.id).catch(() => undefined);
   }

@@ -2,7 +2,11 @@
 
 Plataforma Local First de inteligência e operações para marketplaces. Funciona sobre dados visíveis na sessão autenticada do vendedor e no banco local. Não lê cookies/tokens do marketplace nem chama endpoints privados.
 
-## Versão 3.10.8
+## Versão 3.10.9 — revisão de estabilidade (candidata)
+
+Correções de retomada de páginas, proteção contra respostas atrasadas no dashboard e mensagens explícitas de falhas. O relatório descreve os testes executados e bloqueados. [Parecer técnico e regressões](DEBUG-3.10.9.md)
+
+### Base 3.10.8
 
 No dashboard, abra **Extensão & Coletas** para consultar a conexão, solicitar uma coleta, acompanhar páginas, agendar rotinas e repetir contas com falha. A extensão executa a leitura nas abas de vendedor abertas. A seção **Conectores** aceita PDF digital para conferência e oferece configuração e teste de leitura para GA4 e Search Console.
 
@@ -67,6 +71,7 @@ npm run ext:build
 npm run db:generate -- --check
 npm run audit:publish
 npm run audit
+node --test scripts/regression-3109.test.mjs
 ```
 
 ## Regras invioláveis

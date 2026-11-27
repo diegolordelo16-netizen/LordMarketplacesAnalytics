@@ -208,13 +208,15 @@ function qualityBadge(q) {
 
 // ------------------------------------------------------------------ VISÃO EXECUTIVA
 async function viewExec() {
+  const generation = viewRenderSequence;
   const [kpis, missions, alerts, history] = await Promise.all([
     api('kpi.dashboard', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
-    api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch(() => []),
-    api('alerts.list', {}).catch(() => []),
-    api('kpi.history', { ...(state.accountId ? { accountId: state.accountId } : {}), days: 30 }).catch(() => ({ points: [] })),
+    api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
+    api('alerts.list', {}).catch((e) => ({ error: e.message })),
+    api('kpi.history', { ...(state.accountId ? { accountId: state.accountId } : {}), days: 30 }).catch((e) => ({ error: e.message })),
   ]);
-  state.historyPoints = Array.isArray(history?.points) ? history.points : [];
+  const historyPoints = Array.isArray(history?.points) ? history.points : [];
+  if (generation === viewRenderSequence) state.historyPoints = historyPoints;
 
   // kpi.dashboard devolve { accounts, listings, totals, ... }: usa totals quando existir.
   const k = kpis && !kpis.error ? (kpis.totals || kpis) : null;
@@ -233,13 +235,15 @@ async function viewExec() {
     ['Cobertura de estoque', k ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
   ];
 
+  const readFailures = [ ['Missões', missions], ['Alertas', alerts], ['Histórico', history] ].filter(([, value]) => value?.error);
   return `
-    ${kpis && kpis.error ? card('Sem dados de KPI ainda', `<p class="muted">${esc(kpis.error)}</p>
+    ${readFailures.length ? card('Dados temporariamente indisponíveis', `<p class="bad-text">${readFailures.map(([name, value]) => `${esc(name)}: ${esc(value.error)}`).join(' · ')}</p>`) : ''}
+    ${kpis && kpis.error ? card('Falha ao consultar KPIs', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
     <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
     <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
 
-    ${card('Histórico de evolução', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias</span></div><div id="history-chart">${renderHistoryChart(state.historyPoints)}</div>`) }
+    ${card('Histórico de evolução', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias</span></div><div id="history-chart">${history?.error ? '<div class="empty bad-text">Falha ao carregar histórico.</div>' : renderHistoryChart(historyPoints)}</div>`) }
 
     ${card('Missões do dia', Array.isArray(missions) && missions.length
       ? missions.map((m) => `<div class="mission">
@@ -247,13 +251,13 @@ async function viewExec() {
           <div class="muted small">${esc(m.evidence || m.reason || '')}</div>
           ${m.impactCents != null ? `<div class="small">Impacto estimado: ${brl(m.impactCents)} · Esforço: ${esc(m.effort || '—')}</div>` : ''}
         </div>`).join('')
-      : '<div class="empty">Nenhuma missão calculada. Rode a captura de dados primeiro.</div>')}
+      : missions?.error ? '<div class="empty bad-text">Missões indisponíveis.</div>' : '<div class="empty">Nenhuma missão calculada. Rode a captura de dados primeiro.</div>')}
 
     ${card('Alertas', table(['Severidade', 'Regra', 'Mensagem', 'Quando'],
-      (alerts || []).slice(0, 20).map((a) => `<tr>
+      (Array.isArray(alerts) ? alerts : []).slice(0, 20).map((a) => `<tr>
         <td>${badge(a.severity || '—', a.severity === 'CRITICO' ? 'bad' : 'warn')}</td>
         <td>${esc(a.rule || a.type || '—')}</td><td>${esc(a.message || '')}</td><td>${dt(a.created_at)}</td></tr>`),
-      'Nenhum alerta ativo.'))}
+      alerts?.error ? 'Falha ao consultar alertas.' : 'Nenhum alerta ativo.'))}
     ${card('Previsão de tendência local', `
       <div class="form-row">
         <label>Métrica <select id="fcst-metric"><option value="gmv">GMV</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="units">Unidades</option><option value="adSpend">Investimento em Ads</option><option value="adAttributedRevenue">Receita atribuída a Ads</option><option value="stockAvailable">Estoque disponível</option></select></label>
@@ -267,7 +271,7 @@ async function viewExec() {
 
 // ------------------------------------------------------------------ ANÚNCIOS / CAPTURA
 async function viewListings() {
-  const snaps = await api('capture.snapshot', state.accountId ? { accountId: state.accountId } : {}).catch(() => []);
+  const snaps = await api('capture.snapshot', state.accountId ? { accountId: state.accountId } : {});
   const listings = new Map();
   for (const snapshot of snaps) if (!listings.has(snapshot.listing_id)) listings.set(snapshot.listing_id, snapshot);
   return card('Snapshots capturados', table(
@@ -389,12 +393,12 @@ async function viewMarket() {
 
 // ------------------------------------------------------------------ CONCORRÊNCIA (núcleo)
 async function viewCompetition() {
-  const [products, stats] = await Promise.all([
-    api('competitor.ownProduct.list', state.accountId ? { accountId: state.accountId } : {}).catch(() => []),
-    api('competitor.stats', state.ownProductId ? { ownProductId: state.ownProductId } : {}).catch(() => null),
-  ]);
-
-  if (!state.ownProductId && products && products.length) state.ownProductId = products[0].id;
+  const generation = viewRenderSequence;
+  const accountId = state.accountId;
+  const products = accountId ? await api('competitor.ownProduct.list', { accountId }) : [];
+  const ownProductId = products.some((product) => product.id === state.ownProductId) ? state.ownProductId : products[0]?.id || '';
+  const stats = accountId ? await api('competitor.stats', { accountId, ...(ownProductId ? { ownProductId } : {}) }) : null;
+  if (generation === viewRenderSequence && accountId === state.accountId) state.ownProductId = ownProductId;
   const s = stats || {};
   const rules = s.learningRules || [];
 
@@ -415,7 +419,7 @@ async function viewCompetition() {
   + card('Produtos cadastrados', table(['Produto', 'Marketplace', 'Preço', 'Ações'],
     (products || []).map((p) => `<tr>
       <td>${esc(p.title)}</td><td>${esc(p.marketplace)}</td><td>${brl(p.price_cents)}</td>
-      <td><button class="btn tiny ${state.ownProductId === p.id ? 'primary' : ''}" data-act="own-select" data-id="${p.id}">Selecionar</button></td></tr>`),
+      <td><button class="btn tiny ${ownProductId === p.id ? 'primary' : ''}" data-act="own-select" data-id="${p.id}">Selecionar</button></td></tr>`),
     'Nenhum produto próprio cadastrado.'))
   + card('Busca assistida de concorrentes', `
     <div class="form-row">
@@ -460,19 +464,24 @@ async function viewCompetition() {
     <p class="muted small">Isto não é um modelo treinado: são regras com suporte e contraprova, aplicadas na próxima busca.</p>`);
 }
 
+let relationsRequestSequence = 0;
 async function loadRelations() {
   const el = $('#relations-list');
   if (!el) return;
+  const generation = ++relationsRequestSequence;
+  const accountId = state.accountId;
+  const ownProductId = state.ownProductId;
+  const status = state.relationsStatus;
+  const isCurrent = () => generation === relationsRequestSequence && el.isConnected && accountId === state.accountId && ownProductId === state.ownProductId && status === state.relationsStatus;
+  if (!accountId) { el.innerHTML = '<div class="empty">Selecione uma loja.</div>'; return; }
   let rows;
   try {
-    rows = await api('competitor.relations', {
-      ...(state.ownProductId ? { ownProductId: state.ownProductId } : {}),
-      ...(state.relationsStatus ? { status: state.relationsStatus } : {}),
-    });
+    rows = await api('competitor.relations', { accountId, ...(ownProductId ? { ownProductId } : {}), ...(status ? { status } : {}) });
   } catch (err) {
-    el.innerHTML = `<div class="empty bad-text">${esc(err.message)}</div>`;
+    if (isCurrent()) el.innerHTML = `<div class="empty bad-text">${esc(err.message)}</div>`;
     return;
   }
+  if (!isCurrent()) return;
 
   if (!rows.length) {
     el.innerHTML = `<div class="empty">Nenhum item nesta aba.</div>`;
@@ -684,7 +693,7 @@ function agentContext() {
 
 // ------------------------------------------------------------------ TAREFAS
 async function viewTasks() {
-  const taskResult = await api('task.list', { accountId: state.accountId || undefined }).catch(() => []);
+  const taskResult = await api('task.list', { accountId: state.accountId || undefined });
   const tasks = Array.isArray(taskResult) ? taskResult : (taskResult?.tasks || []);
   return card('Controles da fila', `<div class="actions"><button class="btn" data-act="task-refresh">Atualizar progresso</button></div>`) + card('Criar tarefa', `
     <div class="form-grid">
@@ -743,8 +752,8 @@ async function viewTasks() {
 // ------------------------------------------------------------------ CONECTORES
 async function viewConnectors() {
   const [registry, imports] = await Promise.all([
-    api('connector.registry', {}).catch(() => []),
-    state.accountId ? api('connector.import.list', { accountId: state.accountId, limit: 30 }).catch(() => []) : Promise.resolve([]),
+    api('connector.registry', {}),
+    state.accountId ? api('connector.import.list', { accountId: state.accountId, limit: 30 }) : Promise.resolve([]),
   ]);
   return card('Conectores opcionais', table(['Conector', 'Dados', 'Estado', 'Custo', 'Limites', 'Ação'],
     (registry || []).map((c) => `<tr><td>${esc(c.label || c.id)}</td><td>${esc(c.data_available || '—')}</td>
@@ -1048,6 +1057,7 @@ async function showBrowserSyncBatch() {
     table(['Conta','Marketplace','Estado','Páginas concluídas','Observação'], rows) +
     table(['Conta','Página','Área','Estado','Observação'], pages, 'Nenhuma página registrada.'));
   const signature = JSON.stringify([batchId, data.batch?.status, rows, pages]);
+  target.querySelector('[data-sync-error]')?.remove();
   if (target.dataset.signature === signature) return;
   target.dataset.signature = signature;
   target.dataset.active = String(['QUEUED','RUNNING'].includes(data.batch?.status));
@@ -1085,21 +1095,27 @@ function renderNav() {
     </button>`).join('');
 }
 
+let viewRenderSequence = 0;
 async function renderView() {
+  const generation = ++viewRenderSequence;
   const selectedView = state.view;
+  const selectedAccount = state.accountId;
+  const isCurrent = () => generation === viewRenderSequence && selectedView === state.view && selectedAccount === state.accountId;
   const view = VIEWS[state.view] || VIEWS.exec;
   $('#view-title').textContent = view.label;
   const host = $('#view');
   host.innerHTML = '<div class="loading">Carregando…</div>';
   try {
     const content = await view.render();
-    if (selectedView !== state.view) return;
+    if (!isCurrent()) return false;
     host.innerHTML = content;
     initializeTables(host);
     if (state.view === 'competition') await loadRelations();
     if (state.view === 'browserSync') await showBrowserSyncBatch();
+    return isCurrent();
   } catch (err) {
-    host.innerHTML = `<div class="empty bad-text">${esc(err.message)}</div>`;
+    if (isCurrent()) host.innerHTML = `<div class="empty bad-text">${esc(err.message)}</div>`;
+    return false;
   }
 }
 
@@ -1674,7 +1690,7 @@ const ACTIONS = {
     $('#debate-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
   },
 
-  'task-refresh': async () => { await renderView(); toast('Progresso atualizado.'); },
+  'task-refresh': async () => { if (await renderView()) toast('Progresso atualizado.'); },
   'task-add': async () => {
     const listingId = $('#tk-listing').value.trim();
     if (!listingId) { toast('Informe o anúncio (MLB...).', 'bad'); return; }
@@ -1986,8 +2002,7 @@ const ACTIONS = {
       `<p class="muted small">${rows.length} linha(s) — dados vindos do seu banco local.</p>`);
   },
   'prestart-refresh': async () => {
-    await renderView();
-    toast('Ambiente verificado.', 'ok');
+    if (await renderView()) toast('Ambiente verificado.', 'ok');
   },
   'adapter-diag': async () => {
     const r = await run(() => api('adapter.diagnostics', { marketplace: 'mercado_livre', observed: {} }));
@@ -2047,18 +2062,22 @@ document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const fn = ACTIONS[el.dataset.act];
-  if (!fn) return;
+  if (!fn || el.dataset.busy === 'true') return;
+  const protectedAction = ['browser-sync-request', 'browser-sync-schedule', 'browser-sync-retry'].includes(el.dataset.act);
+  if (protectedAction) { el.dataset.busy = 'true'; el.disabled = true; }
   try {
     await fn(el.dataset);
   } catch (err) {
     if (err.message !== 'UNAUTHORIZED') toast(err.message, 'bad');
+  } finally {
+    if (protectedAction && el.isConnected) { delete el.dataset.busy; el.disabled = false; }
   }
 });
 
 async function bootAccountSelector() {
-  const accounts = await api('account.list', {}).catch(() => []);
+  const accounts = await api('account.list', {});
   const active = (accounts || []).filter(a => a.is_active !== 0);
-  if (!state.accountId || !active.some(a => a.id === state.accountId)) state.accountId = active[0]?.id || '';
+  if (!state.accountId || !active.some(a => a.id === state.accountId)) { state.accountId = active[0]?.id || ''; state.ownProductId = ''; }
   const sel = $('#account');
   sel.innerHTML = active.length ? active.map(a => `<option value="${esc(a.id)}" ${a.id === state.accountId ? 'selected' : ''}>${esc(a.display_name || a.id)} · ${esc(a.marketplace)}</option>`).join('') : '<option value="">nenhuma conta ativa</option>';
 }
@@ -2086,7 +2105,7 @@ async function boot() {
   } catch { /* primeiro uso */ }
 
   await bootAccountSelector();
-  $('#account').addEventListener('change', () => { state.accountId = $('#account').value; renderView(); });
+  $('#account').addEventListener('change', () => { state.accountId = $('#account').value; state.ownProductId = ''; renderView(); });
 
   await renderView();
   setInterval(async () => {
@@ -2094,9 +2113,17 @@ async function boot() {
     if (state.view !== 'browserSync' || detail?.dataset.active !== 'true' || loadingSyncProgress) return;
     loadingSyncProgress = true;
     try { await showBrowserSyncBatch(); }
-    catch { /* O botão Atualizar permite mostrar a falha ao usuário. */ }
+    catch (err) {
+      if (detail.isConnected) {
+        let warning = detail.querySelector('[data-sync-error]');
+        if (!warning) { warning = document.createElement('p'); warning.dataset.syncError = ''; warning.className = 'bad-text'; detail.prepend(warning); }
+        warning.textContent = `Falha ao atualizar progresso: ${err.message}. Tentaremos novamente.`;
+      }
+    }
     finally { loadingSyncProgress = false; }
   }, 4000);
 }
 
-boot();
+boot().catch((err) => {
+  $('#view').innerHTML = `<div class="empty bad-text">Falha ao inicializar o painel: ${esc(err.message)}</div>`;
+});
