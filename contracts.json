@@ -97,7 +97,8 @@
     "csvText": "CSV text?",
     "base64": "XLSX base64?",
     "maxBytes": "2 MB",
-    "result": "persisted staging; no KPI promotion"
+    "result": "persisted staging; no KPI promotion",
+    "ocr": "optional true for local scanned PDF"
   },
   "connector.disconnect": "connectorId (desativa o conector, remove segredos do namespace e metadados de credenciais)",
   "connector.import.list": {
@@ -640,5 +641,10 @@
   "connector.sync.get": {
     "accountId": "string",
     "runId": "string"
+  },
+  "connector.trends.import": {
+    "accountId": "active account",
+    "csvText": "official interest over time export",
+    "confirmedSource": true
   }
 }

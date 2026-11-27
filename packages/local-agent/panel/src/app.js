@@ -925,10 +925,12 @@ async function viewConnectors() {
   + card('Sincronização externa', `<div class="form-grid"><label>Data inicial (Google, opcional)<input id="co-from" type="date"></label><label>Data final (Google, opcional)<input id="co-to" type="date"></label></div>
     <p class="muted small">Sem datas, Google usa janela incremental; marketplaces consultam somente a primeira página. Ausência de linha não significa zero.</p>`+
     table(['Provedor','Escopo','Status','Linhas','Última leitura','Ação'],(syncs||[]).map(r=>`<tr><td>${esc(r.connector_id)}</td><td>${esc(r.kind)} · ${esc(r.period_start||'—')} → ${esc(r.period_end||'—')}</td><td>${esc(r.status)}${r.partial?' · PARCIAL':''}</td><td>${num(r.row_count)}</td><td>${dt(r.finished_at)}</td><td><button class="btn tiny" data-act="connector-sync-get" data-id="${esc(r.id)}">Ver evidência</button></td></tr>`),'Nenhuma leitura nesta loja.')+'<div id="co-out" class="out"></div>')
+  + card('Google Trends — importação de exportação oficial',`<p class="muted small">Exporte interesse ao longo do tempo no Google Trends. A API alfa exige acesso específico; a importação local não usa API. Índices de 0 a 100 são relativos à própria exportação.</p><label class="wide">CSV de interesse ao longo do tempo<input id="trends-file" type="file" accept=".csv"></label><button class="btn" data-act="trends-import">Registrar exportação na loja</button>`)
   + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td></tr>`), 'Nenhuma importação para esta conta.'))
   + card('Importar relatório', `
     <div class="form-grid">
       <label class="wide">Arquivo CSV, XLSX ou PDF digital (máximo 2 MB) <input id="im-file" type="file" accept=".csv,.xlsx,.pdf"></label>
+      <label><input id="im-ocr" type="checkbox"> OCR local de PDF (Poppler + Tesseract por/eng instalados; até 8 páginas)</label>
       <label>Tipo de relatório <select id="im-kind"><option value="ADS">Ads</option><option value="VENDAS">Vendas</option>
         <option value="KEYWORDS">Palavras-chave</option><option value="AVALIACOES">Avaliações</option></select></label>
       <label class="wide">Ou cole um CSV <textarea id="im-csv" rows="4" placeholder="coluna;valor&#10;cliques;120"></textarea></label>
@@ -2377,6 +2379,15 @@ const ACTIONS = {
     toast(result.ok?'Leitura registrada: '+result.rowCount+' linhas'+(result.partial?' (parcial)':''):result.message,result.ok?'ok':'bad');
     if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
   },
+  'trends-import':async ()=>{
+    const file=$('#trends-file').files?.[0],accountId=state.accountId,generation=viewRenderSequence;
+    if(!file||!accountId||file.size>2*1024*1024)throw Error('Selecione loja e CSV de até 2 MB.');
+    if(!confirm('Confirma que o arquivo foi exportado do Google Trends e corresponde ao recorte escolhido?'))return;
+    const csvText=await file.text();
+    const result=await api('connector.trends.import',{accountId,csvText,confirmedSource:true});
+    toast(result.duplicate?'Exportação já registrada.':'Exportação registrada: '+result.rowCount+' observações.');
+    if(generation===viewRenderSequence&&accountId===state.accountId)await renderView();
+  },
   'connector-sync-get':async ({id})=>{
     const accountId=state.accountId,generation=viewRenderSequence,host=$('#co-out');
     const result=await api('connector.sync.get',{accountId,runId:id});
@@ -2402,7 +2413,7 @@ const ACTIONS = {
     let fileName = file?.name || `${$('#im-kind').value.toLowerCase()}-${Date.now()}.csv`;
     const fileType = fileName.toLowerCase().split('.').at(-1);
     if (!['csv','xlsx','pdf'].includes(fileType)) throw new Error('Selecione CSV, XLSX ou PDF digital.');
-    const payload = { fileName, fileType, accountId: state.accountId || undefined };
+    const payload = { fileName, fileType, accountId: state.accountId || undefined, ...(fileType==='pdf'&&$('#im-ocr').checked?{ocr:true}:{}) };
     if (fileType !== 'csv' && file) {
       const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('Falha ao ler o arquivo.')); reader.readAsDataURL(file); });
       payload.base64 = dataUrl.split(',')[1] || '';

@@ -3,9 +3,10 @@
  * Exposto por Named Pipe no Windows (host nativo) e por HTTP local no painel do desktop.
  */
 import { parseCsvText, parseXlsxBase64 } from './importers/tabular';
-import { parsePdfBase64 } from './importers/pdf';
+import { parsePdfBase64, parsePdfOcr } from './importers/pdf';
 import { googleAdsTerm } from './connectors/dataforseo';
 import { googleReadTarget } from './connectors/google';
+import { parseTrendsCsv } from './connectors/trends';
 import { supportedId, providers, validateConfig, validateSecrets, boundedRequest, refreshAccess, readReport, verifyMarketplace, ProviderError, windowDays, type Secrets, type RequestFn } from './connectors/sync';
 import { seoResearchInput } from './connectors/openseo';
 import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/external-seo';
@@ -290,6 +291,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'connector.sync': 'manage_connectors',
   'connector.sync.history': 'view_reports',
   'connector.sync.get': 'view_reports',
+  'connector.trends.import': 'manage_connectors',
   'task.verifySaved': 'execute_task',
   'task.rollbackPlan': 'execute_task',
   'backup.create': 'manage_backups',
@@ -3960,6 +3962,20 @@ export class LocalService {
       const i=z.object({accountId:z.string().min(1),connectorId:z.string().optional(),limit:z.number().int().min(1).max(100).default(30)}).parse(payload);
       return db.rows('SELECT * FROM connector_sync_runs WHERE account_id=? AND (? IS NULL OR connector_id=?) ORDER BY finished_at DESC,id DESC LIMIT ?',i.accountId,i.connectorId??null,i.connectorId??null,i.limit);
     });
+    this.register('connector.trends.import',(payload,auth)=>db.transaction(()=>{
+      const i=z.object({accountId:z.string().min(1),csvText:z.string().max(2_000_000),confirmedSource:z.literal(true)}).strict().parse(payload);
+      if(!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',i.accountId))throw Error('conta ativa não encontrada');
+      const parsed=parseTrendsCsv(i.csvText);
+      const scopeKey=createHash('sha256').update(i.csvText.replace(/^\uFEFF/,'').replace(/\r\n/g,'\n').trim()).digest('hex');
+      const prior=db.row<{id:string;row_count:number}>("SELECT id,row_count FROM connector_sync_runs WHERE connector_id='google_trends_public' AND account_id=? AND scope_key=? AND status='OK'",i.accountId,scopeKey);
+      if(prior)return {ok:true,runId:prior.id,rowCount:prior.row_count,duplicate:true};
+      const id=randomUUID(),at=nowIso();
+      db.db.prepare('INSERT INTO connector_sync_runs(id,connector_id,account_id,scope_key,kind,period_start,period_end,started_at,finished_at,status,partial,row_count,request_count,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,'google_trends_public',i.accountId,scopeKey,'TRENDS_USER_CSV',parsed.from,parsed.to,at,at,'OK',0,parsed.rows.length,0,parsed.note);
+      const insert=db.db.prepare('INSERT INTO connector_sync_rows(run_id,row_key,reference_date,values_json) VALUES(?,?,?,?)');
+      for(const row of parsed.rows)insert.run(id,row.key,row.date,JSON.stringify(row.values));
+      this.audit(auth,'TRENDS_IMPORT','connector',id,'OK','exportação declarada pelo operador; sem consulta externa');
+      return {ok:true,runId:id,rowCount:parsed.rows.length,duplicate:false};
+    }));
     this.register('connector.sync.get',payload=>{
       const i=z.object({accountId:z.string().min(1),runId:z.string().min(1)}).strict().parse(payload);
       const run=db.row('SELECT * FROM connector_sync_runs WHERE id=? AND account_id=?',i.runId,i.accountId);
@@ -4355,7 +4371,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
         credentialMetadataRemoved: metadataRemoved,
       };
     });
-    this.register('connector.import', (payload, auth) => {
+    this.register('connector.import', async (payload, auth) => {
       const i = z.object({
         fileName: z.string().min(1).max(240),
         fileType: z.enum(['csv','xlsx','pdf']).default('csv'),
@@ -4363,9 +4379,12 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
         base64: z.string().max(3_600_000).optional(),
         rows: z.array(z.record(z.string(), z.unknown())).max(10_000).optional(),
         accountId: z.string().min(1),
+        ocr: z.boolean().default(false),
       }).refine((value) => Boolean(value.rows || (value.fileType === 'csv' ? value.csvText : value.base64)), 'informe as linhas ou o conteúdo do arquivo').parse(payload ?? {});
       if (!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1', i.accountId)) throw new Error('conta ativa não encontrada para importar o arquivo');
-      const pdfResult = i.fileType === 'pdf' && !i.rows ? parsePdfBase64(i.base64!) : null;
+      if(i.ocr&&(i.fileType!=='pdf'||i.rows))throw Error('OCR exige arquivo PDF');
+      const pdfResult = i.fileType === 'pdf' && !i.rows ? (i.ocr?await parsePdfOcr(i.base64!):parsePdfBase64(i.base64!)) : null;
+      if(!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',i.accountId))throw Error('conta não está mais ativa');
       const rows = i.rows ?? (i.fileType === 'xlsx' ? parseXlsxBase64(i.base64!) : i.fileType === 'pdf' ? pdfResult!.rows : parseCsvText(i.csvText!));
       if (!rows.length) throw new Error('arquivo não contém linhas de dados');
       if (rows.length > 10_000) throw new Error('importação limitada a 10.000 linhas por arquivo');
@@ -4375,7 +4394,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       const safeName = i.fileName.replace(/[\/\\]/g, '_').slice(0, 240);
       db.transaction(() => {
         db.db.prepare('INSERT INTO import_jobs (id,account_id,file_name,file_type,status,rows_total,rows_ok,rows_error,created_at,finished_at,report_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-          .run(jobId, i.accountId ?? null, safeName, i.fileType, 'PENDENTE_VALIDACAO', rows.length, 0, 0, nowIso(), null, JSON.stringify({ source: 'user_file', status: 'staging_only', sampleCount: Math.min(20, rows.length) }));
+          .run(jobId, i.accountId ?? null, safeName, i.fileType, 'PENDENTE_VALIDACAO', rows.length, 0, 0, nowIso(), null, JSON.stringify({ source: 'user_file', status: 'staging_only', ocr:i.ocr, warnings:pdfResult?.warnings??[], sampleCount: Math.min(20, rows.length) }));
         const stmt = db.db.prepare('INSERT INTO import_job_rows (id,job_id,row_number,data_json,created_at) VALUES (?,?,?,?,?)');
         rows.forEach((row, index) => stmt.run(randomUUID(), jobId, index + 2, JSON.stringify(row), nowIso()));
       });
@@ -4428,6 +4447,7 @@ if(rec.agentKey==='finance'&&validProfit){rec.evidence=rec.evidence.map(e=>({...
       );
       if (!job || job.account_id !== i.accountId) throw new Error('a importação não pertence à conta selecionada');
       if (job.status !== 'PENDENTE_VALIDACAO') throw new Error('esta importação não está pendente de validação');
+      if(db.row<{file_type:string}>('SELECT file_type FROM import_jobs WHERE id=?',i.jobId)?.file_type==='pdf')throw Error('texto PDF exige conferência e transcrição para CSV/XLSX antes de promover KPIs');
       const imported = db.rows<{ row_number: number; data_json: string }>(
         'SELECT row_number,data_json FROM import_job_rows WHERE job_id=? ORDER BY row_number', i.jobId,
       );
