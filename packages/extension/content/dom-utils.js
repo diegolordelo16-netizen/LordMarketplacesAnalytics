@@ -495,7 +495,7 @@
     if(!from||!to||from.size!==to.size||[...to.keys()].some(key=>!from.has(key)))return false;
     const regions=Array.from(root.querySelectorAll('[data-testid="filters"],[data-testid="filter-bar"],[role="region"][aria-label]')).filter(el=>isVisible(el)&&(el.getAttribute('data-testid')==='filters'||el.getAttribute('data-testid')==='filter-bar'||/^(filtros|filters|filtros de pesquisa|search filters)$/i.test(String(el.getAttribute('aria-label')||''))));
     if(regions.length!==1)return false;
-    const controls=Array.from(regions[0].querySelectorAll('select,input[type="date"],input[type="month"],input[type="week"]')).filter(el=>isVisible(el)&&!el.disabled&&!el.readOnly&&!el.closest('form'));
+    const controls=Array.from(regions[0].querySelectorAll('select,input[type="date"],input[type="month"],input[type="week"],[role="listbox"]')).filter(el=>isVisible(el)&&!el.disabled&&!el.readOnly&&!el.closest('form'));
     const changes=[];
     for(const [key,value] of to){
       if(from.get(key)===value)continue;
@@ -511,12 +511,20 @@
         const options=Array.from(control.options||[]).filter(option=>!option.disabled&&!option.hidden&&normalizeLabel(option.innerText??option.textContent??'')===value);
         if(options.length!==1)return false;
         next=options[0].value;
+      }else if(control.getAttribute('role')==='listbox'&&safeCustomFilterValue(control)!==null&&control.getAttribute('aria-multiselectable')!=='true'){
+        const options=Array.from(control.querySelectorAll('[role="option"]')).filter(option=>isVisible(option)&&!option.disabled&&option.getAttribute('aria-disabled')!=='true'&&!option.closest('form')&&normalizeLabel(option.innerText??option.textContent??'')===value);
+        if(options.length!==1)return false;
+        changes.push({control,option:options[0]});continue;
       }else return false;
       changes.push({control,next});
     }
     if(!changes.length)return false;
-    for(const {control,next} of changes){
+    for(const {control,next,option} of changes){
       if(!verify()||!isVisible(control)||control.disabled||control.closest('form'))return false;
+      if(option){
+        if(!isVisible(option)||option.disabled||option.getAttribute('aria-disabled')==='true'||option.closest('form')||!control.contains(option))return false;
+        option.click();continue;
+      }
       const setter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control),'value')?.set;
       if(setter)setter.call(control,next);else control.value=next;
       if(control.value!==next)return false;
