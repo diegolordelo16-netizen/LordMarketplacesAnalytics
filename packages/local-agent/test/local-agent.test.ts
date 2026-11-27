@@ -68,6 +68,17 @@ function seedImportAccount(id: string): void {
 }
 
 
+describe('Pós-venda lexical por conta',()=>{
+  it('preserva fonte, distingue menções de problemas comprovados e evita cruzamento de loja',async()=>{
+    const accountId='voc-insights-a',other='voc-insights-b';seedImportAccount(accountId);seedImportAccount(other);
+    await call('voc.ingest',{accountId,kind:'QUESTION',text:'Qual o tamanho e medida?'});
+    await call('voc.ingest',{accountId,kind:'QUESTION',text:'Qual o tamanho?'});
+    await call('voc.ingest',{accountId:other,kind:'COMPLAINT',text:'Produto com defeito'});
+    const result=await call('voc.insights',{accountId,days:30});
+    expect(result.result).toMatchObject({analyzed:2,groups:[{category:'SIZE_FIT',source:'F_USER_INPUT',count:2,recurring:true,classification:'LEXICAL_MENTION_NOT_CONFIRMED_PROBLEM'}]});
+    expect(JSON.stringify(result)).not.toContain('QUALITY');
+  });
+});
 describe('SEO externo integrado',()=>{
   it('isola histórico por loja, compara amostras e executa monitoramento opt-in sem repetir',async()=>{
     const accountId='seo-local-a',other='seo-local-b';seedImportAccount(accountId);seedImportAccount(other);

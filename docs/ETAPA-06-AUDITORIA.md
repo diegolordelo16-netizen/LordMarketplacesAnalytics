@@ -44,3 +44,6 @@ Referências
 - [OpenSEO no commit revisado](https://github.com/every-app/open-seo/tree/6f68494e92a695db17f4b22da25e84b9bf1e582c)
 - [Licença MIT do OpenSEO](https://github.com/every-app/open-seo/blob/6f68494e92a695db17f4b22da25e84b9bf1e582c/LICENSE)
 - [Documentação DataForSEO Search Volume Live](https://docs.dataforseo.com/v3/keywords_data/google_ads/search_volume/live/)
+
+## Fusão e revisão final de código
+PR #9 integrado à etapa 06, seguido das alterações da etapa 05 até 32b7365. Consulta externa e Google Ads usam conexão criptografada, histórico único e autorização. Pós-venda ganhou análise lexical por fonte/conta/anúncio, recorrência e sugestões de revisão sem inferir sentimento ou causa. Comparativo competitivo expõe nota, avaliações, posição e termos/atributos cadastrados, mantendo diferenças de captura e limites. Requisitos 110–114 dependem de coleta real nos marketplaces; 125/131 exigem dados explícitos de promoções/descrições; 130 não calcula similaridade visual além de hashes. SEO externo não substitui ranking de marketplace. Validação real permanece separada. Não declarar 365 requisitos concluídos.

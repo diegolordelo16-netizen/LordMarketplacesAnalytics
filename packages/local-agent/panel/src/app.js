@@ -646,9 +646,9 @@ async function viewPricing() {
 // ------------------------------------------------------------------ VOZ DO CLIENTE
 async function viewVoc() {
   const accountId=state.accountId;
-  const [topics,items,overview]=accountId?await Promise.all([
-    api('voc.topics',{accountId}),api('voc.items',{accountId,limit:100}),api('voc.overview',{accountId,days:30}),
-  ]):[[],[],null];
+  const [topics,items,overview,insights]=accountId?await Promise.all([
+    api('voc.topics',{accountId}),api('voc.items',{accountId,limit:100}),api('voc.overview',{accountId,days:30}),api('voc.insights',{accountId,days:30}),
+  ]):[[],[],null,null];
   const kinds={REVIEW:'Avaliação',QUESTION:'Pergunta',COMPLAINT:'Reclamação',RETURN_REASON:'Devolução',MESSAGE:'Mensagem'};
   const sources={A_PRIMARY_UI:'Marketplace',B_PLATFORM_EXPORT:'Exportação',F_USER_INPUT:'Registro manual'};
   return card('Registrar item da voz do cliente', `
@@ -665,6 +665,7 @@ async function viewVoc() {
   + (overview?card('Pós-venda nos últimos 30 dias',table(['Tipo','Fonte','Registros','Com nota','Nota média'],overview.summary.map(row=>`<tr><td>${esc(kinds[row.kind]||row.kind)}</td><td>${esc(sources[row.source_class]||row.source_class)}</td><td>${num(row.count)}</td><td>${row.kind==='REVIEW'?num(row.rated):'—'}</td><td>${row.average_rating==null?'—':num(row.average_rating,2)}</td></tr>`),'Nenhum registro no período.')):'')
   + (overview?card('Histórico de reputação',table(['Captura','Nota','Avaliações','Cobertura'],overview.reputation.map(row=>`<tr><td>${dt(row.capturedAt)}</td><td>${row.rating==null?'—':num(row.rating,2)}</td><td>${row.reviewCount==null?'—':num(row.reviewCount)}</td><td>${row.partial?'Parcial':'Sem alerta na captura'}</td></tr>`),'Nenhuma captura no período.')+(overview.reputationTruncated?'<p class="muted">Exibindo as 100 capturas mais recentes.</p>':'')):'')
   + (overview?card('Motivos de devolução recorrentes',table(['Motivo informado','Fonte','Registros'],overview.returnReasons.map(row=>`<tr><td>${esc(row.reason)}</td><td>${esc(sources[row.source_class]||row.source_class)}</td><td>${num(row.count)}</td></tr>`),'Nenhum motivo com texto idêntico em dois ou mais registros.')+(overview.returnReasonsTruncated?'<p class="muted">Exibindo os 20 motivos mais frequentes.</p>':'')):'')
+  + (insights?card('Objeções, qualidade e oportunidades de pós-venda',`<p class="muted small">${esc(insights.note)} · ${num(insights.analyzed)} registros analisados${insights.truncated?' (amostra limitada)':''}</p>`+table(['Tema','Tipo','Fonte','Menções','Anúncios','Revisão sugerida'],insights.groups.map(r=>`<tr><td>${esc(r.label)}</td><td>${esc(kinds[r.kind]||r.kind)}</td><td>${esc(sources[r.source]||r.source)}</td><td>${num(r.count)}${r.recurring?' · recorrente':''}</td><td>${num(r.listingCount)}</td><td>${esc(r.action)}</td></tr>`),'Nenhuma menção identificada.')):'')
   + card('Feedback capturado por anúncio',table(['Tipo','Anúncio','Vínculo','Nota','Texto','Data'],items.map(item=>`<tr><td>${esc(item.kind)}</td><td>${esc(item.linked_external_id||item.external_listing_id||'—')}${item.listing_title?`<div class="muted small">${esc(item.listing_title)}</div>`:''}</td><td>${item.listing_id?'Vinculado':item.external_listing_id?'Aguardando anúncio':'Sem identificação'}</td><td>${esc(item.rating??'—')}</td><td>${esc(item.text_redacted)}</td><td>${dt(item.observed_at)}</td></tr>`),'Nenhum feedback capturado.'))
   + card('Temas detectados', table(['Tema', 'Ocorrências', 'Sentimento', 'Impacto'],
     (topics || []).map((t) => `<tr><td>${esc(t.label)}</td><td>${num(t.frequency)}</td>
@@ -1697,8 +1698,9 @@ const ACTIONS = {
       ['Prazo máximo',difference(evidence.deliveryDaysMaxDifference,value=>num(value,1)+' dias')],
       ['Anúncio concorrente patrocinado',evidence.sponsored==null?'—':evidence.sponsored?'Sim':'Não'],
       ['Arquivos de imagem idênticos',num(evidence.images.identicalHashes)],
+      ['Nota concorrente',num(evidence.competitorRating,2)],['Avaliações concorrente',num(evidence.competitorReviews)],['Posição capturada',num(evidence.position)],['Termos adicionais do concorrente',(evidence.catalogComparison?.rivalOnlyTerms||[]).join(', ')||'—'],['Atributos divergentes/ausentes',(evidence.catalogComparison?.attributeDifferences||[]).map(r=>r.attribute+': '+(r.own??'—')+' × '+r.rival).join(' | ')||'—'],
     ].map(([label,value])=>`<tr><td>${esc(label)}</td><td>${esc(value)}</td></tr>`),'Sem evidências comparáveis.')+
-    `<p class="muted small">${evidence.observedAt?'Captura: '+dt(evidence.observedAt)+' · ':''}${esc(evidence.images.explanation)}</p>`:'<p class="muted small">Comparativo de evidências indisponível.</p>';
+    `<p class="muted small">${evidence.observedAt?'Captura: '+dt(evidence.observedAt)+' · ':''}${esc(evidence.images.explanation)} · ${esc(evidence.catalogComparison?.note||'')}</p>`:'<p class="muted small">Comparativo de evidências indisponível.</p>';
     const pts = h.points || [];
     const max = Math.max(...pts.map((p) => p.price_cents || 0), h.ownPriceCents || 0, 1);
     out.innerHTML = `

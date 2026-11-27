@@ -211,6 +211,7 @@ export const IPC_METHODS = [
   'voc.ingestBatch',
   'voc.items',
   'voc.overview',
+  'voc.insights',
   'finance.realized.upsert',
   'finance.realized.list',
   'finance.realized.summary',

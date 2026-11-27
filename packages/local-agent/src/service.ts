@@ -8,6 +8,7 @@ import { googleAdsTerm } from './connectors/dataforseo';
 import { googleReadTarget, verifyGoogleRead } from './connectors/google';
 import { seoResearchInput } from './connectors/openseo';
 import { ExternalSeoWorkspace, correlateSeoListings } from './competitive/external-seo';
+import { customerInsights, compareCatalogText } from './competitive/customer-insights';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -223,6 +224,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'voc.ingestBatch': 'manage_market_intelligence',
   'voc.items': 'view_reports',
   'voc.overview': 'view_reports',
+  'voc.insights': 'view_reports',
   'finance.realized.upsert': 'manage_financial_limits',
   'finance.realized.list': 'view_reports',
   'listing.change.prepare': 'manage_market_intelligence',
@@ -2385,6 +2387,14 @@ export class LocalService {
         FROM customer_voice_items v LEFT JOIN listings l ON l.id=v.listing_id AND l.account_id=v.account_id WHERE v.account_id=? ORDER BY v.observed_at DESC,v.id LIMIT ?`,i.accountId,i.limit);
     });
 
+    this.register('voc.insights',payload=>{
+      const i=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(30),listingId:z.string().optional()}).strict().parse(payload);
+      if(!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',i.accountId))throw Error('conta ativa não encontrada');
+      if(i.listingId&&!db.row('SELECT id FROM listings WHERE account_id=? AND id=?',i.accountId,i.listingId))throw Error('anúncio não pertence à conta');
+      const to=nowIso(),from=new Date(Date.parse(to)-i.days*86400000).toISOString();
+      const items=db.rows<Parameters<typeof customerInsights>[0][number]>("SELECT id,kind,source_class,listing_id,text_redacted,rating,observed_at FROM customer_voice_items WHERE account_id=? AND observed_at>=? AND observed_at<=? AND (? IS NULL OR listing_id=?) ORDER BY observed_at DESC,id LIMIT 2001",i.accountId,from,to,i.listingId??null,i.listingId??null);
+      return {from,to,analyzed:Math.min(2000,items.length),truncated:items.length>2000,groups:customerInsights(items.slice(0,2000)),note:'Menções lexicais, inclusive positivas ou negadas; não confirmam defeito, sentimento ou causa de devolução. Revisar evidências antes de agir.'};
+    });
     this.register('voc.overview',(payload)=>{
       const {accountId,days}=z.object({accountId:z.string().min(1),days:z.number().int().min(1).max(365).default(30)}).strict().parse(payload);
       if (!db.row('SELECT id FROM accounts WHERE id=? AND is_active=1',accountId)) throw new Error('conta inexistente ou inativa');
@@ -2921,9 +2931,9 @@ export class LocalService {
 
     this.register('competitor.evidence.compare', (payload) => {
       const i = z.object({relationId:z.string(),accountId:z.string().min(1).optional()}).parse(payload ?? {});
-      const row = db.row<Record<string, unknown>>(`SELECT r.id,r.status,o.title own_title,o.price_cents own_price,o.shipping_cents own_shipping,o.delivery_days_min own_delivery_min,o.delivery_days_max own_delivery_max,o.images_json own_images,c.title competitor_title,c.price_cents competitor_price,c.shipping_cents competitor_shipping,c.delivery_days_min competitor_delivery_min,c.delivery_days_max competitor_delivery_max,c.images_json competitor_images,c.sponsored,
+      const row = db.row<Record<string, unknown>>(`SELECT r.id,r.status,o.title own_title,o.attributes_json own_attributes,o.price_cents own_price,o.shipping_cents own_shipping,o.delivery_days_min own_delivery_min,o.delivery_days_max own_delivery_max,o.images_json own_images,c.title competitor_title,c.attributes_json competitor_attributes,c.rating competitor_rating,c.reviews competitor_reviews,c.price_cents competitor_price,c.shipping_cents competitor_shipping,c.delivery_days_min competitor_delivery_min,c.delivery_days_max competitor_delivery_max,c.images_json competitor_images,c.sponsored,
         p.id AS observed_id,p.captured_at AS observed_at,p.price_cents AS observed_price,p.shipping_cents AS observed_shipping,
-        p.delivery_days_min AS observed_delivery_min,p.delivery_days_max AS observed_delivery_max,p.images_json AS observed_images,p.sponsored AS observed_sponsored
+        p.delivery_days_min AS observed_delivery_min,p.delivery_days_max AS observed_delivery_max,p.images_json AS observed_images,p.sponsored AS observed_sponsored,p.rating observed_rating,p.reviews observed_reviews,p.position observed_position,p.promotions_json observed_promotions,p.title observed_title
         FROM competitor_relations r JOIN own_products o ON o.id=r.own_product_id
         JOIN competitor_candidates c ON c.id=r.candidate_id AND c.own_product_id=o.id
         LEFT JOIN competitor_monitoring_points p ON p.id=(
@@ -2938,7 +2948,7 @@ export class LocalService {
       const sharedHashes = compImages.map((image) => image.sha256).filter((hash): hash is string => Boolean(hash && ownHashes.has(hash)));
       const diff = (own: unknown, competitor: unknown) => own == null || competitor == null ? null : Number(competitor) - Number(own);
       const sponsored=row.observed_id?row.observed_sponsored:row.sponsored;
-      return { relationId: i.relationId, status: row.status, observedAt:row.observed_at??null, priceDifferenceCents: diff(row.own_price,row.observed_id?row.observed_price:row.competitor_price), shippingDifferenceCents: diff(row.own_shipping,row.observed_id?row.observed_shipping:row.competitor_shipping), deliveryDaysMinDifference: diff(row.own_delivery_min,row.observed_id?row.observed_delivery_min:row.competitor_delivery_min), deliveryDaysMaxDifference: diff(row.own_delivery_max,row.observed_id?row.observed_delivery_max:row.competitor_delivery_max), images: { ownCount: ownImages.length, competitorCount: compImages.length, identicalHashes: sharedHashes.length, visualSimilarity: 'NOT_COMPUTED', explanation: 'hashes iguais indicam arquivo idêntico; hashes diferentes/ausentes não provam diferença visual' }, sponsored: sponsored == null ? null : Boolean(sponsored), unknowns: ['frete/prazo não coletados permanecem null','patrocínio só é informado quando visível e registrado'] };
+      return { relationId: i.relationId, status: row.status, observedAt:row.observed_at??null, competitorRating:row.observed_id?row.observed_rating:row.competitor_rating,competitorReviews:row.observed_id?row.observed_reviews:row.competitor_reviews,position:row.observed_position??null,promotions:row.observed_promotions?parseJsonObject(String(row.observed_promotions)):null,catalogComparison:compareCatalogText(String(row.own_title),String(row.competitor_title),parseJsonObject(String(row.own_attributes??'{}')),parseJsonObject(String(row.competitor_attributes??'{}'))),priceDifferenceCents: diff(row.own_price,row.observed_id?row.observed_price:row.competitor_price), shippingDifferenceCents: diff(row.own_shipping,row.observed_id?row.observed_shipping:row.competitor_shipping), deliveryDaysMinDifference: diff(row.own_delivery_min,row.observed_id?row.observed_delivery_min:row.competitor_delivery_min), deliveryDaysMaxDifference: diff(row.own_delivery_max,row.observed_id?row.observed_delivery_max:row.competitor_delivery_max), images: { ownCount: ownImages.length, competitorCount: compImages.length, identicalHashes: sharedHashes.length, visualSimilarity: 'NOT_COMPUTED', explanation: 'hashes iguais indicam arquivo idêntico; hashes diferentes/ausentes não provam diferença visual' }, sponsored: sponsored == null ? null : Boolean(sponsored), unknowns: ['frete/prazo não coletados permanecem null','patrocínio só é informado quando visível e registrado'] };
     });
 
     this.register('campaign.change.prepare', (payload, auth) => {

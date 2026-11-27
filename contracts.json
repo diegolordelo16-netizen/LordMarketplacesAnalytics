@@ -597,5 +597,10 @@
     "accountId": "active account",
     "terms": "1..20 Google Ads terms",
     "confirmed": true
+  },
+  "voc.insights": {
+    "accountId": "active account",
+    "days": "1..365",
+    "listingId": "optional account listing"
   }
 }
