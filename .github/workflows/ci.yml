@@ -64,3 +64,32 @@ jobs:
           name: MarketplaceIntelligence-validated-update
           path: update-payload/
           if-no-files-found: error
+
+  windows-upgrade:
+    name: Windows installer and actual update/rollback smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - run: npm run agent:build
+      - run: npm run host:build
+      - run: npm run ext:build
+      - run: node --test installer/scripts/update-manager.test.mjs
+      - name: Install, boot and rollback real built service in temporary Windows directories
+        run: node installer/scripts/update-windows-smoke.mjs
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Package Windows installer
+        env:
+          ISCC_PATH: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
+        run: npm run package:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MarketplaceIntelligence-Windows-candidate
+          path: installer/output/MarketplaceIntelligence-Setup.exe
+          if-no-files-found: error

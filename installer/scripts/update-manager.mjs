@@ -157,7 +157,7 @@ export async function recoverUpdate({root,data,approved,hooks}){
   if(['APPLIED','ROLLED_BACK'].includes(state.phase))return {ok:true,version:versionAt(root),note:'transação já concluída'};
   return rollbackUpdate({root,data,approved:true,hooks});
 }
-async function windowsQuiesce(root){
+export async function windowsQuiesce(root){
   if(process.platform!=='win32')throw Error('instalação suportada somente no Windows');
   const raw=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',"Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress"],{encoding:'utf8',windowsHide:true});
   const parsed=raw.trim()?JSON.parse(raw):[],rows=Array.isArray(parsed)?parsed:[parsed];
@@ -167,7 +167,7 @@ async function windowsQuiesce(root){
   for(let i=0;i<30;i++){if(owned.every(p=>{try{process.kill(Number(p.ProcessId),0);return false;}catch{return true;}}))return;await new Promise(r=>setTimeout(r,200));}
   throw Error('serviço não encerrou');
 }
-async function startAndVerify(root,data,version,token,requireVersion){
+export async function startAndVerify(root,data,version,token,requireVersion){
   const portFile=join(data,'port.txt'),urlFile=join(data,'panel-url.txt');
   rmSync(portFile,{force:true});rmSync(urlFile,{force:true});
   const child=spawn(join(root,'node.exe'),[join(root,'local-agent','main.js'),'--serve','--port=0','--data='+data],{detached:true,stdio:'ignore',windowsHide:true,env:{...process.env,MI_UPDATE_HEALTH_TOKEN:token}});
