@@ -303,6 +303,12 @@
       }
       entries.push((label||type)+'='+val.toLowerCase());
     }
+    // Custom controls are not silently ignored when their selected value is unknown.
+    for(const el of root.querySelectorAll('[role="combobox"],[role="listbox"]')){
+      if(!isVisible(el)||el.disabled||String(el.tagName||'').toUpperCase()==='SELECT')continue;
+      const label=normalizeLabel(el.getAttribute('aria-label')||el.getAttribute('name')||el.getAttribute('title')||'');
+      if(/^(period|período|periodo|date range|intervalo|status|situação|situacao|start_date|end_date|data inicial|data final|start date|end date|date_from|date_to)$/.test(label))warnings.push('FILTRO_NAO_RECONHECIDO');
+    }
     const signature=[...new Set(entries)].sort().join('|');
     if(signature.length>512){warnings.push('FILTRO_NAO_RECONHECIDO');return {signature:'',warnings:[...new Set(warnings)]};}
     return {signature,warnings:[...new Set(warnings)]};
