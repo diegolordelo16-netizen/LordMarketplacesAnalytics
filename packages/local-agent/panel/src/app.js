@@ -847,6 +847,7 @@ async function viewCompare() {
     + card('Comparação por período, produto ou anúncio', `
       <div class="form-grid">
         <label>Conta<select id="cmp-account"><option value="">Todas as contas</option>${(accounts || []).filter(a=>a.is_active!==0).map(a=>`<option value="${esc(a.id)}" ${a.id===state.accountId?'selected':''}>${esc(a.display_name)} · ${esc(a.marketplace)}</option>`).join('')}</select></label>
+        <label>Marketplace<select id="cmp-marketplace"><option value="">Todos</option><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label>
         <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option></select></label>
         <label>Período atual — início<input id="cmp-primary-from" type="date" value="${primaryFrom}"></label>
         <label>Período atual — fim<input id="cmp-primary-to" type="date" value="${primaryTo}"></label>
@@ -855,7 +856,7 @@ async function viewCompare() {
       </div>
       <div class="actions"><button class="btn primary" data-act="compare-detail">Comparar períodos</button></div>
       <div id="compare-detail-out"></div>
-      <p class="muted small">Usa o último snapshot de cada anúncio em cada período para evitar somar repetidamente capturas acumuladas. Métricas incompletas permanecem indisponíveis. Produto sem SKU/produto canônico é separado pelo anúncio.</p>`)
+      <p class="muted small">Usa o último snapshot de cada anúncio em cada janela de captura. Variações observadas não comprovam vendas realizadas no período; a comparação verificada exige janelas equivalentes, anúncios idênticos e datas explícitas da origem. Métricas incompletas permanecem indisponíveis. Produto sem SKU/produto canônico é separado pelo anúncio.</p>`)
     + card('Cobertura consolidada', `<div class="kpi-grid"><div class="kpi"><div class="l">Lojas</div><div class="v">${num(comparison.accounts?.length || 0)}</div></div><div class="kpi"><div class="l">Anúncios</div><div class="v">${num(comparison.coverage?.totalListings || 0)}</div></div><div class="kpi"><div class="l">Capturados</div><div class="v">${num(comparison.coverage?.capturedListings || 0)}</div></div><div class="kpi"><div class="l">Sem captura</div><div class="v">${num(comparison.coverage?.uncapturedListings || 0)}</div></div></div>`);
 }
 
@@ -1504,7 +1505,7 @@ const ACTIONS = {
     const rows = (result.rows || []).filter((row) => row.current?.metrics?.[metric] != null || row.previous?.metrics?.[metric] != null).slice(0, 100);
     const host = $('#kpi-drilldown-out');
     if (!host) return;
-    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
+    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação observada','Variação verificada'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td><td>${row.verifiedDeltaPct?.[metric] == null ? 'Não comprovada' : `${num(row.verifiedDeltaPct[metric],1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
     initializeTables(host);
     host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
@@ -1800,6 +1801,7 @@ const ACTIONS = {
     const value = (id) => $(`#${id}`).value;
     const payload = {
       accountId: value('cmp-account') || undefined,
+      marketplace: value('cmp-marketplace') || undefined,
       groupBy: value('cmp-group'),
       primaryFrom: value('cmp-primary-from'), primaryTo: value('cmp-primary-to'),
       comparisonFrom: value('cmp-previous-from'), comparisonTo: value('cmp-previous-to'),
@@ -1807,7 +1809,7 @@ const ACTIONS = {
     const result = await run(() => api('kpi.compare.detail', payload), 'Comparação calculada a partir dos snapshots disponíveis.');
     const rows = result?.rows || [];
     const delta = (n) => n == null ? '—' : `${n >= 0 ? '+' : ''}${num(n,1)}%`;
-    const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação GMV','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
+    const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação observada','Comparação verificada','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${row.comparisonQuality?.comparable ? delta(row.verifiedDeltaPct.gmv) : 'Não comprovada'}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
     $('#compare-detail-out').innerHTML = `<p class="muted small">${esc(result?.method || '')}</p>${output}`;
     initializeTables($('#compare-detail-out'));
   },
