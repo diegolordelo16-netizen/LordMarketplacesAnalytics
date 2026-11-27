@@ -37,7 +37,7 @@ export function growthOpportunity(current: Metrics, previous: Metrics, comparabl
       const targetVisits = kind === 'TRAFFIC' ? Math.round(a.visits + (b.visits - a.visits) * fraction) : a.visits;
       const targetRate = kind === 'CONVERSION' ? a.rate + (b.rate - a.rate) * fraction : a.rate;
       const desiredOrders = Math.max(0, Math.floor(targetVisits * targetRate - a.orders + 1e-9));
-      const stockCapacity = stockObserved !== null && unitsPerOrder !== null ? Math.floor(stockObserved / unitsPerOrder) : null;
+      const stockCapacity = stockObserved === 0 ? 0 : stockObserved !== null && unitsPerOrder !== null ? Math.floor(stockObserved / unitsPerOrder) : null;
       const incrementalOrders = stockCapacity === null ? desiredOrders : Math.min(desiredOrders, stockCapacity);
       const incrementalGmvCents = Math.round(incrementalOrders * a.ticket * 100);
       if (!Number.isSafeInteger(incrementalOrders) || !Number.isSafeInteger(incrementalGmvCents) || incrementalOrders <= 0) continue;
