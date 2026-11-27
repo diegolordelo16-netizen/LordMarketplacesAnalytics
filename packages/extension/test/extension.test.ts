@@ -386,14 +386,16 @@ describe('extensão: classificação de página do Mercado Livre', () => {
   it('captura os anúncios visíveis quando a página é seller_listings', () => {
     let listener: ((message: unknown, sender: unknown, respond: (value: unknown) => void) => unknown) | undefined;
     const row = {
-      innerHTML: 'MLB123456',
-      getAttribute: () => null,
+      getAttribute: (name: string) => name === 'data-item-id' ? 'MLB123456' : null,
+      querySelectorAll: () => [],
       querySelector: (selector: string) => selector.includes('andes-money-amount')
         ? { textContent: '199' }
         : { textContent: 'Fone Bluetooth' },
     };
     const window = {
       MI_DOM: {
+        isVisible: (element: any) => !element.hidden,
+        hasChallenge: () => false,
         extractExternalId: (value: unknown) => String(value).match(/MLB\d+/)?.[0] ?? null,
         parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
         findValueByLabel: () => null,
@@ -402,7 +404,7 @@ describe('extensão: classificação de página do Mercado Livre', () => {
     const context = vm.createContext({
       window,
       location: { href: 'https://vendedores.mercadolivre.com.br/anuncios' },
-      document: { querySelectorAll: (selector: string) => selector.includes('item-row') ? [row] : [], querySelector: () => null, body: {} },
+      document: { querySelectorAll: (selector: string) => selector.includes('item-row') ? [row, { ...row, hidden: true, getAttribute: () => 'MLB999999' }, { ...row, getAttribute: () => null }] : [], querySelector: () => null, body: {} },
       chrome: { runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } } },
       String, Number, Math, RegExp,
     });
@@ -430,6 +432,7 @@ describe('extensão: classificação e diagnóstico da Shopee', () => {
     let listener: ((message: unknown, sender: unknown, respond: (value: unknown) => void) => unknown) | undefined;
     const window = {
       MI_DOM: {
+        hasChallenge: () => false,
         findValueByLabel: (_body: unknown, labels: string[]) =>
           labels.some((label) => label === 'stock') ? { text: '12', label: 'Stock' } : null,
         parseNumberPtBr: (value: unknown) => Number(String(value).replace(',', '.')),
@@ -612,5 +615,24 @@ describe('extensão: paginação segura', () => {
     expect(worker).toContain('await chrome.tabs.remove(temporary.id)');
     expect(worker).toContain('snapshot.accountMetrics');
     expect(worker).toContain('payload.listings.length === 0 && !payload.accountMetrics');
+  });
+});
+
+
+describe('captura direta: bloqueio de desafios', () => {
+  it.each(['mercado-livre.js', 'shopee.js', 'amazon.js'])('%s rejeita captura quando aparece CAPTCHA', (file) => {
+    let listener: any;
+    const context = vm.createContext({
+      window: { MI_DOM: { hasChallenge: () => true } },
+      location: { href: 'https://example.com/' },
+      document: { querySelector: () => null },
+      chrome: { runtime: { onMessage: { addListener: (fn: any) => { listener = fn; } } } },
+    });
+    vm.runInContext(readFileSync(join(ext, 'content', file), 'utf8'), context);
+    let response: any;
+    listener({ type: 'MI_CAPTURE_REQUEST' }, {}, (value: unknown) => { response = value; });
+    expect(response.ok).toBe(false);
+    expect(response.error).toContain('CAPTCHA');
+    expect(response.snapshot).toBeUndefined();
   });
 });

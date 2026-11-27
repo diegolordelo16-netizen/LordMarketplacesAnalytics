@@ -150,6 +150,10 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'MI_CAPTURE_REQUEST') {
+      if (window.MI_DOM.hasChallenge(document) || document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')) {
+        sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
+        return true;
+      }
       try { sendResponse({ ok: true, snapshot: capture() }); }
       catch (err) { sendResponse({ ok: false, error: String(err?.message ?? err) }); }
       return true;

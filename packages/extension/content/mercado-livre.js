@@ -116,7 +116,7 @@
       if (text.length < 3 || text.length > 5000 || seen.has(text)) continue;
       seen.add(text);
       const container = element.closest('[data-id], [data-testid*="claim"], [data-testid*="return"], tr');
-      const externalRef = container?.getAttribute('data-id') || container?.getAttribute('data-testid') || undefined;
+      const externalRef = container?.getAttribute('data-id') || undefined;
       items.push({ kind, text, ...(externalRef ? { externalRef: String(externalRef).slice(0, 200) } : {}) });
     }
     return items;
@@ -312,15 +312,23 @@
     );
     for (const row of candidates) {
       if (rows.length >= MAX_LISTINGS) break;
-      const id = window.MI_DOM.extractExternalId(row.innerHTML) ?? row.getAttribute('data-item-id');
-      const title = row.querySelector('h2, .ui-search-item__title, a')?.textContent?.replace(/\s+/g, ' ').trim();
-      const priceText = row.querySelector('.andes-money-amount__fraction')?.textContent ?? '';
-      if (!id && !title) continue;
-      const item = {};
-      if (id) item.listingId = String(id).toUpperCase();
+      if (!window.MI_DOM.isVisible(row)) continue;
+      const link = Array.from(row.querySelectorAll('a[href]')).find(el => window.MI_DOM.isVisible(el) && window.MI_DOM.extractExternalId(el.href));
+      const id = window.MI_DOM.extractExternalId(row.getAttribute('data-item-id') || '') || (link && window.MI_DOM.extractExternalId(link.href));
+      if (!id || rows.some(item => item.listingId === String(id).toUpperCase())) continue;
+      const titleNode = row.querySelector('h2, .ui-search-item__title, a');
+      const priceNode = row.querySelector('.andes-money-amount__fraction');
+      const title = titleNode && window.MI_DOM.isVisible(titleNode) ? titleNode.textContent?.replace(/\s+/g, ' ').trim() : '';
+      const priceText = priceNode && window.MI_DOM.isVisible(priceNode) ? priceNode.textContent : '';
+      const item = { listingId: String(id).toUpperCase() };
       if (title) item.title = title.slice(0, 2000);
-      const price = window.MI_DOM.parseNumberPtBr(priceText);
-      if (price !== null) item.price = price;
+      const price = priceText ? window.MI_DOM.parseNumberPtBr(priceText) : null;
+      if (price !== null && price >= 0) item.price = price;
+      for (const [field, key] of [['stockAvailable','stock'],['units','units'],['visits','visits'],['orders','orders']]) {
+        const found = window.MI_DOM.findValueByLabel(row, LABELS[key]);
+        const value = found && window.MI_DOM.parseNumberPtBr(found.text);
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 0) item[field] = value;
+      }
       rows.push(item);
     }
     return {
@@ -530,6 +538,10 @@
   // Responde à captura, ao executor de rascunhos e à publicação assistida explicitamente autorizada.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'MI_CAPTURE_REQUEST') {
+      if (window.MI_DOM.hasChallenge(document) || document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')) {
+        sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
+        return true;
+      }
       try { sendResponse({ ok: true, snapshot: snapshot() }); }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
       return true;

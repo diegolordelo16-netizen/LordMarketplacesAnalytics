@@ -81,7 +81,7 @@
       if (text.length < 3 || text.length > 5000 || seen.has(text)) continue;
       seen.add(text);
       const container = element.closest('[data-id], [data-testid*="dispute"], [data-testid*="return"], tr');
-      const externalRef = container?.getAttribute('data-id') || container?.getAttribute('data-testid') || undefined;
+      const externalRef = container?.getAttribute('data-id') || undefined;
       items.push({ kind, text, ...(externalRef ? { externalRef: String(externalRef).slice(0, 200) } : {}) });
     }
     return items;
@@ -445,6 +445,10 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'MI_CAPTURE_REQUEST') {
+      if (window.MI_DOM.hasChallenge(document) || document.querySelector('input[type="password"], form[action*="login"], form[action*="signin"]')) {
+        sendResponse({ ok: false, error: 'login/CAPTCHA: captura interrompida para verificação manual' });
+        return true;
+      }
       try { sendResponse({ ok: true, snapshot: capture() }); }
       catch (err) { sendResponse({ ok: false, error: String(err && err.message ? err.message : err) }); }
       return true;
