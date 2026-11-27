@@ -66,7 +66,7 @@ const searchInput = z.object({
   candidates: z.array(candidateInput).max(500).default([]),
   /** Fonte dos candidatos: busca assistida ou link informado pelo usuário. */
   discoveryMethod: z.enum(['BUSCA_ASSISTIDA', 'LINK_INFORMADO', 'LISTA_DO_VENDEDOR']).default('BUSCA_ASSISTIDA'),
-  sourceClass: z.enum(['A_PRIMARY_UI', 'B_PLATFORM_EXPORT']).default('A_PRIMARY_UI'),
+  sourceClass: z.enum(['A_PRIMARY_UI', 'B_PLATFORM_EXPORT','F_USER_INPUT']).default('A_PRIMARY_UI'),
 });
 
 const reviewInput = z.object({

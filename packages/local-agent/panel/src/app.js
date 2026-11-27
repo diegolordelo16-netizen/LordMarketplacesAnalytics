@@ -524,7 +524,7 @@ async function viewCompetition() {
       <div class="grow">
         <div class="tiny muted">Marketplaces</div>
         <span class="checks">
-          ${['mercado_livre', 'shopee', 'amazon', 'tiktok_shop', 'magalu', 'shein', 'netshoes']
+          ${['mercado_livre', 'shopee', 'amazon']
             .map((m) => `<label class="chk"><input type="checkbox" class="mp-chk" value="${m}" ${m === 'mercado_livre' ? 'checked' : ''}> ${esc(m)}</label>`).join('')}
         </span>
       </div>
@@ -533,10 +533,11 @@ async function viewCompetition() {
       <label class="grow">Candidatos capturados (JSON da extensão) <textarea id="search-candidates" rows="4" placeholder='[{"marketplace":"mercado_livre","title":"...","brand":"...","priceCents":43900}]'></textarea></label>
     </div>
     <div class="actions">
-      <button class="btn primary" data-act="search">Buscar concorrentes</button>
+      <button class="btn" data-act="search-plan">Preparar buscas por título, SKU e atributos</button>
+      <button class="btn primary" data-act="search">Analisar candidatos informados</button>
       <button class="btn ghost" data-act="search-demo">Carregar exemplo (MODO DEMONSTRATIVO)</button>
     </div>
-    <div id="search-out" class="out"></div>`)
+    <p class="muted small">Candidatos colados manualmente são identificados como entrada do operador; a demonstração não é salva.</p><div id="search-plan-out" class="out"></div><div id="search-out" class="out"></div>`)
   + `<div class="kpi-grid">
       <div class="kpi pend"><div class="l">Pendentes</div><div class="v">${num(s.pending)}</div></div>
       <div class="kpi ok"><div class="l">Aprovados</div><div class="v">${num(s.approved)}</div></div>
@@ -1593,14 +1594,16 @@ const ACTIONS = {
   'own-select': (d) => { state.ownProductId = d.id; toast('Produto selecionado.'); renderView(); },
 
   'search-demo': () => {
-    $('#search-candidates').value = JSON.stringify([
-      { marketplace: 'mercado_livre', title: 'Capacete Motociclista Fechado Norisk FF 302 Fosco 58', brand: 'Norisk', model: 'FF302', category: 'Capacetes', priceCents: 43900, seller: 'Loja A' },
-      { marketplace: 'mercado_livre', title: 'Capacete Pro Tork Vision Preto Fechado', brand: 'Pro Tork', model: 'VISION', category: 'Capacetes', priceCents: 39900, seller: 'Loja B' },
-      { marketplace: 'shopee', title: 'Luvas de moto couro tamanho G', brand: 'X11', category: 'Luvas', priceCents: 8900, seller: 'Loja C' },
-    ], null, 2);
-    toast('MODO DEMONSTRATIVO / EXEMPLO — dados de exemplo, não reais.');
+    $('#search-out').innerHTML='<p class="muted small">Exemplo ilustrativo, sem gravação no banco.</p>'+table(['Título fictício','Marketplace','Preço fictício'],['<tr><td>Capacete demonstrativo</td><td>Mercado Livre</td><td>R$ 439,00</td></tr>'],'');
+    initializeTables($('#search-out'));
   },
-
+  'search-plan':async()=>{
+    const accountId=state.accountId,ownProductId=state.ownProductId,generation=viewRenderSequence,host=$('#search-plan-out'),marketplaces=$$('.mp-chk').filter(c=>c.checked).map(c=>c.value);
+    const r=await api('competitor.searchPlan',{accountId,ownProductId,marketplaces});
+    if(generation!==viewRenderSequence||state.accountId!==accountId||state.ownProductId!==ownProductId||host!==$('#search-plan-out'))return;
+    host.innerHTML='<p>'+esc(r.note)+'</p>'+table(['Marketplace','Critério','Termo','Abrir busca'],r.links.map(row=>'<tr><td>'+esc(row.marketplace)+'</td><td>'+esc(row.kind)+'</td><td>'+esc(row.term)+'</td><td><a href="'+esc(row.url)+'" target="_blank" rel="noopener noreferrer">Abrir resultados</a></td></tr>'),'Sem termos disponíveis.');
+    initializeTables(host);
+  },
   search: async () => {
     if (!state.ownProductId) { toast('Cadastre e selecione um produto próprio primeiro.', 'bad'); return; }
     let candidates = [];
@@ -1620,6 +1623,7 @@ const ACTIONS = {
       category: c.category ?? null,
       priceCents: typeof c.priceCents === 'number' ? c.priceCents : (typeof c.price === 'number' ? Math.round(c.price * 100) : null),
       url: c.url ?? null,
+      externalId: c.externalId ?? null,attributes:c.attributes??null,rating:c.rating??null,reviews:c.reviews??null,imageHash:c.imageHash??null,
       seller: c.seller ?? null,
     })).filter((c) => c.title);
     const r = await run(() => api('competitor.search', {
@@ -1627,7 +1631,7 @@ const ACTIONS = {
       marketplaces: mps,
       candidates: normalized,
       discoveryMethod: 'BUSCA_ASSISTIDA',
-      sourceClass: 'A_PRIMARY_UI',
+      sourceClass: 'F_USER_INPUT',
     }), 'Busca concluída.');
     if (r) {
       $('#search-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;

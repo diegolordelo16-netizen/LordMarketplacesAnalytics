@@ -47,3 +47,5 @@ Referências
 
 ## Fusão e revisão final de código
 PR #9 integrado à etapa 06, seguido das alterações da etapa 05 até 32b7365. Consulta externa e Google Ads usam conexão criptografada, histórico único e autorização. Pós-venda ganhou análise lexical por fonte/conta/anúncio, recorrência e sugestões de revisão sem inferir sentimento ou causa. Comparativo competitivo expõe nota, avaliações, posição e termos/atributos cadastrados, mantendo diferenças de captura e limites. Requisitos 110–114 dependem de coleta real nos marketplaces; 125/131 exigem dados explícitos de promoções/descrições; 130 não calcula similaridade visual além de hashes. SEO externo não substitui ranking de marketplace. Validação real permanece separada. Não declarar 365 requisitos concluídos.
+
+A busca assistida passa a gerar links públicos por título, marca/modelo, SKU vinculado e atributos nos três marketplaces, sem inventar resultados; demonstração não grava registros e importação manual é rotulada F_USER_INPUT. A coleta autônoma completa das páginas públicas ainda requer implementação dos adapters e homologação.

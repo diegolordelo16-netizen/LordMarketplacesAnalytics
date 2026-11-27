@@ -602,5 +602,10 @@
     "accountId": "active account",
     "days": "1..365",
     "listingId": "optional account listing"
+  },
+  "competitor.searchPlan": {
+    "accountId": "active account",
+    "ownProductId": "account own product",
+    "marketplaces": "mercado_livre|shopee|amazon"
   }
 }

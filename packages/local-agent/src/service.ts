@@ -166,6 +166,7 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'competitor.ownProduct.upsert': 'manage_competitors',
   'competitor.ownProduct.list': 'view_reports',
   'competitor.search': 'manage_competitors',
+  'competitor.searchPlan': 'view_reports',
   'competitor.relations': 'view_reports',
   'competitor.approve': 'manage_competitors',
   'competitor.reject': 'manage_competitors',
@@ -2221,6 +2222,16 @@ export class LocalService {
       return this.competitors.listOwnProducts(i.accountId);
     });
 
+    this.register('competitor.searchPlan',payload=>{
+      const i=z.object({accountId:z.string().min(1),ownProductId:z.string().min(1),marketplaces:z.array(z.enum(['mercado_livre','shopee','amazon'])).min(1).max(3)}).strict().parse(payload);
+      const own=db.row<{title:string;brand:string|null;model:string|null;attributes_json:string|null;sku:string|null}>(`SELECT o.title,o.brand,o.model,o.attributes_json,s.sku FROM own_products o JOIN accounts a ON a.id=o.account_id AND a.is_active=1 LEFT JOIN listings l ON l.id=o.listing_id AND l.account_id=o.account_id LEFT JOIN skus s ON s.id=l.sku_id AND s.account_id=o.account_id WHERE o.id=? AND o.account_id=?`,i.ownProductId,i.accountId);
+      if(!own)throw Error('produto não pertence à conta ativa');
+      const attrs=parseJsonObject(own.attributes_json??'{}');
+      const queries=[{kind:'TITLE',term:own.title},{kind:'BRAND_MODEL',term:[own.brand,own.model].filter(Boolean).join(' ')},{kind:'SKU',term:own.sku??''},{kind:'ATTRIBUTES',term:[own.brand,own.model,...Object.values(attrs).filter(v=>typeof v==='string').slice(0,3)].filter(Boolean).join(' ')}];
+      const unique=new Set<string>();
+      const links=queries.filter(q=>{q.term=q.term.trim().slice(0,200);const key=q.term.toLowerCase();if(q.term.length<2||unique.has(key))return false;unique.add(key);return true;}).flatMap(q=>[...new Set(i.marketplaces)].map(m=>({marketplace:m,...q,url:m==='mercado_livre'?'https://lista.mercadolivre.com.br/'+encodeURIComponent(q.term):m==='shopee'?'https://shopee.com.br/search?keyword='+encodeURIComponent(q.term):'https://www.amazon.com.br/s?k='+encodeURIComponent(q.term),targetResults:20})));
+      return {links,note:'Abra as buscas públicas e importe candidatos observados. Nenhuma busca remota ou posição foi confirmada pelo plano.'};
+    });
     this.register('competitor.search', (payload, auth) => {
       const r = this.competitors.search(payload);
       this.audit(auth, 'COMPETITOR_SEARCH', 'own_product', (payload as { ownProductId?: string })?.ownProductId ?? null, 'OK', undefined, r);

@@ -153,6 +153,7 @@ export const IPC_METHODS = [
   'competitor.ownProduct.upsert',
   'competitor.ownProduct.list',
   'competitor.search',
+  'competitor.searchPlan',
   'competitor.relations',
   'competitor.approve',
   'competitor.reject',

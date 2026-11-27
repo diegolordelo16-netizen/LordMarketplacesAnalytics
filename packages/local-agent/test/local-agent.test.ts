@@ -68,6 +68,16 @@ function seedImportAccount(id: string): void {
 }
 
 
+describe('Plano de busca competitiva',()=>{
+  it('prepara links públicos sem inventar candidatos e isola a conta',async()=>{
+    const accountId='search-plan-a',other='search-plan-b';seedImportAccount(accountId);seedImportAccount(other);
+    const own=await call('competitor.ownProduct.upsert',{accountId,marketplace:'mercado_livre',title:'Capacete teste',brand:'Marca',model:'Modelo',attributes:{material:'ABS'}});
+    const id=(own.result as {id:string}).id;
+    const r=await call('competitor.searchPlan',{accountId,ownProductId:id,marketplaces:['mercado_livre','shopee','amazon']});
+    expect(r.result).toMatchObject({links:expect.arrayContaining([{marketplace:'amazon',kind:'TITLE',term:'Capacete teste',url:'https://www.amazon.com.br/s?k=Capacete%20teste',targetResults:20}])});
+    expect((await call('competitor.searchPlan',{accountId:other,ownProductId:id,marketplaces:['amazon']})).ok).toBe(false);
+  });
+});
 describe('Pós-venda lexical por conta',()=>{
   it('preserva fonte, distingue menções de problemas comprovados e evita cruzamento de loja',async()=>{
     const accountId='voc-insights-a',other='voc-insights-b';seedImportAccount(accountId);seedImportAccount(other);
