@@ -22,6 +22,7 @@ import { MAX_MESSAGE_BYTES, type IpcResponse } from '@mi/shared';
 
 export interface PanelServerOptions {
   port: number;
+  version?: string;
   token: string;
   /** Diretório com os arquivos estáticos do painel (HTML/CSS/JS compilados). */
   publicDir?: string;
@@ -260,7 +261,7 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
       }
 
       if (url.pathname === '/api/health') {
-        send(res, 200, { ok: true, protocolVersion: 1, uptimeSec: Math.round(process.uptime()) });
+        send(res, 200, { ok: true, protocolVersion: 1, uptimeSec: Math.round(process.uptime()), version: options.version });
         return;
       }
 
