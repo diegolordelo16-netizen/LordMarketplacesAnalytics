@@ -1208,6 +1208,7 @@ export class LocalService {
         comparisonFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         comparisonTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         groupBy: z.enum(['account','product','listing','marketplace']).default('listing'),
+        sourceWindows: z.boolean().default(false),
         accountId: z.string().optional(),
         marketplace: z.enum(['mercado_livre','shopee','amazon']).optional(),
         listingId:z.string().min(1).max(200).optional(),
@@ -1227,6 +1228,19 @@ export class LocalService {
       const comparison = dateRange(i.comparisonFrom,i.comparisonTo);
       if (primary.start <= comparison.end && comparison.start <= primary.end) throw new Error('os dois períodos de comparação não podem se sobrepor');
       if (i.accountId && !db.row('SELECT id FROM accounts WHERE id=? AND is_active=1', i.accountId)) throw new Error('conta ativa não encontrada');
+      if(i.sourceWindows&&(!i.accountId||i.groupBy!=='listing'))throw new Error('comparação por janela comercial exige uma loja e agrupamento por anúncio');
+      const queryNow=nowIso();
+      if(i.sourceWindows&&(primary.end>=queryNow||comparison.end>=queryNow))throw new Error('janelas comerciais precisam estar encerradas');
+      const sourceWindowMatches=(row:{source_class:string;evidence_json:string;captured_at:string},from:string,to:string)=>{
+        if(row.source_class!=='A_PRIMARY_UI'||row.captured_at<=to+'T23:59:59.999Z'||row.captured_at>queryNow)return false;
+        const evidence=parseJsonObject(row.evidence_json);
+        if(typeof evidence.filtersAndPeriod!=='string'||evidence.coverageWarnings)return false;
+        const entries=evidence.filtersAndPeriod.split('|').map(entry=>entry.split('='));
+        if(entries.some(entry=>entry.length!==2)||new Set(entries.map(entry=>entry[0])).size!==entries.length)return false;
+        const starts=entries.filter(([k])=>/^(start_date|date_from|data inicial|start date)$/.test(k??''));
+        const ends=entries.filter(([k])=>/^(end_date|date_to|data final|end date)$/.test(k??''));
+        return starts.length===1&&ends.length===1&&starts[0]?.[1]===from&&ends[0]?.[1]===to;
+      };
       const records = db.rows<{
         listing_id:string; account_id:string; captured_at:string; metrics_json:string; external_id:string; title:string|null;
         marketplace:string; product_id:string|null; product_name:string|null; account_name:string; evidence_json:string; source_class:string;
@@ -1237,23 +1251,24 @@ export class LocalService {
            JOIN accounts a ON a.id=s.account_id
            LEFT JOIN skus sku ON sku.id=l.sku_id AND sku.account_id=l.account_id
            LEFT JOIN catalog_products cp ON cp.id=sku.catalog_product_id AND cp.account_id=l.account_id
-          WHERE ((s.captured_at>=? AND s.captured_at<=?) OR (s.captured_at>=? AND s.captured_at<=?))
+          WHERE ((?=0 AND ((s.captured_at>=? AND s.captured_at<=?) OR (s.captured_at>=? AND s.captured_at<=?))) OR (?=1 AND s.captured_at>? AND s.captured_at<=? AND s.source_class='A_PRIMARY_UI'))
             AND (? IS NULL OR s.account_id=?) AND (? IS NULL OR l.marketplace=?)
             AND (? IS NULL OR l.id=?) AND (? IS NULL OR l.sku_id=?)
-          ORDER BY s.captured_at DESC`,
-        primary.start,primary.end,comparison.start,comparison.end,i.accountId ?? null,i.accountId ?? null,i.marketplace ?? null,i.marketplace ?? null,i.listingId??null,i.listingId??null,i.skuId??null,i.skuId??null,
+          ORDER BY s.captured_at DESC,s.id DESC LIMIT ?`,
+        i.sourceWindows?1:0,primary.start,primary.end,comparison.start,comparison.end,i.sourceWindows?1:0,primary.end<comparison.end?primary.end:comparison.end,queryNow,i.accountId ?? null,i.accountId ?? null,i.marketplace ?? null,i.marketplace ?? null,i.listingId??null,i.listingId??null,i.skuId??null,i.skuId??null,i.sourceWindows?50001:-1,
       );
+      if(i.sourceWindows&&records.length>50000)throw new Error('limite de 50 mil capturas: restrinja o anúncio/SKU ou período');
       type RecordItem = typeof records[number] & { metrics: Record<string,unknown> };
       const latest = new Map<string,RecordItem>();
       for (const row of records) {
         let metrics: Record<string,unknown>;
         try { metrics = JSON.parse(row.metrics_json) as Record<string,unknown>; } catch { continue; }
         const item = { ...row, metrics };
-        if (row.captured_at >= primary.start && row.captured_at <= primary.end) {
+        if (i.sourceWindows?sourceWindowMatches(row,i.primaryFrom,i.primaryTo):(row.captured_at >= primary.start && row.captured_at <= primary.end)) {
           const key = `primary|${row.listing_id}`;
           if (!latest.has(key)) latest.set(key,item);
         }
-        if (row.captured_at >= comparison.start && row.captured_at <= comparison.end) {
+        if (i.sourceWindows?sourceWindowMatches(row,i.comparisonFrom,i.comparisonTo):(row.captured_at >= comparison.start && row.captured_at <= comparison.end)) {
           const key = `comparison|${row.listing_id}`;
           if (!latest.has(key)) latest.set(key,item);
         }
@@ -1348,7 +1363,7 @@ export class LocalService {
         const funnelDetails=growth?{organicImpressions:funnelMetric('organicImpressions'),paidImpressions:funnelMetric('paidImpressions'),addToCart:funnelMetric('addToCart'),totalImpressions:funnelMetric('totalImpressions'),checkout:funnelMetric('checkoutStarts')}:null;
         return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,diagnostics,revenueDrivers:revenueDrivers(current.metrics,previous.metrics,comparable),growthOpportunity:growth,financialGrowth,funnelDetails,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable,coverageVerified:false} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
-      const campaignRows=i.listingId||i.skuId?[]:db.rows<{account_id:string;marketplace:string;external_id:string;parent_external_id:string;label:string|null;metrics_json:string;context_json:string;evidence_json:string;captured_at:string;source_class:string}>(`SELECT account_id,marketplace,external_id,parent_external_id,label,metrics_json,context_json,evidence_json,captured_at,source_class FROM capture_detail_snapshots WHERE kind='AD_CAMPAIGN' AND captured_at>=? AND captured_at<=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) ORDER BY captured_at DESC,id DESC`,primary.start,primary.end,i.accountId??null,i.accountId??null,i.marketplace??null,i.marketplace??null);
+      const campaignRows=i.sourceWindows||i.listingId||i.skuId?[]:db.rows<{account_id:string;marketplace:string;external_id:string;parent_external_id:string;label:string|null;metrics_json:string;context_json:string;evidence_json:string;captured_at:string;source_class:string}>(`SELECT account_id,marketplace,external_id,parent_external_id,label,metrics_json,context_json,evidence_json,captured_at,source_class FROM capture_detail_snapshots WHERE kind='AD_CAMPAIGN' AND captured_at>=? AND captured_at<=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) ORDER BY captured_at DESC,id DESC`,primary.start,primary.end,i.accountId??null,i.accountId??null,i.marketplace??null,i.marketplace??null);
       const campaigns=[] as Array<{accountId:string;marketplace:string;campaignId:string;label:string|null;spend:number;attributedRevenue:number;capturedAt:string;note:string}>;
       const seenCampaigns=new Set<string>();
       for(const row of campaignRows){
@@ -1367,7 +1382,7 @@ export class LocalService {
         if(starts.length!==1||ends.length!==1||starts[0]?.[1]!==i.primaryFrom||ends[0]?.[1]!==i.primaryTo||primary.end>=nowIso())continue;
         campaigns.push({accountId:row.account_id,marketplace:row.marketplace,campaignId:row.external_id,label:row.label,spend,attributedRevenue:revenue,capturedAt:row.captured_at,note:'Investimento maior que receita atribuída observada; não comprova prejuízo contábil nem efeito incremental.'});
       }
-      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,campaigns,diagnosticPolicy:'Somente sinais observados com filtros compatíveis; cobertura integral não comprovada; sem inferência causal.',method:'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
+      return { generatedAt:nowIso(),groupBy:i.groupBy,sourceWindows:i.sourceWindows,primary,comparison,rows,campaigns,diagnosticPolicy:'Somente sinais observados com filtros compatíveis; cobertura integral não comprovada; sem inferência causal.',method:i.sourceWindows?'última captura posterior ao encerramento de cada janela comercial explícita por anúncio; cobertura integral não comprovada.':'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
     });
 
     this.register('missions.today', (payload) => {
