@@ -164,6 +164,15 @@ export class SecretStore {
   delete(key: string): void {
     this.db.db.prepare('DELETE FROM secrets WHERE key = ?').run(key);
   }
+
+  /** Remove todos os segredos de um namespace sem expor nem descriptografar seus valores. */
+  deletePrefix(prefix: string): number {
+    if (!prefix || prefix.length > 256) throw new Error('prefixo de segredo inválido');
+    const result = this.db.db
+      .prepare('DELETE FROM secrets WHERE substr(key, 1, ?) = ?')
+      .run(prefix.length, prefix);
+    return Number(result.changes);
+  }
 }
 
 /** Hash de senha local (scrypt) com comparação em tempo constante. */

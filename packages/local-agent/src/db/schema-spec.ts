@@ -16,7 +16,7 @@ export interface TableSpec {
   retention?: string;
 }
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 8;
 
 export const TABLE_SPECS: TableSpec[] = [
   // ---------------------------------------------------------------- identidade & acesso
@@ -30,6 +30,7 @@ export const TABLE_SPECS: TableSpec[] = [
   { name: 'data_provenance', purpose: 'proveniência por métrica coletada', scope: ['account_id', 'listing_id'], retention: '365 dias' },
   { name: 'data_quality_issues', purpose: 'problemas de integridade detectados', scope: ['account_id', 'run_id'], retention: '180 dias' },
   { name: 'import_jobs', purpose: 'importação de CSV/XLSX pelo usuário', scope: ['account_id'], retention: '180 dias' },
+  { name: 'import_job_rows', purpose: 'linhas normalizadas em staging até o mapeamento e commit explícitos', scope: ['job_id'], retention: '180 dias' },
 
   // ---------------------------------------------------------------- catálogo & contas
   { name: 'marketplaces', purpose: 'marketplaces suportados', scope: [], retention: 'permanente' },
@@ -38,7 +39,8 @@ export const TABLE_SPECS: TableSpec[] = [
   { name: 'skus', purpose: 'SKUs com identificadores (EAN/GTIN/UPC)', scope: ['catalog_product_id'], retention: 'permanente' },
   { name: 'listings', purpose: 'anúncios por marketplace/conta', scope: ['account_id', 'sku_id'], indexes: [['account_id', 'external_id']], retention: 'permanente' },
   { name: 'listing_variations', purpose: 'variações/grade do anúncio', scope: ['listing_id'], retention: 'permanente' },
-  { name: 'listing_snapshots', purpose: 'snapshots datados de KPIs e estado do anúncio', scope: ['listing_id', 'account_id'], indexes: [['listing_id', 'captured_at']], retention: 'permanente' },
+  { name: 'listing_snapshots', purpose: 'snapshots datados de KPIs, estado do anúncio e evidências da captura', scope: ['listing_id', 'account_id'], indexes: [['listing_id', 'captured_at']], retention: 'permanente' },
+  { name: 'account_snapshots', purpose: 'snapshots agregados de KPIs sem depender de anúncio individual', scope: ['account_id', 'marketplace', 'page_kind'], indexes: [['account_id', 'captured_at']], retention: 'permanente' },
 
   // ---------------------------------------------------------------- financeiro
   { name: 'sku_costs', purpose: 'versões históricas de custos por SKU', scope: ['sku_id'], retention: 'permanente' },

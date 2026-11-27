@@ -77,7 +77,8 @@ export interface ScenarioResult {
   adSpendCents: Cents;
   operatingProfitCents: Cents;
   operatingMarginPct: number | null;
-  realizedResultCents: Cents;
+  /** Resultado realizado só existe quando há liquidação/valores efetivos registrados. Simulação não é dado realizado. */
+  realizedResultCents: Cents | null;
   unitContributionCents: Cents;
   breakEvenPriceCents: Cents | null;
   minPriceForMarginCents: Cents | null;
@@ -137,7 +138,7 @@ export function simulateScenario(input: ScenarioInput): ScenarioResult {
 
   const adSpendCents = input.adSpendCents ?? 0;
   const operatingProfitCents = subCents(contributionCents, adSpendCents + (input.fixedCostCents ?? 0));
-  const realizedResultCents = operatingProfitCents;
+  const realizedResultCents = null;
 
   const contributionMargin = ratio(contributionCents, revenueAfterDiscountCents).value;
   const operatingMargin = ratio(operatingProfitCents, revenueAfterDiscountCents).value;
@@ -211,6 +212,7 @@ export function simulateScenario(input: ScenarioInput): ScenarioResult {
       'Receita líquida = receita após descontos − comissão − parcelamento − taxa fixa − impostos',
       'Contribuição = receita líquida − produto − embalagem − frete − outros variáveis − cupom − perdas de devolução/cancelamento',
       'Lucro operacional = contribuição − Ads − custos fixos alocados',
+    'Resultado realizado = NOT_COLLECTED nesta simulação; exige liquidação e custos efetivos registrados',
       'Ponto de equilíbrio = (custos variáveis + taxa fixa) / (1 − taxas%)',
       'Piso de margem = (custos variáveis + taxa fixa) / (1 − taxas% − margem mínima%)',
     ],

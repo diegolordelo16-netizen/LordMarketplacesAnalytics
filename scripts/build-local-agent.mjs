@@ -1,6 +1,6 @@
 /**
  * Compila o serviço local em um único arquivo CommonJS (dist/local-agent/main.js).
- * Alvos: node 22 (Windows x64). node:sqlite fica externo (é builtin).
+ * Alvos: Node.js 22.13+ (Windows x64). node:sqlite fica externo (é builtin).
  */
 import { build } from 'esbuild';
 import { mkdirSync, cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ mkdirSync(outdir, { recursive: true });
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 await build({
-  entryPoints: [join(root, 'packages/local-agent/src/main.ts')],
+  entryPoints: [join(root, 'packages/local-agent/src/cli.ts')],
   outfile: join(outdir, 'main.js'),
   bundle: true,
   platform: 'node',

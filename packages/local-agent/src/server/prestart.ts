@@ -245,7 +245,7 @@ export function extensionDiagnosis(): unknown {
   return extensionState.diagnosis;
 }
 
-export function extensionStatus(maxAgeSec = 30): {
+export function extensionStatus(maxAgeSec = 150): {
   connected: boolean;
   lastSeenAt: string | null;
   version: string;

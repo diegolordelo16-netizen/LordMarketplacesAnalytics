@@ -6,12 +6,15 @@
 'use strict';
 
 // ------------------------------------------------------------------ estado
+let activeImportJobId = '';
+
 const state = {
   token: new URLSearchParams(location.search).get('token') || sessionStorage.getItem('mi.token') || '',
   accountId: '',
   ownProductId: '',
   view: 'exec',
   relationsStatus: 'PENDENTE',
+  historyPoints: [],
 };
 
 if (state.token) {
@@ -53,6 +56,38 @@ function pct(v) {
   return v == null ? '—' : `${num(v, 1)}%`;
 }
 
+function renderHistoryChart(points, metric = 'gmvCents') {
+  const config = {
+    gmvCents: { label: 'GMV', format: (v) => brl(v), color: '#5b8def' },
+    netRevenueCents: { label: 'Receita líquida', format: (v) => brl(v), color: '#16a085' },
+    orders: { label: 'Pedidos', format: (v) => num(v), color: '#a66dd4' },
+    visits: { label: 'Visitas', format: (v) => num(v), color: '#d18b2c' },
+    adSpendCents: { label: 'Investimento Ads', format: (v) => brl(v), color: '#d15f71' },
+    adAttributedRevenueCents: { label: 'Receita atribuída Ads', format: (v) => brl(v), color: '#2696a6' },
+    commissionCents: { label: 'Comissões observadas', format: (v) => brl(v), color: '#9b7bd3' },
+    fixedFeeCents: { label: 'Tarifas fixas observadas', format: (v) => brl(v), color: '#be8b51' },
+  };
+  const selected = config[metric] ? metric : 'gmvCents';
+  const meta = config[selected];
+  const valid = (Array.isArray(points) ? points : []).filter((p) => typeof p[selected] === 'number' && Number.isFinite(p[selected]));
+  if (valid.length < 2) return `<div class="empty">São necessários pelo menos dois dias com ${esc(meta.label.toLowerCase())} capturado para desenhar a evolução. A ausência de dado não é zero.</div>`;
+  const width = 820, height = 230, left = 66, right = 22, top = 18, bottom = 38;
+  const values = valid.map((p) => p[selected]);
+  const min = Math.min(0, ...values), max = Math.max(...values);
+  const span = Math.max(1, max - min);
+  const x = (index) => left + index * ((width - left - right) / Math.max(1, valid.length - 1));
+  const y = (value) => top + (max - value) / span * (height - top - bottom);
+  const path = valid.map((p, index) => `${index ? 'L' : 'M'} ${x(index).toFixed(2)} ${y(p[selected]).toFixed(2)}`).join(' ');
+  const ticks = [0, .25, .5, .75, 1].map((fraction) => {
+    const value = min + span * fraction;
+    const yy = top + (height - top - bottom) * (1 - fraction);
+    return `<g><line class="trend-grid" x1="${left}" y1="${yy}" x2="${width-right}" y2="${yy}"/><text class="trend-axis" x="${left-10}" y="${yy+4}" text-anchor="end">${esc(meta.format(value))}</text></g>`;
+  }).join('');
+  const dots = valid.map((p,index) => `<circle class="trend-dot" cx="${x(index)}" cy="${y(p[selected])}" r="3.5"><title>${esc(p.date)} · ${esc(meta.format(p[selected]))}</title></circle>`).join('');
+  const first = valid[0].date, last = valid[valid.length-1].date;
+  return `<div class="trend-chart-wrap"><svg class="trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolução de ${esc(meta.label)} de ${esc(first)} a ${esc(last)}">${ticks}<path class="trend-path" d="${path}" stroke="${meta.color}"/>${dots}<text class="trend-axis" x="${left}" y="${height-10}">${esc(first)}</text><text class="trend-axis" x="${width-right}" y="${height-10}" text-anchor="end">${esc(last)}</text></svg></div><p class="muted small">${valid.length} dias com dado · soma do último snapshot diário por anúncio · valores ausentes preservados como nulos.</p>`;
+}
+
 function dt(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -66,7 +101,7 @@ async function api(method, payload = {}) {
     fetch('/api/ipc', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ id: `ui-${Date.now()}`, method, protocolVersion: 1, payload }),
+      body: JSON.stringify({ id: `ui-${Date.now()}`, method, protocolVersion: 1, token, payload }),
     });
   let res = await call(state.token);
   if (res.status === 401) {
@@ -90,6 +125,19 @@ async function api(method, payload = {}) {
   return body.result;
 }
 
+async function prestartRoute(path) {
+  if (!state.token) state.token = await recoverToken();
+  const request = () => fetch(path, { headers: { authorization: `Bearer ${state.token}` } });
+  let response = await request();
+  if (response.status === 401) {
+    state.token = await recoverToken();
+    if (state.token) response = await request();
+  }
+  const body = await response.json();
+  if (!response.ok || !body.ok) throw new Error(body.error?.message ?? 'Falha ao consultar a conexão local.');
+  return body.result;
+}
+
 function toast(msg, kind = 'ok') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
@@ -109,10 +157,44 @@ function card(title, body, extra = '') {
   return `<section class="card"><header><h2>${esc(title)}</h2>${extra}</header><div class="card-body">${body}</div></section>`;
 }
 
+let tableSequence = 0;
 function table(headers, rows, empty = 'Nenhum registro.') {
   if (!rows || !rows.length) return `<div class="empty">${esc(empty)}</div>`;
-  return `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+  const id = `mi-table-${++tableSequence}`;
+  return `<div class="table-wrap" data-table-id="${id}" data-page="0" data-sort-column="-1" data-sort-direction="asc">
+    <div class="table-tools"><input type="search" data-table-search placeholder="Pesquisar nesta tabela…" aria-label="Pesquisar nesta tabela"><span class="muted small" data-table-count></span><div class="table-page-tools"><button type="button" class="btn tiny ghost" data-table-action="prev" disabled>Anterior</button><button type="button" class="btn tiny ghost" data-table-action="next">Próxima</button></div></div>
+    <table id="${id}"><thead><tr>${headers.map((h, index) => `<th><button type="button" class="table-sort" data-table-sort="${index}" aria-label="Ordenar por ${esc(h)}">${esc(h)} <span aria-hidden="true">↕</span></button></th>`).join('')}</tr></thead>
     <tbody>${rows.join('')}</tbody></table></div>`;
+}
+
+function updateTableView(wrapper) {
+  if (!wrapper) return;
+  const body = wrapper.querySelector('tbody');
+  const rows = Array.from(body?.rows || []);
+  const query = (wrapper.querySelector('[data-table-search]')?.value || '').trim().toLocaleLowerCase('pt-BR');
+  const column = Number(wrapper.dataset.sortColumn ?? -1);
+  const direction = wrapper.dataset.sortDirection === 'desc' ? -1 : 1;
+  if (column >= 0) {
+    rows.sort((a, b) => (a.cells[column]?.textContent || '').trim().localeCompare((b.cells[column]?.textContent || '').trim(), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction);
+    for (const row of rows) body.appendChild(row);
+  }
+  const filtered = rows.filter((row) => !query || row.textContent.toLocaleLowerCase('pt-BR').includes(query));
+  const pageSize = 25;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const page = Math.min(Math.max(0, Number(wrapper.dataset.page || 0)), pageCount - 1);
+  wrapper.dataset.page = String(page);
+  const visible = new Set(filtered.slice(page * pageSize, (page + 1) * pageSize));
+  rows.forEach((row) => { row.hidden = !visible.has(row); });
+  const count = wrapper.querySelector('[data-table-count]');
+  if (count) count.textContent = `${filtered.length ? page * pageSize + 1 : 0}–${Math.min((page + 1) * pageSize, filtered.length)} de ${filtered.length}`;
+  const prev = wrapper.querySelector('[data-table-action="prev"]');
+  const next = wrapper.querySelector('[data-table-action="next"]');
+  if (prev) prev.disabled = page <= 0;
+  if (next) next.disabled = page >= pageCount - 1;
+}
+
+function initializeTables(root = document) {
+  root.querySelectorAll('[data-table-id]').forEach(updateTableView);
 }
 
 function badge(text, kind = 'neutral') {
@@ -126,33 +208,38 @@ function qualityBadge(q) {
 
 // ------------------------------------------------------------------ VISÃO EXECUTIVA
 async function viewExec() {
-  const [kpis, missions, alerts] = await Promise.all([
+  const [kpis, missions, alerts, history] = await Promise.all([
     api('kpi.dashboard', state.accountId ? { accountId: state.accountId } : {}).catch((e) => ({ error: e.message })),
     api('missions.today', state.accountId ? { accountId: state.accountId } : {}).catch(() => []),
     api('alerts.list', {}).catch(() => []),
+    api('kpi.history', { ...(state.accountId ? { accountId: state.accountId } : {}), days: 30 }).catch(() => ({ points: [] })),
   ]);
+  state.historyPoints = Array.isArray(history?.points) ? history.points : [];
 
   // kpi.dashboard devolve { accounts, listings, totals, ... }: usa totals quando existir.
   const k = kpis && !kpis.error ? (kpis.totals || kpis) : null;
   const kpiCards = [
-    ['Receita líquida', k ? brl(k.netRevenueCents) : '—'],
-    ['Lucro de contribuição', k ? brl(k.contributionCents) : '—'],
-    ['Margem de contribuição', k ? pct(k.contributionMarginPct) : '—'],
-    ['GMV', k ? brl(k.gmvCents) : '—'],
-    ['Pedidos', k ? num(k.orders) : '—'],
-    ['Visitas', k ? num(k.visits) : '—'],
-    ['CVR', k ? pct(k.cvr) : '—'],
-    ['Ticket médio', k ? brl(k.aovCents) : '—'],
-    ['ACoS', k ? pct(k.acosPct) : '—'],
-    ['ROAS', k ? num(k.roas, 2) : '—'],
-    ['Devoluções', k ? pct(k.returnRatePct) : '—'],
-    ['Cobertura de estoque', k ? `${num(k.stockCoverageDays, 1)} d` : '—'],
+    ['Receita líquida', k ? brl(k.netRevenueCents) : '—', 'netRevenue'],
+    ['Lucro de contribuição', k ? brl(k.contributionCents) : '—', null],
+    ['Margem de contribuição', k ? pct(k.contributionMarginPct) : '—', null],
+    ['GMV', k ? brl(k.gmvCents) : '—', 'gmv'],
+    ['Pedidos', k ? num(k.orders) : '—', 'orders'],
+    ['Visitas', k ? num(k.visits) : '—', 'visits'],
+    ['CVR', k ? pct(k.cvr) : '—', 'cvr'],
+    ['Ticket médio', k ? brl(k.aovCents) : '—', 'aov'],
+    ['ACoS', k ? pct(k.acosPct) : '—', 'acos'],
+    ['ROAS', k ? num(k.roas, 2) : '—', 'roas'],
+    ['Devoluções', k ? pct(k.returnRatePct) : '—', 'returnRate'],
+    ['Cobertura de estoque', k ? `${num(k.stockCoverageDays, 1)} d` : '—', null],
   ];
 
   return `
     ${kpis && kpis.error ? card('Sem dados de KPI ainda', `<p class="muted">${esc(kpis.error)}</p>
       <p class="muted small">Os KPIs aparecem depois da primeira captura na sua conta autenticada.</p>`) : ''}
-    <div class="kpi-grid">${kpiCards.map(([l, v]) => `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <div class="kpi-grid">${kpiCards.map(([l, v, metric]) => metric ? `<button type="button" class="kpi kpi-drill" data-act="kpi-drilldown" data-metric="${esc(metric)}" aria-label="Detalhar ${esc(l)}"><span class="l">${esc(l)}</span><span class="v">${esc(v)}</span><span class="kpi-hint">Ver detalhes ↗</span></button>` : `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <div id="kpi-drilldown-out" class="out" aria-live="polite"></div>
+
+    ${card('Histórico de evolução', `<div class="form-row"><label>Métrica <select id="history-metric"><option value="gmvCents">GMV</option><option value="netRevenueCents">Receita líquida</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="adSpendCents">Investimento Ads</option><option value="adAttributedRevenueCents">Receita atribuída Ads</option><option value="commissionCents">Comissões</option><option value="fixedFeeCents">Tarifas fixas</option></select></label><span class="muted small">Últimos 30 dias</span></div><div id="history-chart">${renderHistoryChart(state.historyPoints)}</div>`) }
 
     ${card('Missões do dia', Array.isArray(missions) && missions.length
       ? missions.map((m) => `<div class="mission">
@@ -167,25 +254,38 @@ async function viewExec() {
         <td>${badge(a.severity || '—', a.severity === 'CRITICO' ? 'bad' : 'warn')}</td>
         <td>${esc(a.rule || a.type || '—')}</td><td>${esc(a.message || '')}</td><td>${dt(a.created_at)}</td></tr>`),
       'Nenhum alerta ativo.'))}
+    ${card('Previsão de tendência local', `
+      <div class="form-row">
+        <label>Métrica <select id="fcst-metric"><option value="gmv">GMV</option><option value="orders">Pedidos</option><option value="visits">Visitas</option><option value="units">Unidades</option><option value="adSpend">Investimento em Ads</option><option value="adAttributedRevenue">Receita atribuída a Ads</option><option value="stockAvailable">Estoque disponível</option></select></label>
+        <label>Horizonte <select id="fcst-horizon"><option value="7">7 dias</option><option value="14">14 dias</option><option value="28" selected>28 dias</option><option value="56">56 dias</option></select></label>
+        <button class="btn" data-act="forecast-run" ${state.accountId ? '' : 'disabled'}>Calcular previsão</button>
+      </div>
+      <p class="muted small">Exige pelo menos 8 semanas distintas com snapshots. Projeção linear local com intervalo heurístico; não é promessa de venda nem inferência causal.</p>
+      <div id="forecast-out" class="out"></div>`)}
   `;
 }
 
 // ------------------------------------------------------------------ ANÚNCIOS / CAPTURA
 async function viewListings() {
   const snaps = await api('capture.snapshot', state.accountId ? { accountId: state.accountId } : {}).catch(() => []);
+  const listings = new Map();
+  for (const snapshot of snaps) if (!listings.has(snapshot.listing_id)) listings.set(snapshot.listing_id, snapshot);
   return card('Snapshots capturados', table(
-    ['Marketplace', 'Anúncio', 'Quando', 'Origem', 'Qualidade'],
+    ['Marketplace', 'Anúncio', 'Preço capturado', 'Quando', 'Origem', 'Qualidade'],
     (snaps || []).slice(0, 100).map((s) => `<tr>
       <td>${esc(s.marketplace || '—')}</td>
-      <td>${esc(s.listing_id || s.external_id || '—')}</td>
+      <td>${esc(s.external_id || s.listing_id || '—')}${s.title ? `<div class="muted small">${esc(s.title)}</div>` : ''}</td>
+      <td>${typeof s.metrics?.price === 'number' ? brl(Math.round(s.metrics.price * 100)) : '—'}</td>
       <td>${dt(s.captured_at || s.created_at)}</td>
       <td>${esc(s.source_class || '—')}</td>
       <td>${qualityBadge(s.quality || s.status)}</td></tr>`),
-    'Nenhum snapshot. Use a extensão na página do anúncio para capturar.'))
+    'Nenhum snapshot. Use a extensão na página do anúncio para capturar.')
+    + '<div class="actions"><button class="btn" data-act="nav" data-view="browserSync">Abrir Extensão & Coletas</button></div>')
   + card('Detalhe de KPI por anúncio', `
     <div class="form-row">
-      <label class="grow">ID do anúncio <input id="kpi-listing-id" placeholder="ex.: MLB1234567890"></label>
-      <button class="btn" data-act="kpi-listing">Calcular KPIs</button>
+      <label class="grow">Anúncio <select id="kpi-listing-id">${listings.size ? [...listings.values()].map((item) =>
+        `<option value="${esc(item.listing_id)}">${esc(item.external_id ?? item.listing_id)}${item.title ? ` · ${esc(item.title)}` : ''}</option>`).join('') : '<option value="">Nenhum snapshot</option>'}</select></label>
+      <button class="btn" data-act="kpi-listing" ${listings.size ? '' : 'disabled'}>Calcular KPIs</button>
     </div>
     <div id="kpi-listing-out" class="out"></div>`);
 }
@@ -207,6 +307,13 @@ async function viewFinance() {
     </div>
     <div class="actions"><button class="btn primary" data-act="finance-simulate">Simular</button></div>
     <div id="finance-out" class="out"></div>`)
+  + card('Simulador de kits e combos', `
+    <label>Componentes em JSON <textarea id="bundle-json" rows="8">[
+  {"name":"Produto A","priceCents":15990,"quantity":1,"unitCostCents":7000,"commissionPct":16,"fixedFeeCents":500,"taxPct":6,"shippingCents":0,"packagingCents":250},
+  {"name":"Produto B","priceCents":8990,"quantity":1,"unitCostCents":3500,"commissionPct":16,"fixedFeeCents":0,"taxPct":6,"shippingCents":0,"packagingCents":150}
+]</textarea></label>
+    <div class="form-row"><label>Desconto do kit (%) <input id="bundle-discount" type="number" min="0" max="100" step="0.1" value="5"></label><label>Ads alocado (R$) <input id="bundle-ads" type="number" min="0" step="0.01" value="0"></label><button class="btn primary" data-act="bundle-simulate">Simular kit</button></div>
+    <p class="muted small">Informe valores em centavos no JSON. Tarifas e custos devem refletir o cenário pretendido. A simulação não cria nem publica ofertas.</p><div id="bundle-out" class="out"></div>`)
   + card('Custos por SKU', `
     <div class="form-row">
       <label>SKU <input id="fc-sku" placeholder="SKU-001"></label>
@@ -243,6 +350,10 @@ async function viewKeywords() {
       <td>${esc(k.source || '—')}</td><td>${esc(k.demand_signal || '—')}</td><td>${esc(k.confidence || '—')}</td></tr>`),
     'Nenhuma palavra-chave registrada.'))
   + card('Lacunas (keyword gap)', `<pre class="json">${esc(JSON.stringify(gaps, null, 2))}</pre>`)
+  + card('Inteligência local de palavras-chave', `
+    <div class="form-row"><button class="btn" data-act="kw-suggest">Sugerir termos pelos títulos</button><button class="btn" data-act="kw-cluster">Agrupar termos</button><button class="btn" data-act="kw-visibility">Calcular visibilidade</button><button class="btn" data-act="kw-cannibal">Detectar canibalização</button></div>
+    <p class="muted small">Sugestões são extraídas do catálogo local, sem estimar volume de busca. Visibilidade usa apenas SERPs capturadas e não representa participação de mercado.</p>
+    <div id="kw-intelligence-out" class="out"></div>`)
   + card('Rank tracker', `
     <div class="form-row">
       <label class="grow">Anúncio (MLB...) <input id="rk-listing" placeholder="MLB1234567890"></label>
@@ -464,9 +575,9 @@ async function viewGrowth() {
       <label>Hipótese <input id="gi-hyp"></label>
     </div>
     <div class="actions"><button class="btn" data-act="gi-add">Gravar iniciativa</button></div>
-    <p class="muted small">Gravação de iniciativa ainda não existe no serviço: por enquanto esta lista é somente leitura.</p>`)
-  + card('Iniciativas', table(['Título', 'Score', 'Status'],
-    (inits || []).map((i) => `<tr><td>${esc(i.title)}</td><td>${num(i.score, 1)}</td><td>${esc(i.status || '—')}</td></tr>`),
+    <p class="muted small">Prioridade calculada por RICE/ICE, com risco, esforço e urgência registrados.</p>`)
+  + card('Iniciativas', table(['Título', 'Score', 'Status','Atualizar'],
+    (inits || []).map((i) => `<tr><td>${esc(i.title)}</td><td>${num(i.priority_score ?? i.rice_score, 1)}</td><td>${esc(i.status || '—')}</td><td><select data-act="initiative-status" data-id="${esc(i.id)}"><option value="BACKLOG" ${i.status==='BACKLOG'?'selected':''}>Backlog</option><option value="PLANNED" ${i.status==='PLANNED'?'selected':''}>Planejada</option><option value="IN_PROGRESS" ${i.status==='IN_PROGRESS'?'selected':''}>Em andamento</option><option value="BLOCKED" ${i.status==='BLOCKED'?'selected':''}>Bloqueada</option><option value="DONE" ${i.status==='DONE'?'selected':''}>Concluída</option><option value="CANCELLED" ${i.status==='CANCELLED'?'selected':''}>Cancelada</option></select></td></tr>`),
     'Nenhuma iniciativa.'))
   + card('Experimentos', `
     <div class="form-grid">
@@ -490,10 +601,11 @@ async function viewGrowth() {
 
 // ------------------------------------------------------------------ AGENTES DE IA
 async function viewAgents() {
-  const [runs, budget, memory] = await Promise.all([
+  const [runs, budget, memory, recommendations] = await Promise.all([
     api('agent.runs', {}).catch(() => []),
     api('agent.budget', {}).catch(() => null),
     api('agent.memory', {}).catch(() => []),
+    api('agent.recommendations', { accountId: state.accountId || undefined, limit: 100 }).catch(() => []),
   ]);
   const b = budget || {};
   return card('Orçamento e consumo do Gemini', `
@@ -523,6 +635,10 @@ async function viewAgents() {
       <button class="btn ghost" data-act="agent-all">Executar todos + síntese do Director</button>
     </div>
     <div id="agent-out" class="out"></div>`)
+  + card('Análises operacionais por profundidade', `
+    <div class="form-row"><label>Modo <select id="analysis-mode"><option value="RAPIDA">Rápida — 4 agentes</option><option value="PADRAO" selected>Padrão — 8 agentes</option><option value="FORENSE">Detalhada / Forense — 14 agentes por anúncio</option><option value="360">360° da conta — 14 agentes em todos os anúncios</option></select></label><label>Anúncio (opcional) <input id="analysis-listing" placeholder="ID interno ou deixe vazio"></label><label>Produto (opcional) <input id="analysis-product" placeholder="ID do produto canônico"></label><label>Janela <input id="analysis-days" type="number" min="1" max="365" value="30"></label><button class="btn primary" data-act="analysis-run">Executar análise</button></div>
+    <div id="analysis-out" class="out"></div>
+    <p class="muted small">A análise usa snapshots locais reais. Dados ausentes são explicitados; FORENSE/360 executam até 300 anúncios por chamada.</p>`)
   + card('Workspace de debate com o Gemini', `
     <div class="form-row">
       <label class="grow">Pergunta <textarea id="debate-q" rows="3" placeholder="Minha margem caiu 8% e o concorrente baixou o preço. O que fazer sem destruir margem?"></textarea></label>
@@ -533,6 +649,13 @@ async function viewAgents() {
     (runs || []).slice(0, 50).map((r) => `<tr><td>${dt(r.created_at)}</td><td>${esc(r.agent_key || r.agent || '—')}</td>
       <td>${num(r.recommendation_count ?? (r.recommendations || []).length)}</td><td>${num(r.conflict_count ?? 0)}</td></tr>`),
     'Nenhuma execução de agente.'))
+  + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
+    (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
+      <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
+    'Memória vazia.'));
+  + card('Feedback e resultados das recomendações', table(['Diagnóstico','Ação sugerida','Confiança','Status','Registrar resultado'],
+    (recommendations || []).map((r) => `<tr><td>${esc(r.diagnosis || '—')}</td><td>${esc(r.action_proposed || '—')}</td><td>${pct((Number(r.confidence)||0)*100)}</td><td>${badge(r.status || 'PROPOSTA')}</td><td><div class="actions"><button class="btn tiny" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="ACEITO">Aceitar</button><button class="btn tiny ghost" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="REJEITADO">Rejeitar</button><button class="btn tiny" data-act="agent-feedback-implemented" data-id="${esc(r.id)}">Implementada</button><button class="btn tiny ghost" data-act="agent-feedback" data-id="${esc(r.id)}" data-decision="FALHOU">Falhou</button></div></td></tr>`),
+    'Nenhuma recomendação para a conta selecionada.'))
   + card('Memória operacional', table(['Tipo', 'Título', 'Confiança', 'Criado'],
     (memory || []).slice(0, 50).map((m) => `<tr><td>${esc(m.kind || '—')}</td><td>${esc(m.title || m.summary || '—')}</td>
       <td>${esc(m.confidence || '—')}</td><td>${dt(m.created_at)}</td></tr>`),
@@ -561,64 +684,178 @@ function agentContext() {
 
 // ------------------------------------------------------------------ TAREFAS
 async function viewTasks() {
-  const tasks = await api('task.list', {}).catch(() => []);
-  return card('Criar tarefa', `
+  const taskResult = await api('task.list', { accountId: state.accountId || undefined }).catch(() => []);
+  const tasks = Array.isArray(taskResult) ? taskResult : (taskResult?.tasks || []);
+  return card('Controles da fila', `<div class="actions"><button class="btn" data-act="task-refresh">Atualizar progresso</button></div>`) + card('Criar tarefa', `
     <div class="form-grid">
       <label>Nome <input id="tk-name" placeholder="Revisar títulos dos 10 anúncios"></label>
       <label>Tipo <select id="tk-type">
-        <option value="edit_title">Editar título</option><option value="edit_description">Editar descrição</option>
-        <option value="upload_image">Trocar imagem de capa</option><option value="change_price">Alterar preço</option>
-        <option value="duplicate_listing">Duplicar anúncio</option><option value="toggle_ads">Ligar/desligar Ads</option></select></label>
-      <label>Marketplace <input id="tk-mp" value="mercado_livre"></label>
+        <option value="edit_title">Editar título</option><option value="edit_description">Editar descrição</option></select></label>
+      <label>Marketplace <select id="tk-mp"><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option></select></label>
       <label>Anúncio <input id="tk-listing" placeholder="MLB..."></label>
-      <label>Modo <select id="tk-mode"><option value="DRAFT">Rascunho (revisão)</option><option value="PUBLISH">Publicar autorizado</option></select></label>
+      <label>Modo <select id="tk-mode"><option value="DRAFT">Rascunho (revisão manual obrigatória)</option><option value="PUBLISH" disabled>Publicar (somente após rascunho e aprovação separada)</option></select></label>
       <label>Repetir <select id="tk-rec"><option value="">Não repetir</option><option value="1h">A cada hora</option><option value="6h">A cada 6 horas</option><option value="daily">Diário</option><option value="weekly">Semanal</option></select></label>
       <label>Agendar para <input id="tk-when" type="datetime-local"></label>
-      <label>Digitação (ms por caractere) <input id="tk-typing" type="number" value="40"></label>
+      <label>Intervalo entre caracteres (ms) <input id="tk-delay" type="number" min="0" max="250" step="5" value="0"></label>
+      <div class="wide muted">A tarefa primeiro preenche um rascunho. Depois de concluída, um super_admin pode autorizar a publicação; cada anúncio exige confirmação final na aba ativa do marketplace. A extensão não publica em massa nem em segundo plano.</div>
       <label class="wide">Novo título (opcional) <input id="tk-title" placeholder="Título novo do anúncio"></label>
       <label class="wide">Acréscimo à descrição (opcional) <textarea id="tk-desc" rows="2" placeholder="Só acrescenta ao final: o texto original é preservado"></textarea></label>
     </div>
     <div class="actions"><button class="btn primary" data-act="task-add">Criar</button></div>`)
-  + card('Fila de tarefas', table(['Status', 'Tipo', 'Anúncio', 'Agendada', 'Ações'],
-    (tasks || []).map((t) => `<tr>
-      <td>${badge(t.status, t.status === 'COMPLETED' ? 'ok' : t.status === 'FAILED' ? 'bad' : t.status === 'RUNNING' ? 'info' : 'neutral')}</td>
-      <td>${esc(t.type)}</td><td>${esc(t.listing_id || '—')}</td><td>${dt(t.scheduled_for)}</td>
+  + card('Criar tarefa por desempenho', `
+    <p class="muted small">Seleciona anúncios da conta atual usando o último snapshot disponível. Todos os critérios informados são obrigatórios; métricas ausentes não são tratadas como zero. Cria somente rascunhos para revisão manual.</p>
+    <div class="form-grid">
+      <label>Nome <input id="tkf-name" placeholder="Revisar anúncios com baixa conversão"></label>
+      <label>Tipo <select id="tkf-type"><option value="edit_title">Rascunho de título</option><option value="edit_description">Rascunho de descrição</option></select></label>
+      <label>GMV mínimo (R$) <input id="tkf-min-gmv" type="number" min="0" step="0.01"></label>
+      <label>GMV máximo (R$) <input id="tkf-max-gmv" type="number" min="0" step="0.01"></label>
+      <label>Pedidos mínimos <input id="tkf-min-orders" type="number" min="0" step="1"></label>
+      <label>Visitas mínimas <input id="tkf-min-visits" type="number" min="0" step="1"></label>
+      <label>Conversão máxima (%) <input id="tkf-max-cvr" type="number" min="0" max="100" step="0.01"></label>
+      <label>Estoque máximo <input id="tkf-max-stock" type="number" min="0" step="1"></label>
+      <label>Intervalo entre caracteres (ms) <input id="tkf-delay" type="number" min="0" max="250" step="5" value="0"></label>
+      <label class="wide">Modelo de título (use {title} e {externalId}) <input id="tkf-title" placeholder="Revisado: {title}"></label>
+      <label class="wide">Acréscimo de descrição <textarea id="tkf-desc" rows="2"></textarea></label>
+    </div>
+    <div class="actions"><button class="btn" data-act="task-create-filtered" ${state.accountId ? '' : 'disabled'}>Encontrar anúncios e criar rascunhos</button><span id="tkf-result" class="muted small"></span></div>`)
+  + card('Fila de tarefas', table(['Status / progresso', 'Tipo', 'Anúncio', 'Agendada', 'Publicação', 'Ações'],
+    (tasks || []).map((t) => {
+      const allDraftsReady = Array.isArray(t.items) && t.items.length > 0 && t.items.length <= 10 && t.items.every((item) => item.status === 'COMPLETED');
+      const approvals = Array.isArray(t.publish_approvals) ? t.publish_approvals : [];
+      const published = approvals.filter((approval) => approval.status === 'PUBLISHED');
+      const canApprove = t.status === 'COMPLETED' && t.mode === 'DRAFT' && allDraftsReady && approvals.length === 0;
+      return `<tr>
+      <td>${badge(t.status, t.status === 'COMPLETED' ? 'ok' : t.status === 'FAILED' ? 'bad' : t.status === 'RUNNING' ? 'info' : 'neutral')}<div class="muted small">${num(t.progress?.finished || 0)}/${num(t.progress?.total || t.items_count || 0)} · ${num(t.progress?.percent || 0)}%</div></td>
+      <td>${esc(t.kind)}</td><td>${esc(t.listing_id || '—')} (${esc(t.items_count ?? 0)} item(ns))</td><td>${dt(t.schedule_at)}</td>
+      <td>${published.length ? `${published.length}/${t.items_count} publicado(s)` : approvals.length ? approvals.map((a) => esc(a.status)).join(', ') : 'rascunho'}</td>
       <td>
-        <button class="btn tiny" data-act="task-run" data-id="${t.id}">Executar</button>
-        <button class="btn tiny" data-act="task-pause" data-id="${t.id}">Pausar</button>
-        <button class="btn tiny" data-act="task-resume" data-id="${t.id}">Retomar</button>
-        <button class="btn tiny" data-act="task-skip" data-id="${t.id}">Pular</button>
-        <button class="btn tiny ghost" data-act="task-cancel" data-id="${t.id}">Cancelar</button>
-      </td></tr>`),
-    'Nenhuma tarefa.'));
+        <button class="btn tiny" data-act="task-run" data-id="${t.id}" ${['PENDING','SCHEDULED','PAUSED','FAILED','WAITING_BROWSER'].includes(t.status) && t.mode === 'DRAFT' ? '' : 'disabled'}>Executar rascunho</button>
+        <button class="btn tiny primary" data-act="task-approve-publish" data-id="${t.id}" data-count="${t.items_count}" ${canApprove ? '' : 'disabled'}>Autorizar publicação</button>
+        ${published.map((approval) => `<button class="btn tiny ghost" data-act="task-rollback" data-id="${approval.id}">Preparar rollback</button>`).join('')}
+        <button class="btn tiny" data-act="task-pause" data-id="${t.id}" ${['RUNNING','WAITING_BROWSER','PENDING','SCHEDULED'].includes(t.status) ? '' : 'disabled'}>Pausar</button>
+        <button class="btn tiny" data-act="task-resume" data-id="${t.id}" ${t.status === 'PAUSED' ? '' : 'disabled'}>Retomar</button>
+        <button class="btn tiny" data-act="task-skip" data-id="${t.id}" ${['PENDING','SCHEDULED','WAITING_BROWSER','RUNNING','PAUSED'].includes(t.status) ? '' : 'disabled'}>Pular</button>
+        <button class="btn tiny ghost" data-act="task-cancel" data-id="${t.id}" ${['COMPLETED','FAILED','CANCELLED'].includes(t.status) ? 'disabled' : ''}>Cancelar</button>
+      </td></tr>`;
+    }), 'Nenhuma tarefa.'));
 }
 
 // ------------------------------------------------------------------ CONECTORES
 async function viewConnectors() {
-  const registry = await api('connector.registry', {}).catch(() => []);
-  return card('Conectores opcionais', table(['Conector', 'Dados', 'Status', 'Custo', 'Limites'],
-    (registry || []).map((c) => `<tr><td>${esc(c.name || c.id)}</td><td>${esc(c.data_available || '—')}</td>
-      <td>${badge(c.status || '—', c.status === 'CONECTADO' ? 'ok' : 'neutral')}</td>
-      <td>${esc(c.cost || '—')}</td><td>${esc(c.limits || '—')}</td></tr>`),
+  const [registry, imports] = await Promise.all([
+    api('connector.registry', {}).catch(() => []),
+    state.accountId ? api('connector.import.list', { accountId: state.accountId, limit: 30 }).catch(() => []) : Promise.resolve([]),
+  ]);
+  return card('Conectores opcionais', table(['Conector', 'Dados', 'Estado', 'Custo', 'Limites', 'Ação'],
+    (registry || []).map((c) => `<tr><td>${esc(c.label || c.id)}</td><td>${esc(c.data_available || '—')}</td>
+      <td>${badge(c.enabled ? 'HABILITADO' : (c.status || 'DESATIVADO'), c.enabled ? 'ok' : 'neutral')}
+        ${c.last_test_at ? `<div class="muted small">${dt(c.last_test_at)} · ${esc(c.last_test_message)}</div>` : ''}</td>
+      <td>${esc(c.cost_note || '—')}</td><td>${esc(c.limits || '—')}</td><td><div class="actions">
+        <button class="btn tiny" data-act="connector-toggle" data-id="${esc(c.id)}" data-enabled="${c.enabled ? '1':'0'}" ${c.enabled || !c.requires_credentials || c.status === 'CONECTADO' ? '' : 'disabled'}>${c.enabled ? 'Desativar' : 'Habilitar'}</button>
+        ${c.configured && ['google_analytics4','google_search_console'].includes(c.id) ? `<button class="btn tiny" data-act="connector-test" data-id="${esc(c.id)}">Testar</button>` : ''}
+        <button class="btn tiny danger" data-act="connector-disconnect" data-id="${esc(c.id)}" data-label="${esc(c.label || c.id)}">Desconectar / limpar</button></div></td></tr>`),
     'Catálogo de conectores indisponível.'))
+  + card('Conexões Google', `<div class="form-grid">
+    <label>ID da propriedade GA4<input id="ga4-property" inputmode="numeric" maxlength="20"></label>
+    <label>Token OAuth de leitura do GA4<input id="ga4-token" type="password" autocomplete="off" maxlength="5000"></label>
+    <div class="wide actions"><button class="btn" data-act="connector-configure" data-id="google_analytics4">Salvar GA4</button></div>
+    <label>Propriedade Search Console<input id="gsc-property" placeholder="sc-domain:dominio.com" maxlength="500"></label>
+    <label>Token OAuth de leitura do Search Console<input id="gsc-token" type="password" autocomplete="off" maxlength="5000"></label>
+    <div class="wide actions"><button class="btn" data-act="connector-configure" data-id="google_search_console">Salvar Search Console</button></div>
+    </div><p class="muted small">Salve um token de acesso autorizado e teste a propriedade. Substitua o token quando expirar.</p>`)
+  + card('Histórico de importações', table(['Arquivo','Tipo','Status','Linhas','Criado em'], (imports || []).map((job) => `<tr><td>${esc(job.file_name)}</td><td>${esc(job.file_type)}</td><td>${badge(job.status, job.status === 'IMPORTADO_VALIDADO' ? 'ok' : 'neutral')}</td><td>${num(job.rows_total)}</td><td>${dt(job.created_at)}</td></tr>`), 'Nenhuma importação para esta conta.'))
   + card('Importar relatório', `
     <div class="form-grid">
-      <label>Conector <input id="im-conn" value="csv"></label>
-      <label>Tipo <select id="im-kind"><option value="ADS">Ads</option><option value="VENDAS">Vendas</option>
+      <label class="wide">Arquivo CSV, XLSX ou PDF digital (máximo 2 MB) <input id="im-file" type="file" accept=".csv,.xlsx,.pdf"></label>
+      <label>Tipo de relatório <select id="im-kind"><option value="ADS">Ads</option><option value="VENDAS">Vendas</option>
         <option value="KEYWORDS">Palavras-chave</option><option value="AVALIACOES">Avaliações</option></select></label>
-      <label class="wide">Conteúdo CSV <textarea id="im-csv" rows="4" placeholder="coluna,valor&#10;cliques,120"></textarea></label>
+      <label class="wide">Ou cole um CSV <textarea id="im-csv" rows="4" placeholder="coluna;valor&#10;cliques;120"></textarea></label>
     </div>
-    <div class="actions"><button class="btn primary" data-act="import">Importar</button></div>
+    <div class="actions"><button class="btn primary" data-act="import">Interpretar e guardar para validação</button></div>
     <div id="import-out" class="out"></div>`);
+}
+
+// ------------------------------------------------------------------ BIBLIOTECA DE MÍDIA
+async function viewMedia() {
+  const items = await api('media.list', { accountId: state.accountId || undefined }).catch(() => []);
+  return card('Adicionar imagem à biblioteca local', `
+    <div class="form-grid"><label class="wide">Arquivo (JPEG, PNG, WEBP ou GIF; até 2,5 MB) <input id="media-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label><label class="wide">Texto alternativo <input id="media-alt" placeholder="Descrição da imagem"></label></div>
+    <button class="btn primary" data-act="media-add">Salvar imagem</button>
+    <p class="muted small">Os arquivos ficam no SQLite local, vinculados à conta selecionada. Nada é enviado para terceiros.</p>`)
+    + card('Imagens armazenadas', `<div class="media-grid">${(items || []).map(m => `<div class="media-item"><div><strong>${esc(m.filename)}</strong><div class="muted small">${esc(m.mime_type)} · ${num(m.byte_size)} bytes · ${dt(m.created_at)}</div><div class="muted small">SHA-256: ${esc(m.sha256)}</div></div><div class="actions"><button class="btn tiny" data-act="media-preview" data-id="${esc(m.id)}" data-account-id="${esc(m.account_id || '')}">Visualizar</button><button class="btn tiny ghost" data-act="media-delete" data-id="${esc(m.id)}" data-account-id="${esc(m.account_id || '')}">Excluir</button></div><div id="media-${esc(m.id)}" class="out"></div></div>`).join('') || '<div class="empty">Nenhuma imagem cadastrada.</div>'}</div>`);
+}
+
+// ------------------------------------------------------------------ CONTAS E COMPARATIVO
+async function viewAccounts() {
+  const [accounts, products, skus] = await Promise.all([
+    api('account.list', {}).catch(() => []),
+    api('catalog.product.list', { accountId: state.accountId || undefined }).catch(() => []),
+    api('catalog.sku.list', { accountId: state.accountId || undefined }).catch(() => []),
+  ]);
+  return card('Cadastrar / atualizar conta', `
+    <div class="form-grid">
+      <label>ID da conta <input id="ac-id" placeholder="ex.: ml:minhaloja"></label>
+      <label>Marketplace <select id="ac-market"><option value="mercado_livre">Mercado Livre</option><option value="shopee">Shopee</option><option value="amazon">Amazon</option></select></label>
+      <label>Nome da loja <input id="ac-name" placeholder="Minha loja"></label>
+      <label>Identificador / handle <input id="ac-handle" placeholder="@minhaloja"></label>
+    </div>
+    <div class="actions"><button class="btn primary" data-act="account-save">Salvar conta</button></div>
+    <p class="muted small">Conta cadastrada manualmente fica identificada como confirmada pelo usuário. A captura precisa ocorrer em uma página autenticada compatível.</p>`)
+    + card('Contas cadastradas', table(['Loja','Marketplace','Confiança','Status','Ação'], (accounts || []).map(a => `<tr><td>${esc(a.display_name)}</td><td>${esc(a.marketplace)}</td><td>${Math.round((a.detection_confidence || 0)*100)}%</td><td>${a.is_active ? badge('Ativa','ok') : badge('Inativa','bad')}</td><td><button class="btn tiny" data-act="account-toggle" data-id="${esc(a.id)}" data-enabled="${a.is_active ? '1':'0'}">${a.is_active ? 'Desativar' : 'Ativar'}</button></td></tr>`), 'Nenhuma conta cadastrada.'))
+    + card('Catálogo de produtos', `
+      <div class="form-grid"><label>Nome <input id="cp-name"></label><label>Marca <input id="cp-brand"></label><label>Modelo <input id="cp-model"></label><label>Categoria <input id="cp-category"></label></div>
+      <button class="btn" data-act="catalog-product-add">Cadastrar produto</button>
+      <div class="form-grid" style="margin-top:12px"><label>SKU <input id="sku-code" placeholder="SKU-001"></label><label>Product ID (opcional) <input id="sku-product-id" placeholder="UUID do produto"></label><label>EAN <input id="sku-ean"></label><label>GTIN <input id="sku-gtin"></label><label>UPC <input id="sku-upc"></label></div>
+      <button class="btn" data-act="catalog-sku-add">Cadastrar SKU</button>
+      ${table(['Produto','Marca','Modelo','Categoria'], (products || []).map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.brand || '—')}</td><td>${esc(p.model || '—')}</td><td>${esc(p.category || '—')}</td></tr>`), 'Nenhum produto cadastrado.')}`)
+    + card('SKUs cadastrados', table(['SKU','EAN','GTIN','UPC'], (skus || []).map(x => `<tr><td>${esc(x.sku_code)}</td><td>${esc(x.ean || '—')}</td><td>${esc(x.gtin || '—')}</td><td>${esc(x.upc || '—')}</td></tr>`), 'Nenhum SKU cadastrado.'));
+}
+
+async function viewCompare() {
+  const [comparison, accounts] = await Promise.all([
+    api('kpi.compare', {}).catch(e => ({ error: e.message })),
+    api('account.list', {}).catch(() => []),
+  ]);
+  if (comparison?.error) return card('Comparação indisponível', `<p>${esc(comparison.error)}</p>`);
+  const today = new Date();
+  const day = (offset) => { const local = new Date(today.getTime() + offset * 86400000); local.setMinutes(local.getMinutes() - local.getTimezoneOffset()); return local.toISOString().slice(0,10); }
+  const primaryTo = day(0), primaryFrom = day(-29), comparisonTo = day(-30), comparisonFrom = day(-59);
+  return card('Comparação entre lojas e marketplaces', `
+    <p class="muted small">Os totais ficam como indisponíveis quando existe anúncio sem captura — não tratamos dado ausente como zero.</p>
+    ${table(['Loja','Marketplace','Anúncios','Capturados','GMV','Receita líquida','Comissão','Tarifa fixa','Pedidos','CVR','ROAS'], (comparison.accounts || []).map(a => `<tr><td>${esc(a.display_name)}</td><td>${esc(a.marketplace)}</td><td>${num(a.coverage.totalListings)}</td><td>${num(a.coverage.capturedListings)}</td><td>${brl(a.totals.gmvCents)}</td><td>${brl(a.totals.netRevenueCents)}</td><td>${brl(a.totals.commissionCents)}</td><td>${brl(a.totals.fixedFeeCents)}</td><td>${num(a.totals.orders)}</td><td>${pct(a.totals.cvr)}</td><td>${num(a.totals.roas,2)}</td></tr>`), 'Cadastre contas e capture anúncios para comparar.')}`)
+    + card('Comparação por período, produto ou anúncio', `
+      <div class="form-grid">
+        <label>Conta<select id="cmp-account"><option value="">Todas as contas</option>${(accounts || []).filter(a=>a.is_active!==0).map(a=>`<option value="${esc(a.id)}" ${a.id===state.accountId?'selected':''}>${esc(a.display_name)} · ${esc(a.marketplace)}</option>`).join('')}</select></label>
+        <label>Agrupar por<select id="cmp-group"><option value="listing">Anúncio</option><option value="product">Produto</option><option value="account">Loja</option></select></label>
+        <label>Período atual — início<input id="cmp-primary-from" type="date" value="${primaryFrom}"></label>
+        <label>Período atual — fim<input id="cmp-primary-to" type="date" value="${primaryTo}"></label>
+        <label>Período anterior — início<input id="cmp-previous-from" type="date" value="${comparisonFrom}"></label>
+        <label>Período anterior — fim<input id="cmp-previous-to" type="date" value="${comparisonTo}"></label>
+      </div>
+      <div class="actions"><button class="btn primary" data-act="compare-detail">Comparar períodos</button></div>
+      <div id="compare-detail-out"></div>
+      <p class="muted small">Usa o último snapshot de cada anúncio em cada período para evitar somar repetidamente capturas acumuladas. Métricas incompletas permanecem indisponíveis. Produto sem SKU/produto canônico é separado pelo anúncio.</p>`)
+    + card('Cobertura consolidada', `<div class="kpi-grid"><div class="kpi"><div class="l">Lojas</div><div class="v">${num(comparison.accounts?.length || 0)}</div></div><div class="kpi"><div class="l">Anúncios</div><div class="v">${num(comparison.coverage?.totalListings || 0)}</div></div><div class="kpi"><div class="l">Capturados</div><div class="v">${num(comparison.coverage?.capturedListings || 0)}</div></div><div class="kpi"><div class="l">Sem captura</div><div class="v">${num(comparison.coverage?.uncapturedListings || 0)}</div></div></div>`);
+}
+
+async function viewUsers() {
+  const users = await api('user.list', {}).catch(e => ({ error: e.message }));
+  if (users?.error) return card('Gestão de usuários', `<div class="note warn">${esc(users.error)}. Esta área exige o papel super_admin.</div>`);
+  return card('Criar usuário', `
+    <input id="us-id" type="hidden"><div class="form-grid"><label>Nome <input id="us-name"></label><label>E-mail <input id="us-email" type="email"></label><label>Senha nova (deixe vazia para manter) <input id="us-password" type="password"></label><label>Perfil <select id="us-role"><option value="operador">Operador</option><option value="visualizador">Visualizador</option><option value="super_admin">Super administrador</option></select></label></div>
+    <button class="btn primary" data-act="user-save" id="us-save">Criar usuário</button>`)
+    + card('Usuários do sistema', table(['Nome','E-mail','Papel','Status','Último acesso','Ação'], users.map(u => `<tr><td>${esc(u.display_name)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${u.is_active ? badge('Ativo','ok') : badge('Inativo','bad')}</td><td>${dt(u.last_login_at)}</td><td><div class="actions"><button class="btn tiny" data-act="user-edit" data-id="${esc(u.id)}" data-name="${esc(u.display_name)}" data-email="${esc(u.email)}" data-role="${esc(u.role)}">Editar</button><button class="btn tiny" data-act="user-toggle" data-id="${esc(u.id)}" data-enabled="${u.is_active ? '1':'0'}">${u.is_active ? 'Desativar' : 'Ativar'}</button></div></td></tr>`), 'Nenhum usuário adicional.'));
 }
 
 // ------------------------------------------------------------------ ADMINISTRAÇÃO
 async function viewAdmin() {
-  const [audit, backups, settings, upgrades] = await Promise.all([
+  const [audit, backups, settings, upgrades, analysisSchedules, reportSchedules] = await Promise.all([
     api('audit.list', {}).catch(() => []),
     api('backup.list', {}).catch(() => []),
     api('settings.get', {}).catch(() => ({})),
     api('autoupgrade.list', {}).catch(() => []),
+    api('analysis.schedule.list', { accountId: state.accountId || undefined }).catch(() => []),
+    api('report.schedule.list', { accountId: state.accountId || undefined }).catch(() => []),
   ]);
   return card('Chave da API Gemini', `
     <div class="form-row">
@@ -630,8 +867,9 @@ async function viewAdmin() {
   + card('Configurações', `<pre class="json">${esc(JSON.stringify(settings, null, 2))}</pre>`)
   + card('Backups', `
     <div class="actions"><button class="btn primary" data-act="backup-create">Criar backup agora</button></div>
-    ${table(['Arquivo', 'Quando', 'Tamanho'], (backups || []).map((b) => `<tr>
-      <td>${esc(b.file || b.name)}</td><td>${dt(b.created_at)}</td><td>${num(b.sizeBytes)} B</td></tr>`), 'Nenhum backup.')}`)
+    ${table(['Arquivo', 'Quando', 'Tamanho', 'Ação'], (backups || []).map((b) => `<tr>
+      <td>${esc(String(b.path || '').split(/[\\/]/).pop() || b.id)}</td><td>${dt(b.created_at)}</td><td>${num(b.bytes)} B</td>
+      <td><button class="btn tiny" data-act="backup-restore" data-id="${esc(b.id)}">Restaurar</button></td></tr>`), 'Nenhum backup.')}`)
   + card('Auto-upgrade governado', `
     <div class="form-row">
       <label class="grow">Sintoma observado <input id="au-sym" placeholder="Seletor de preço do Mercado Livre parou de funcionar"></label>
@@ -648,13 +886,32 @@ async function viewAdmin() {
       <td>${esc(a.actor_id || a.actor || '—')}</td><td>${esc(a.target_id || '—')}</td>
       <td>${badge(a.result || '—', a.result === 'OK' ? 'ok' : 'bad')}</td></tr>`),
     'Sem registros.'))
+  + card('Agendamento de análises e relatórios', `
+    <div class="form-grid">
+      <label>Tipo de rotina<select id="sc-kind"><option value="analysis">Análise da loja</option><option value="report">Relatório automático</option></select></label>
+      <label>Cadência<select id="sc-cadence"><option value="1h">A cada hora</option><option value="6h">A cada 6 horas</option><option value="daily">Diária</option><option value="weekly">Semanal</option><option value="custom">Intervalo personalizado</option></select></label>
+      <label id="sc-interval-wrap" hidden>Intervalo personalizado (minutos)<input id="sc-interval" type="number" min="15" max="43200" step="1" value="60"></label>
+      <label id="sc-mode-wrap">Profundidade da análise<select id="sc-mode"><option value="RAPIDA">Rápida</option><option value="PADRAO" selected>Padrão</option><option value="FORENSE">Forense</option><option value="360">360° da conta</option></select></label>
+      <label id="sc-days-wrap">Janela da análise (dias)<input id="sc-days" type="number" min="1" max="365" value="30"></label>
+      <label id="sc-report-wrap" hidden>Tipo de relatório<select id="sc-report-type"><option value="EXECUTIVO">Executivo</option><option value="KPIS">KPIs</option><option value="CONCORRENCIA">Concorrência</option><option value="FINANCEIRO">Financeiro</option><option value="EXPERIMENTOS">Experimentos</option><option value="AUDITORIA">Auditoria global</option></select></label>
+      <div class="wide muted small">As rotinas só leem dados locais. Análises e relatórios agendados não publicam anúncios nem alteram campanhas. Intervalos personalizados aceitam 15 a 43.200 minutos.</div>
+    </div>
+    <div class="actions"><button class="btn primary" data-act="schedule-create">Criar agendamento</button></div>
+    <h3>Análises</h3>
+    ${table(['Modo','Cadência','Próxima execução','Último estado','Falhas','Ação'], (analysisSchedules || []).map((a) => `<tr><td>${esc(a.mode)}</td><td>${a.interval_minutes ? `${num(a.interval_minutes)} min` : esc(a.cadence)}</td><td>${dt(a.next_run_at)}</td><td>${badge(a.last_status || 'AGUARDANDO', a.last_status === 'COMPLETED' ? 'ok' : a.last_status === 'FAILED' ? 'bad' : 'neutral')}${a.last_error ? `<div class="muted small">${esc(a.last_error)}</div>` : ''}</td><td>${num(a.consecutive_failures || 0)}/3</td><td><div class="actions"><button class="btn tiny" data-act="schedule-toggle" data-kind="analysis" data-id="${esc(a.id)}" data-enabled="${a.enabled ? '1':'0'}">${a.enabled ? 'Pausar' : 'Ativar'}</button><button class="btn tiny ghost" data-act="schedule-runs" data-kind="analysis" data-id="${esc(a.id)}">Histórico</button></div></td></tr>`), 'Nenhum agendamento de análise para esta conta.')}
+    <div id="analysis-schedule-runs" class="out"></div>
+    <h3>Relatórios</h3>
+    ${table(['Tipo','Cadência','Próxima execução','Último estado','Falhas','Ação'], (reportSchedules || []).map((r) => `<tr><td>${esc(r.report_type)}</td><td>${r.interval_minutes ? `${num(r.interval_minutes)} min` : esc(r.cadence)}</td><td>${dt(r.next_run_at)}</td><td>${badge(r.last_status || 'AGUARDANDO', r.last_status === 'COMPLETED' ? 'ok' : r.last_status === 'FAILED' ? 'bad' : 'neutral')}${r.last_error ? `<div class="muted small">${esc(r.last_error)}</div>` : ''}</td><td>${num(r.consecutive_failures || 0)}/3</td><td><div class="actions"><button class="btn tiny" data-act="schedule-toggle" data-kind="report" data-id="${esc(r.id)}" data-enabled="${r.enabled ? '1':'0'}">${r.enabled ? 'Pausar' : 'Ativar'}</button><button class="btn tiny ghost" data-act="schedule-runs" data-kind="report" data-id="${esc(r.id)}">Histórico</button></div></td></tr>`), 'Nenhum agendamento de relatório para esta conta.')}
+    <div id="report-schedule-runs" class="out"></div>
+    <p class="muted small">Retentativas automáticas após falha: 5, 15 e 60 minutos. Depois da terceira falha, o próximo ciclo segue a cadência configurada. Horários perdidos são pulados sem executar uma fila acumulada em sequência.</p>
+  `)
   + card('Relatório e exportação', `
     <div class="form-row">
       <label>Tipo <select id="rp-type"><option value="EXECUTIVO">Resumo executivo</option>
         <option value="KPIS">KPIs por anúncio</option><option value="CONCORRENCIA">Inteligência competitiva</option>
         <option value="FINANCEIRO">Financeiro/margem</option><option value="EXPERIMENTOS">Testes A/B</option>
         <option value="AUDITORIA">Auditoria</option></select></label>
-      <label>Formato <select id="rp-fmt"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+      <label>Formato <select id="rp-fmt"><option value="csv">CSV</option><option value="xlsx">Excel XLSX</option><option value="json">JSON</option><option value="pdf">PDF (imprimir/salvar)</option></select></label>
       <button class="btn primary" data-act="report">Gerar</button>
     </div>
     <div id="report-out" class="out"></div>`)
@@ -672,7 +929,7 @@ async function viewAdmin() {
 async function viewPrestart() {
   let report;
   try {
-    report = await api('/api/prestart');
+    report = await prestartRoute('/api/prestart');
   } catch (err) {
     return `<div class="note bad">Não foi possível verificar o ambiente: ${esc(err.message)}</div>`;
   }
@@ -703,10 +960,106 @@ async function viewPrestart() {
     `);
 }
 
+const SYNC_SCOPES = {
+  ACCOUNT: 'Loja selecionada',
+  ALL_ACTIVE_ACCOUNTS: 'Todas as lojas ativas',
+  ALL_ENABLED_MARKETPLACES: 'Marketplaces habilitados',
+};
+const syncStatus = {
+  QUEUED: 'Na fila', WAITING_BROWSER: 'Aguardando navegador', RUNNING: 'Em andamento',
+  COMPLETED: 'Concluído', PARTIAL: 'Parcial', FAILED: 'Falhou', SKIPPED: 'Ignorado',
+  CANCELLED: 'Cancelado',
+};
+const syncLabel = (status) => syncStatus[status] ?? status ?? '—';
+const OPERATION_MODES = {
+  MANUAL_GUIDED: 'Manual guiado',
+  AUTO_ASSISTED: 'Automático com revisão',
+  AUTO_PILOT: 'Automático contínuo',
+};
+let selectedSyncBatch = '';
+let loadingSyncProgress = false;
+
+async function viewBrowserSync() {
+  const [connection, schedules, batches, operation] = await Promise.all([
+    prestartRoute('/api/prestart/extension').catch((error) => ({ error: error.message })),
+    api('sync.schedule.list', {}),
+    api('sync.list', { limit: 30 }),
+    api('operation.mode.get', {}),
+  ]);
+  const transport = connection.diagnosis;
+  return card('Conexão com a extensão', `
+    <p>${connection.error ? esc(connection.error) : connection.connected ? 'A extensão respondeu ao serviço local.' : 'Aguardando sinal da extensão.'}</p>
+    <dl>
+      <dt>Último sinal</dt><dd>${dt(connection.lastSeenAt)}</dd>
+      <dt>Versão</dt><dd>${esc(connection.version || '—')}</dd>
+      <dt>Marketplace identificado</dt><dd>${esc(connection.marketplace || '—')}</dd>
+      <dt>HTTP local</dt><dd>${transport?.http?.ok ? 'Disponível' : 'Aguardando diagnóstico'}</dd>
+      <dt>Host nativo</dt><dd>${transport?.nativeHost ? (transport.nativeHost.ok ? 'Disponível' : 'Falhou no diagnóstico') : 'Teste no painel lateral da extensão'}</dd>
+    </dl>
+    <div class="actions"><button class="btn" data-act="browser-sync-refresh">Atualizar</button>
+    <a class="btn ghost" href="/prestart">Configurar e diagnosticar</a></div>
+  `)
+  + card('Perfil global de operação', `
+    <div class="form-row"><label>Modo <select id="browser-operation-mode">${Object.entries(OPERATION_MODES).map(([value,label]) =>
+      `<option value="${value}" ${value === operation.mode ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>
+    <button class="btn" data-act="browser-operation-save">Salvar perfil</button></div>
+    <p class="muted small">O perfil define a política de análise. Configure a frequência nas rotinas de coleta, análise e relatório.</p>
+  `)
+  + card('Solicitar coleta no navegador', `
+    <p class="muted small">O worker recebe a solicitação quando a extensão estiver aberta. Abra as abas de vendedor autenticadas das lojas que deseja coletar.</p>
+    <div class="form-grid">
+      <label>Escopo<select id="browser-sync-scope">${Object.entries(SYNC_SCOPES).map(([value, label]) => `<option value="${value}" ${value === 'ACCOUNT' && !state.accountId ? 'disabled' : ''}>${esc(label)}</option>`).join('')}</select></label>
+      <label>Recorrência<select id="browser-sync-cadence"><option value="1h">A cada hora</option><option value="6h">A cada 6 horas</option><option value="daily">Diária</option><option value="weekly">Semanal</option><option value="custom">Personalizada</option></select></label>
+      <label id="browser-sync-interval-wrap" hidden>Intervalo em minutos<input id="browser-sync-interval" type="number" min="15" max="43200" step="1" value="60"></label>
+    </div>
+    <div class="actions"><button class="btn primary" data-act="browser-sync-request">Solicitar agora</button><button class="btn" data-act="browser-sync-schedule">Agendar coleta</button></div>
+  `)
+  + card('Agendamentos de coleta', table(['Escopo','Próxima execução','Último estado','Ações'], schedules.map((schedule) => `<tr>
+    <td>${esc(SYNC_SCOPES[schedule.scope])}${schedule.account_id ? `<div class="small muted">${esc(schedule.account_id)}</div>` : ''}</td>
+    <td>${dt(schedule.next_run_at)}</td><td>${schedule.enabled ? esc(syncLabel(schedule.last_status)) : 'Pausado'}</td>
+    <td><div class="actions"><button class="btn tiny" data-act="browser-sync-toggle" data-id="${esc(schedule.id)}" data-enabled="${schedule.enabled}">${schedule.enabled ? 'Pausar' : 'Reativar'}</button>
+    <button class="btn tiny ghost" data-act="browser-sync-runs" data-id="${esc(schedule.id)}">Histórico</button></div></td></tr>`), 'Nenhuma coleta agendada.'))
+  + '<div id="browser-sync-runs" class="out"></div>'
+  + card('Lotes recentes', table(['Solicitação','Origem','Escopo','Estado','Ações'], batches.map((batch) => `<tr>
+    <td>${dt(batch.requested_at)}</td><td>${batch.browser_request ? 'Dashboard' : 'Extensão ou agenda'}</td>
+    <td>${esc(SYNC_SCOPES[batch.scope])}</td><td>${esc(syncLabel(batch.status))}</td>
+    <td><div class="actions"><button class="btn tiny" data-act="browser-sync-batch" data-id="${esc(batch.id)}">Ver progresso</button>
+    ${['PARTIAL','FAILED'].includes(batch.status) ? `<button class="btn tiny ghost" data-act="browser-sync-retry" data-id="${esc(batch.id)}">Repetir falhas</button>` : ''}</div></td></tr>`), 'Nenhum lote de coleta.'))
+  + '<div id="browser-sync-detail" class="out" aria-live="polite"></div>';
+}
+
+function browserSyncScope() {
+  const scope = $('#browser-sync-scope').value;
+  if (scope === 'ACCOUNT' && !state.accountId) throw new Error('Selecione uma loja.');
+  return scope === 'ACCOUNT' ? { scope, accountId: state.accountId } : { scope };
+}
+
+async function showBrowserSyncBatch() {
+  const target = $('#browser-sync-detail');
+  const batchId = selectedSyncBatch;
+  if (!target || !batchId) return;
+  const data = await api('sync.list', { batchId });
+  if (!target.isConnected || selectedSyncBatch !== batchId) return;
+  const rows = data.accounts.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${esc(row.marketplace)}</td>
+    <td>${esc(syncLabel(row.status))}</td><td>${num(row.pages_succeeded)}/${num(row.pages_scanned)}</td><td>${esc(row.error ?? '')}</td></tr>`);
+  const pages = data.pageRuns.map((row) => `<tr><td>${esc(row.account_id)}</td><td>${num(row.page_no)}</td>
+    <td>${esc(row.page_kind)}</td><td>${esc(syncLabel(row.status))}</td><td>${esc(row.error ?? '')}</td></tr>`);
+  const content = card(`Progresso do lote · ${esc(syncLabel(data.batch?.status))}`,
+    table(['Conta','Marketplace','Estado','Páginas concluídas','Observação'], rows) +
+    table(['Conta','Página','Área','Estado','Observação'], pages, 'Nenhuma página registrada.'));
+  const signature = JSON.stringify([batchId, data.batch?.status, rows, pages]);
+  if (target.dataset.signature === signature) return;
+  target.dataset.signature = signature;
+  target.dataset.active = String(['QUEUED','RUNNING'].includes(data.batch?.status));
+  target.innerHTML = content;
+  initializeTables(target);
+}
+
 // ------------------------------------------------------------------ roteador de views
 const VIEWS = {
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
   prestart: { label: 'Pré-Start & Diagnóstico', icon: '✓', render: viewPrestart },
+  browserSync: { label: 'Extensão & Coletas', icon: '⇄', render: viewBrowserSync },
   listings: { label: 'Anúncios & Captura', icon: '▤', render: viewListings },
   finance: { label: 'Financeiro', icon: '⊞', render: viewFinance },
   keywords: { label: 'SEO & Keywords', icon: '⌕', render: viewKeywords },
@@ -718,6 +1071,10 @@ const VIEWS = {
   agents: { label: 'Agentes de IA', icon: '✦', render: viewAgents },
   tasks: { label: 'Tarefas', icon: '⧗', render: viewTasks },
   connectors: { label: 'Conectores', icon: '⇄', render: viewConnectors },
+  accounts: { label: 'Contas & Catálogo', icon: '▣', render: viewAccounts },
+  compare: { label: 'Comparativo', icon: '▥', render: viewCompare },
+  media: { label: 'Biblioteca de imagens', icon: '▧', render: viewMedia },
+  users: { label: 'Usuários', icon: '♙', render: viewUsers },
   admin: { label: 'Administração', icon: '⚙', render: viewAdmin },
 };
 
@@ -729,21 +1086,225 @@ function renderNav() {
 }
 
 async function renderView() {
+  const selectedView = state.view;
   const view = VIEWS[state.view] || VIEWS.exec;
   $('#view-title').textContent = view.label;
   const host = $('#view');
   host.innerHTML = '<div class="loading">Carregando…</div>';
   try {
-    host.innerHTML = await view.render();
+    const content = await view.render();
+    if (selectedView !== state.view) return;
+    host.innerHTML = content;
+    initializeTables(host);
     if (state.view === 'competition') await loadRelations();
+    if (state.view === 'browserSync') await showBrowserSyncBatch();
   } catch (err) {
     host.innerHTML = `<div class="empty bad-text">${esc(err.message)}</div>`;
   }
 }
 
 // ------------------------------------------------------------------ ações
+function xmlEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+}
+
+function excelColumn(index) {
+  let n = index + 1;
+  let out = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+function makeSheetXml(rows, headers) {
+  const allRows = [headers, ...rows.map((row) => headers.map((h) => row[h]))];
+  const xmlRows = allRows.map((cells, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    const cellXml = cells.map((value, colIndex) => {
+      const ref = `${excelColumn(colIndex)}${rowNumber}`;
+      if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${ref}"><v>${value}</v></c>`;
+      if (typeof value === 'boolean') return `<c r="${ref}" t="b"><v>${value ? 1 : 0}</v></c>`;
+      const textValue = value === null || value === undefined ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value));
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(textValue)}</t></is></c>`;
+    }).join('');
+    return `<row r="${rowNumber}">${cellXml}</row>`;
+  }).join('');
+  const lastRef = `${excelColumn(Math.max(0, headers.length - 1))}${Math.max(1, allRows.length)}`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastRef}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><sheetData>${xmlRows}</sheetData></worksheet>`;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zipStored(files) {
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const data = encoder.encode(file.content);
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + name.length + data.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0, true); lv.setUint16(8, 0, true);
+    lv.setUint16(10, 0, true); lv.setUint16(12, 0, true);
+    lv.setUint32(14, crc, true); lv.setUint32(18, data.length, true); lv.setUint32(22, data.length, true);
+    lv.setUint16(26, name.length, true); lv.setUint16(28, 0, true);
+    local.set(name, 30); local.set(data, 30 + name.length);
+    localParts.push(local);
+
+    const central = new Uint8Array(46 + name.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0, true); cv.setUint16(10, 0, true); cv.setUint16(12, 0, true); cv.setUint16(14, 0, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true); cv.setUint32(24, data.length, true);
+    cv.setUint16(28, name.length, true); cv.setUint16(30, 0, true); cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true); cv.setUint16(36, 0, true); cv.setUint32(38, 0, true); cv.setUint32(42, offset, true);
+    central.set(name, 46); centralParts.push(central);
+    offset += local.length;
+  }
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(4, 0, true); ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true); ev.setUint32(16, offset, true); ev.setUint16(20, 0, true);
+  return new Blob([...localParts, ...centralParts, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function createXlsxReport(report) {
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  const keys = Array.from(rows.reduce((set, row) => { Object.keys(row || {}).forEach((key) => set.add(key)); return set; }, new Set()));
+  const dataHeaders = keys.length ? keys : ['Informação'];
+  const dataRows = keys.length ? rows : [{ Informação: 'Nenhum registro no período selecionado.' }];
+  const sheets = [];
+  const summary = report.summary && typeof report.summary === 'object' ? report.summary : null;
+  if (summary) {
+    const summaryRows = Object.entries(summary).map(([Indicador, Valor]) => ({ Indicador, Valor }));
+    sheets.push({ name: 'Resumo', xml: makeSheetXml(summaryRows, ['Indicador', 'Valor']) });
+  }
+  sheets.push({ name: 'Dados', xml: makeSheetXml(dataRows, dataHeaders) });
+  const sheetOverrides = sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('');
+  const sheetNodes = sheets.map((sheet, index) => `<sheet name="${sheet.name}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('');
+  const relNodes = sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('');
+  const files = [
+    { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetOverrides}</Types>` },
+    { name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: 'xl/workbook.xml', content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetNodes}</sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relNodes}</Relationships>` },
+    ...sheets.map((sheet, index) => ({ name: `xl/worksheets/sheet${index + 1}.xml`, content: sheet.xml })),
+  ];
+  return zipStored(files);
+}
+
 const ACTIONS = {
+  'browser-operation-save': async () => {
+    await run(() => api('operation.mode.set', { mode: $('#browser-operation-mode').value }), 'Perfil global salvo.');
+    await renderView();
+  },
+  'browser-sync-refresh': renderView,
+  'browser-sync-request': async () => {
+    const result = await api('sync.createAll', { ...browserSyncScope(), browserRequest: true });
+    selectedSyncBatch = result.batchId;
+    toast('Solicitação registrada. Aguardando o navegador.');
+    await renderView();
+  },
+  'browser-sync-schedule': async () => {
+    const cadence = $('#browser-sync-cadence').value;
+    const intervalMinutes = Number($('#browser-sync-interval').value);
+    await run(() => api('sync.schedule.create', {
+      ...browserSyncScope(), cadence, ...(cadence === 'custom' ? { intervalMinutes } : {}),
+    }), 'Coleta agendada.');
+    await renderView();
+  },
+  'browser-sync-toggle': async ({ id, enabled }) => {
+    await api('sync.schedule.setEnabled', { id, enabled: enabled !== '1' });
+    await renderView();
+  },
+  'browser-sync-runs': async ({ id }) => {
+    const target = $('#browser-sync-runs');
+    const runs = await api('sync.schedule.runs', { scheduleId: id, limit: 30 });
+    if (!target?.isConnected) return;
+    target.innerHTML = card('Histórico do agendamento', table(['Agendado para','Estado','Observação','Lote'],
+      runs.map((entry) => `<tr><td>${dt(entry.scheduled_at)}</td><td>${esc(syncLabel(entry.status))}</td><td>${esc(entry.error ?? '')}</td>
+      <td>${entry.batch_id ? `<button class="btn tiny" data-act="browser-sync-batch" data-id="${esc(entry.batch_id)}">Ver progresso</button>` : '—'}</td></tr>`)));
+    initializeTables(target);
+  },
+  'browser-sync-batch': async ({ id }) => {
+    selectedSyncBatch = id;
+    await showBrowserSyncBatch();
+    $('#browser-sync-detail')?.scrollIntoView({ block: 'nearest' });
+  },
+  'browser-sync-retry': async ({ id }) => {
+    const result = await api('sync.retryFailed', { batchId: id, browserRequest: true });
+    selectedSyncBatch = result.batchId;
+    toast('Repetição registrada. Aguardando o navegador.');
+    await renderView();
+  },
   nav: (d) => { state.view = d.view; renderNav(); renderView(); },
+  'account-save': async () => {
+    const id = $('#ac-id').value.trim(); const name = $('#ac-name').value.trim();
+    if (!id || !name) throw new Error('Informe o ID e o nome da loja.');
+    await run(() => api('account.upsert', { accountId: id, marketplace: $('#ac-market').value, displayName: name, handle: $('#ac-handle').value.trim() || undefined, confidence: 1, verifiedByUser: true }), 'Conta cadastrada.');
+    await bootAccountSelector(); renderView();
+  },
+  'account-toggle': async (d) => { await run(() => api('account.setActive', { accountId: d.id, isActive: d.enabled !== '1' }), 'Status da conta atualizado.'); await bootAccountSelector(); renderView(); },
+  'catalog-product-add': async () => {
+    const name = $('#cp-name').value.trim(); if (!name) throw new Error('Informe o nome do produto.');
+    await run(() => api('catalog.product.upsert', { accountId: state.accountId, name, brand: $('#cp-brand').value.trim() || null, model: $('#cp-model').value.trim() || null, category: $('#cp-category').value.trim() || null }), 'Produto cadastrado.'); renderView();
+  },
+  'catalog-sku-add': async () => {
+    const sku = $('#sku-code').value.trim(); if (!sku) throw new Error('Informe o código do SKU.');
+    await run(() => api('catalog.sku.upsert', { accountId: state.accountId, sku, productId: $('#sku-product-id').value.trim() || null, ean: $('#sku-ean').value.trim() || null, gtin: $('#sku-gtin').value.trim() || null, upc: $('#sku-upc').value.trim() || null, attributes: {} }), 'SKU cadastrado.'); renderView();
+  },
+  'user-save': async () => {
+    const id = $('#us-id').value.trim(); const password = $('#us-password').value;
+    const payload = { ...(id ? { id } : {}), displayName: $('#us-name').value.trim(), email: $('#us-email').value.trim(), role: $('#us-role').value, ...(password ? { password } : {}) };
+    await run(() => api('user.upsert', payload), id ? 'Usuário atualizado.' : 'Usuário criado.'); renderView();
+  },
+  'user-edit': async (d) => {
+    $('#us-id').value = d.id; $('#us-name').value = d.name; $('#us-email').value = d.email; $('#us-role').value = d.role; $('#us-password').value = '';
+    $('#us-save').textContent = 'Salvar alterações'; $('#us-name').focus();
+  },
+  'user-toggle': async (d) => { await run(() => api('user.setActive', { userId: d.id, isActive: d.enabled !== '1' }), 'Status do usuário atualizado.'); renderView(); },
+  'agent-feedback': async (d) => {
+    const reason = window.prompt('Motivo ou observação (opcional):','');
+    if (reason === null) return;
+    const result = await run(() => api('agent.feedback', { recommendationId:d.id, decision:d.decision, reason:reason || undefined }), 'Feedback registrado.');
+    if (result?.playbook) toast(`Playbook criado/atualizado com ${result.playbook.successes} resultados positivos observados.`);
+    renderView();
+  },
+  'agent-feedback-implemented': async (d) => {
+    const example = { success:true, measuredAt:new Date().toISOString(), baseline:{ orders:10 }, after:{ orders:12 }, sampleSize:100, source:'A_PRIMARY_UI', notes:'Substitua os valores pelo resultado real observado.' };
+    const raw = window.prompt('Informe o JSON das métricas antes/depois. Use amostra e origem reais:', JSON.stringify(example));
+    if (raw === null) return;
+    let outcome;
+    try { outcome = JSON.parse(raw); } catch { throw new Error('JSON de resultado inválido'); }
+    if (outcome.notes === 'Substitua os valores pelo resultado real observado.') throw new Error('substitua os valores de exemplo pelos dados reais antes de registrar');
+    const result = await run(() => api('agent.feedback', { recommendationId:d.id, decision:'IMPLEMENTADO', outcome }), 'Resultado observado registrado.');
+    if (result?.playbook) toast(`Playbook criado/atualizado com ${result.playbook.successes} resultados positivos observados.`);
+    renderView();
+  },
+
+  'analysis-run': async () => {
+    const mode = $('#analysis-mode').value;
+    const listingId = $('#analysis-listing').value.trim();
+    const catalogProductId = $('#analysis-product').value.trim();
+    if (listingId && catalogProductId) throw new Error('Escolha um anúncio ou produto, não ambos.');
+    const result = await run(() => api('analysis.run', { mode, accountId: state.accountId || undefined, ...(listingId ? { listingId } : {}), ...(catalogProductId ? { catalogProductId } : {}), days: Number($('#analysis-days').value) || 30 }), 'Análise concluída.');
+    $('#analysis-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result, null, 2))}</pre>`;
+  },
 
   'own-add': async () => {
     const attrs = {};
@@ -879,11 +1440,46 @@ const ACTIONS = {
     renderView();
   },
 
+  'kpi-drilldown': async (d) => {
+    const metric = d.metric;
+    const supported = new Set(['gmv','netRevenue','orders','visits','cvr','aov','acos','roas','returnRate']);
+    if (!supported.has(metric)) throw new Error('Detalhamento ainda não disponível para este indicador.');
+    const today = new Date();
+    const day = (offset) => { const value = new Date(today); value.setDate(value.getDate() + offset); return value.toISOString().slice(0, 10); };
+    const result = await run(() => api('kpi.compare.detail', {
+      primaryFrom: day(-6), primaryTo: day(0),
+      comparisonFrom: day(-13), comparisonTo: day(-7),
+      groupBy: 'listing', ...(state.accountId ? { accountId: state.accountId } : {}),
+    }));
+    const metricLabel = { gmv:'GMV', netRevenue:'Receita líquida', orders:'Pedidos', visits:'Visitas', cvr:'CVR', aov:'Ticket médio', acos:'ACoS', roas:'ROAS', returnRate:'Taxa de devolução' }[metric] || metric;
+    const format = (value) => value == null ? '—' : ['gmv','netRevenue','aov'].includes(metric) ? brl(Math.round(value * 100)) : ['cvr','acos','returnRate'].includes(metric) ? pct(value) : metric === 'roas' ? num(value, 2) : num(value);
+    const rows = (result.rows || []).filter((row) => row.current?.metrics?.[metric] != null || row.previous?.metrics?.[metric] != null).slice(0, 100);
+    const host = $('#kpi-drilldown-out');
+    if (!host) return;
+    host.innerHTML = `<section class="card"><header><h2>Detalhamento: ${esc(metricLabel)}</h2></header><div class="card-body"><p class="muted small">Últimos 7 dias (${esc(result.primary.start.slice(0,10))} a ${esc(result.primary.end.slice(0,10))}) versus os 7 dias anteriores (${esc(result.comparison.start.slice(0,10))} a ${esc(result.comparison.end.slice(0,10))}). Valores ausentes permanecem sem preenchimento.</p>${table(['Anúncio','Atual','Anterior','Variação'], rows.map((row) => { const delta = row.deltaPct?.[metric]; return `<tr><td>${esc(row.label || row.id)}</td><td>${esc(format(row.current?.metrics?.[metric]))}</td><td>${esc(format(row.previous?.metrics?.[metric]))}</td><td>${delta == null ? '—' : `${num(delta,1)}%`}</td></tr>`; }), 'Sem snapshots suficientes para detalhar este KPI.')}</div></section>`;
+    initializeTables(host);
+    host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  },
+
   'kpi-listing': async () => {
     const id = $('#kpi-listing-id').value.trim();
     if (!id) { toast('Informe o ID do anúncio.', 'bad'); return; }
-    const r = await run(() => api('kpi.listing', { listingId: id, accountId: state.accountId }));
-    $('#kpi-listing-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+    const result = await api('kpi.listing', { listingId: id, accountId: state.accountId || undefined });
+    const target = $('#kpi-listing-out');
+    if (!target) return;
+    if (!result) { target.textContent = 'Nenhum snapshot disponível para este anúncio.'; return; }
+    const { conversion_cro: visits, revenue_profit: revenue, operational_health: stock, acquisition_ads: ads } = result.pillars;
+    const money = (value) => brl(value == null ? null : Math.round(value * 100));
+    const rows = [
+      ['Visitas', num(visits.visits)], ['Pedidos', num(visits.orders)], ['Unidades', num(visits.units)],
+      ['Conversão', pct(visits.cvr.value)], ['Faturamento bruto', money(revenue.gmv)],
+      ['Receita líquida', money(revenue.netRevenue)], ['Investimento em Ads', money(ads.adSpend)],
+      ['ROAS', num(ads.roas.value, 2)], ['Estoque disponível', num(stock.stockAvailable)],
+      ['Cobertura de estoque em dias', num(stock.stockCoverageDays.value, 1)],
+    ];
+    target.innerHTML = `<p class="muted small">${dt(result.periodStart)} a ${dt(result.periodEnd)} · ${num(result.missingInputs.length)} dados de origem ausentes</p>
+      ${table(['Indicador','Valor'], rows.map(([label,value]) => `<tr><td>${esc(label)}</td><td>${esc(value)}</td></tr>`))}`;
+    initializeTables(target);
   },
 
   'finance-simulate': async () => {
@@ -905,12 +1501,26 @@ const ACTIONS = {
     const rows = Object.entries(r || {}).map(([k, val]) => `<tr><td>${esc(k)}</td><td>${
       typeof val === 'number' && k.toLowerCase().includes('cents') ? brl(val) : esc(typeof val === 'object' ? JSON.stringify(val) : val)}</td></tr>`);
     $('#finance-out').innerHTML = table(['Campo', 'Valor'], rows);
+    initializeTables($('#finance-out'));
   },
   'finance-cost': async () => {
     await run(() => api('finance.costs.upsert', {
       accountId: state.accountId, sku: $('#fc-sku').value.trim(),
       costCents: Math.round((Number($('#fc-cost').value) || 0) * 100),
     }), 'Custo registrado (versão preservada).');
+  },
+
+  'bundle-simulate': async () => {
+    let components;
+    try { components = JSON.parse($('#bundle-json').value); } catch { throw new Error('JSON dos componentes está inválido'); }
+    const result = await run(() => api('finance.bundle.simulate', {
+      components,
+      bundleDiscountPct: Number($('#bundle-discount').value) || 0,
+      adSpendCents: Math.round((Number($('#bundle-ads').value) || 0) * 100),
+    }), 'Simulação do kit calculada.');
+    const rows = Object.entries(result.total || {}).map(([key,value]) => `<tr><td>${esc(key)}</td><td>${key.toLowerCase().includes('cents') ? brl(value) : esc(value ?? '—')}</td></tr>`);
+    $('#bundle-out').innerHTML = table(['Indicador','Valor'],rows) + `<pre class="json">${esc(JSON.stringify(result.components,null,2))}</pre>`;
+    initializeTables($('#bundle-out'));
   },
 
   'kw-add': async () => {
@@ -920,6 +1530,27 @@ const ACTIONS = {
       marketplace: $('#kw-mp').value.trim() || 'mercado_livre',
     }), 'Termo adicionado.');
     renderView();
+  },
+  'kw-suggest': async () => {
+    if (!state.accountId) throw new Error('selecione uma conta ativa');
+    const result = await run(() => api('keyword.suggest', { accountId: state.accountId, limit: 100 }));
+    $('#kw-intelligence-out').innerHTML = table(['Termo sugerido','Frequência local','Títulos','Origem','Confiança'], result.map((r) => `<tr><td>${esc(r.term)}</td><td>${num(r.localFrequency)}</td><td>${num(r.sourceTitles)}</td><td>${esc(r.source)}</td><td>${pct(r.confidence * 100)}</td></tr>`), 'Não há novos termos sugeridos a partir dos títulos cadastrados.') + `<p class="muted small">${esc(result[0]?.note || 'Frequência local não representa volume de busca.')}</p>`;
+    initializeTables($('#kw-intelligence-out'));
+  },
+  'kw-cluster': async () => {
+    const result = await run(() => api('keyword.cluster', { marketplace: $('#kw-mp').value.trim() || 'mercado_livre' }), 'Agrupamentos locais atualizados.');
+    $('#kw-intelligence-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result,null,2))}</pre>`;
+  },
+  'kw-visibility': async () => {
+    if (!state.accountId) throw new Error('selecione uma conta ativa');
+    const result = await run(() => api('keyword.visibility', { accountId: state.accountId, days: 30 }));
+    $('#kw-intelligence-out').innerHTML = table(['Termo','Amostras','Top 3','Top 10','Top 20','Share observado'], result.terms.map((r) => `<tr><td>${esc(r.term)}</td><td>${num(r.sampleSize)}</td><td>${pct(r.top3PresencePct)}</td><td>${pct(r.top10PresencePct)}</td><td>${pct(r.top20PresencePct)}</td><td>${pct(r.ownVisibilitySharePct)}</td></tr>`), 'Nenhuma SERP capturada no período.') + `<p class="muted small">${esc(result.note)}</p>`;
+    initializeTables($('#kw-intelligence-out'));
+  },
+  'kw-cannibal': async () => {
+    if (!state.accountId) throw new Error('selecione uma conta ativa');
+    const result = await run(() => api('keyword.cannibalization', { accountId: state.accountId, days: 90 }));
+    $('#kw-intelligence-out').innerHTML = `<pre class="json">${esc(JSON.stringify(result,null,2))}</pre>`;
   },
   'rk-add': async () => {
     // rank.record é por ANÚNCIO: o serviço exige listingId e posição.
@@ -990,9 +1621,9 @@ const ACTIONS = {
     $('#tree-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
   },
   'gi-add': async () => {
-    // O serviço ainda não tem gravação de iniciativa (growth.initiatives é só
-    // leitura). A tela diz isso em vez de fingir que salvou.
-    toast('Iniciativas ainda não têm gravação no serviço: esta tela é somente leitura.', 'warn');
+    const title = $('#gi-title').value.trim(); const hypothesis = $('#gi-hyp').value.trim();
+    if (!title || !hypothesis) throw new Error('Informe título e hipótese verificável.');
+    await run(() => api('growth.initiative.upsert', { accountId: state.accountId || null, title, hypothesis, pillar: 'GROWTH', reach: Number($('#gi-reach').value)||0, impact: Number($('#gi-impact').value)||1, confidence: Number($('#gi-conf').value)||0.5, effort: Number($('#gi-effort').value)||1, iceImpact: Number($('#gi-impact').value)||5, iceConfidence: Math.round((Number($('#gi-conf').value)||0.5)*10), iceEase: Math.max(1, 10-(Number($('#gi-effort').value)||1)), urgency: 0 }), 'Iniciativa registrada e priorizada.'); renderView();
   },
   'ex-add': async () => {
     const baseline = Number($('#ex-baseline').value) || 0;
@@ -1043,6 +1674,7 @@ const ACTIONS = {
     $('#debate-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
   },
 
+  'task-refresh': async () => { await renderView(); toast('Progresso atualizado.'); },
   'task-add': async () => {
     const listingId = $('#tk-listing').value.trim();
     if (!listingId) { toast('Informe o anúncio (MLB...).', 'bad'); return; }
@@ -1055,8 +1687,10 @@ const ACTIONS = {
     };
     const title = $('#tk-title').value.trim();
     const desc = $('#tk-desc').value.trim();
-    if (title) item.title = title;
-    if (desc) item.descriptionAdditions = desc;
+    if ($('#tk-type').value === 'edit_title' && !title) { toast('Informe o novo título.', 'bad'); return; }
+    if ($('#tk-type').value === 'edit_description' && !desc) { toast('Informe o acréscimo de descrição.', 'bad'); return; }
+    if ($('#tk-type').value === 'edit_title') item.title = title;
+    if ($('#tk-type').value === 'edit_description') item.descriptionAdditions = desc;
     await run(() => api('task.create', {
       name: $('#tk-name').value.trim() || `${$('#tk-type').value} · ${listingId}`,
       kind: $('#tk-type').value,
@@ -1066,7 +1700,7 @@ const ACTIONS = {
       recurrence: $('#tk-rec').value || null,
       typing: {
         mode: 'set_value',
-        charDelayMs: Number($('#tk-typing').value) || 0,
+        charDelayMs: Number($('#tk-delay').value) || 0,
         settleDelayMs: 400,
         verifyAfterTyping: true,
       },
@@ -1074,33 +1708,155 @@ const ACTIONS = {
     }), 'Tarefa criada.');
     renderView();
   },
-  'task-run': async (d) => { await run(() => api('task.runNow', { taskId: d.id }), 'Executando.'); renderView(); },
+  'task-create-filtered': async () => {
+    if (!state.accountId) throw new Error('Selecione uma conta antes de criar tarefas por desempenho.');
+    const numberOrUndefined = (id, scale = 1) => { const raw = $(`#${id}`).value.trim(); if (!raw) return undefined; const value = Number(raw); if (!Number.isFinite(value) || value < 0) throw new Error(`Valor inválido: ${id}`); return value * scale; };
+    const kind = $('#tkf-type').value;
+    const payload = {
+      name: $('#tkf-name').value.trim() || `Tarefa por desempenho · ${kind}`,
+      accountId: state.accountId,
+      kind,
+      charDelayMs: Number($('#tkf-delay').value) || 0,
+      filters: {
+        ...(numberOrUndefined('tkf-min-gmv', 1) !== undefined ? { minGmv: numberOrUndefined('tkf-min-gmv', 1) } : {}),
+        ...(numberOrUndefined('tkf-max-gmv', 1) !== undefined ? { maxGmv: numberOrUndefined('tkf-max-gmv', 1) } : {}),
+        ...(numberOrUndefined('tkf-min-orders') !== undefined ? { minOrders: numberOrUndefined('tkf-min-orders') } : {}),
+        ...(numberOrUndefined('tkf-min-visits') !== undefined ? { minVisits: numberOrUndefined('tkf-min-visits') } : {}),
+        ...(numberOrUndefined('tkf-max-cvr') !== undefined ? { maxCvrPct: numberOrUndefined('tkf-max-cvr') } : {}),
+        ...(numberOrUndefined('tkf-max-stock') !== undefined ? { maxStockAvailable: numberOrUndefined('tkf-max-stock') } : {}),
+      },
+      ...(kind === 'edit_title' ? { draftTitle: $('#tkf-title').value.trim() } : { descriptionAdditions: $('#tkf-desc').value.trim() }),
+    };
+    const result = await run(() => api('task.createByFilter', payload));
+    const out = $('#tkf-result'); if (out) out.textContent = result?.created ? `${result.matched} anúncios enfileirados de ${result.totalMatched ?? result.matched} encontrados${result.truncated ? ' (limite de 100 por tarefa)' : ''} · tarefa ${result.taskId}` : (result?.note || 'Nenhum anúncio corresponde aos filtros.');
+    if (result?.created) { toast('Rascunho por desempenho criado. Nada foi publicado.'); renderView(); }
+  },
+  'task-run': async (d) => { await run(() => api('task.runNow', { taskId: d.id }), 'Tarefa enfileirada. Abra a tela de edição do anúncio na conta correspondente; somente rascunhos serão preenchidos, sem salvar/publicar.'); renderView(); },
+  'task-approve-publish': async (d) => {
+    const count = Number(d.count);
+    if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('aprovação limitada a 1–10 anúncios');
+    const confirmation = window.prompt(`A publicação altera anúncios reais. Revise a tarefa e os ${count} anúncios antes de continuar.\n\nPara autorizar, digite exatamente: PUBLICAR ${count}`);
+    if (confirmation === null) return;
+    const reason = window.prompt('Motivo da autorização (obrigatório):');
+    if (reason === null) return;
+    const result = await run(() => api('task.approvePublish', { taskId: d.id, confirmation, reason }), 'Aprovação registrada por 15 minutos. Agora abra e deixe ativa a tela de edição de cada anúncio correspondente; o marketplace ainda pedirá confirmação individual.');
+    if (result?.ok) toast('Aprovação de uso único registrada. Abra a aba ativa do anúncio para continuar.');
+    renderView();
+  },
+  'task-rollback': async (d) => {
+    const result = await run(() => api('task.rollbackPrepare', { approvalId: d.id }), 'Rascunho de reversão criado; revise e execute separadamente.');
+    if (result?.taskId) toast(`Rascunho de reversão ${result.taskId} criado. Nada foi alterado remotamente.`);
+    renderView();
+  },
+  'compare-detail': async () => {
+    const value = (id) => $(`#${id}`).value;
+    const payload = {
+      accountId: value('cmp-account') || undefined,
+      groupBy: value('cmp-group'),
+      primaryFrom: value('cmp-primary-from'), primaryTo: value('cmp-primary-to'),
+      comparisonFrom: value('cmp-previous-from'), comparisonTo: value('cmp-previous-to'),
+    };
+    const result = await run(() => api('kpi.compare.detail', payload), 'Comparação calculada a partir dos snapshots disponíveis.');
+    const rows = result?.rows || [];
+    const delta = (n) => n == null ? '—' : `${n >= 0 ? '+' : ''}${num(n,1)}%`;
+    const output = table(['Item','Marketplace','GMV atual','GMV anterior','Variação GMV','Pedidos atuais','Pedidos anteriores','ROAS atual','ROAS anterior'], rows.map((row) => `<tr><td>${esc(row.label)}</td><td>${esc(row.marketplace)}</td><td>${row.current.metrics.gmv == null ? '—' : brl(row.current.metrics.gmv * 100)}</td><td>${row.previous.metrics.gmv == null ? '—' : brl(row.previous.metrics.gmv * 100)}</td><td>${delta(row.deltaPct.gmv)}</td><td>${num(row.current.metrics.orders)}</td><td>${num(row.previous.metrics.orders)}</td><td>${num(row.current.metrics.roas,2)}</td><td>${num(row.previous.metrics.roas,2)}</td></tr>`), 'Nenhum snapshot encontrado nos períodos escolhidos.');
+    $('#compare-detail-out').innerHTML = `<p class="muted small">${esc(result?.method || '')}</p>${output}`;
+    initializeTables($('#compare-detail-out'));
+  },
+
   'task-pause': async (d) => { await run(() => api('task.pause', { taskId: d.id }), 'Pausada.'); renderView(); },
   'task-resume': async (d) => { await run(() => api('task.resume', { taskId: d.id }), 'Retomada.'); renderView(); },
-  'task-skip': async (d) => { await run(() => api('task.skipItem', { taskId: d.id }), 'Item pulado.'); renderView(); },
+  'task-skip': async (d) => { await run(() => api('task.skipItem', { taskId: d.id }), 'Próximo item pendente pulado.'); renderView(); },
   'task-cancel': async (d) => { await run(() => api('task.cancel', { taskId: d.id }), 'Cancelada.'); renderView(); },
 
-  import: async () => {
-    const text = $('#im-csv').value.trim();
-    const lines = text.split(/\r?\n/).filter(Boolean);
-    if (lines.length < 2) { toast('Cole um CSV com cabeçalho e pelo menos uma linha.', 'bad'); return; }
-    const header = lines[0].split(',').map((h) => h.trim());
-    const rows = lines.slice(1).map((line) => {
-      const cells = line.split(',');
-      const row = {};
-      header.forEach((h, i) => { row[h] = cells[i] ?? ''; });
-      return row;
+  'media-add': async () => {
+    const file = $('#media-file').files?.[0]; if (!file) throw new Error('Escolha uma imagem.');
+    if (file.size > 2_500_000) throw new Error('Imagem acima do limite de 2,5 MB.');
+    const base64 = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('Falha ao ler imagem.')); reader.readAsDataURL(file); });
+    await run(() => api('media.add', { accountId: state.accountId || null, filename: file.name, mimeType: file.type, base64, altText: $('#media-alt').value.trim() }), 'Imagem salva na biblioteca local.'); renderView();
+  },
+  'media-preview': async (d) => {
+    const item = await run(() => api('media.get', { id: d.id, accountId: d.accountId || null }));
+    const out = document.querySelector(`#media-${CSS.escape(d.id)}`); if (out) out.innerHTML = `<img alt="${esc(item.alt_text || item.filename)}" style="max-width:100%;max-height:240px;border-radius:10px" src="data:${esc(item.mime_type)};base64,${item.content_base64}">`;
+  },
+  'media-delete': async (d) => { if (!confirm('Excluir esta imagem da biblioteca?')) return; await run(() => api('media.delete', { id: d.id, accountId: d.accountId || null }), 'Imagem excluída.'); renderView(); },
+  'connector-toggle': async (d) => { await run(() => api('connector.setEnabled', { connectorId: d.id, enabled: d.enabled !== '1' }), 'Conector atualizado.'); renderView(); },
+  'connector-configure': async ({ id }) => {
+    const analytics = id === 'google_analytics4';
+    const property = $(analytics ? '#ga4-property' : '#gsc-property').value.trim();
+    const field = $(analytics ? '#ga4-token' : '#gsc-token');
+    const accessToken = field.value.trim();
+    if (!property || !accessToken) throw new Error('Informe a propriedade e o token de leitura.');
+    await api('connector.configure', {
+      connectorId: id, provider: analytics ? 'GOOGLE_ANALYTICS4' : 'GOOGLE_SEARCH_CONSOLE',
+      publicConfig: analytics ? { propertyId: property } : { siteUrl: property }, secrets: { accessToken },
     });
-    const r = await run(() => api('connector.import', {
-      fileName: `${$('#im-kind').value.toLowerCase()}-${Date.now()}.csv`, rows,
-    }), 'Importação enfileirada para validação.');
-    $('#import-out').innerHTML = `<pre class="json">${esc(JSON.stringify(r, null, 2))}</pre>`;
+    field.value = '';
+    toast('Conexão configurada. Teste a propriedade.');
+    await renderView();
+  },
+  'connector-test': async ({ id }) => {
+    const result = await api('connector.test', { connectorId: id });
+    toast(result.message, result.ok ? 'ok' : 'bad');
+    await renderView();
+  },
+  'connector-disconnect': async (d) => {
+    if (!confirm(`Desconectar ${d.label || d.id}? Os tokens e credenciais guardados para este conector serão removidos.`)) return;
+    await run(() => api('connector.disconnect', { connectorId: d.id }), 'Conector desconectado e credenciais locais removidas.');
+    renderView();
+  },
+  import: async () => {
+    const file = $('#im-file').files?.[0];
+    const pasted = $('#im-csv').value;
+    if (!state.accountId) throw new Error('Selecione a conta que receberá os dados antes de importar.');
+    if (!file && !pasted.trim()) throw new Error('Escolha um arquivo ou cole o conteúdo CSV.');
+    if (file && file.size > 2 * 1024 * 1024) throw new Error('Arquivo acima do limite de 2 MB.');
+    let fileName = file?.name || `${$('#im-kind').value.toLowerCase()}-${Date.now()}.csv`;
+    const fileType = fileName.toLowerCase().split('.').at(-1);
+    if (!['csv','xlsx','pdf'].includes(fileType)) throw new Error('Selecione CSV, XLSX ou PDF digital.');
+    const payload = { fileName, fileType, accountId: state.accountId || undefined };
+    if (fileType !== 'csv' && file) {
+      const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('Falha ao ler o arquivo.')); reader.readAsDataURL(file); });
+      payload.base64 = dataUrl.split(',')[1] || '';
+    } else {
+      payload.csvText = file ? await file.text() : pasted;
+    }
+    const r = await run(() => api('connector.import', payload), 'Arquivo interpretado e salvo para validação.');
+    const rows = r?.previewRows || [];
+    const columns = Array.from(rows.reduce((set, row) => { Object.keys(row || {}).forEach((key) => set.add(key)); return set; }, new Set()));
+    const preview = rows.length ? table(columns, rows.map((row) => `<tr>${columns.map((key) => `<td>${esc(row[key] ?? '')}</td>`).join('')}</tr>`), 'Sem linhas de prévia.') : '';
+    if (fileType === 'pdf') {
+      activeImportJobId = '';
+      $('#import-out').innerHTML = `<p>${num(r.rowCount)} linhas de texto guardadas para conferência. Use um CSV ou XLSX com IDs de anúncios para importar métricas.</p>
+        <ul>${(r.warnings ?? []).map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>${preview}`;
+      initializeTables($('#import-out'));
+      return;
+    }
+    activeImportJobId = r?.jobId || '';
+    const options = `<option value="">— não mapear —</option>${columns.map((column) => `<option value="${esc(column)}">${esc(column)}</option>`).join('')}`;
+    const metricFields = [['gmv','Faturamento bruto'],['netRevenue','Receita líquida'],['orders','Pedidos'],['units','Unidades vendidas'],['visits','Visitas'],['impressions','Impressões'],['clicks','Cliques'],['adSpend','Investimento em Ads'],['adClicks','Cliques em Ads'],['adAttributedRevenue','Receita atribuída a Ads'],['stockAvailable','Estoque disponível'],['returnsCount','Devoluções'],['cancellations','Cancelamentos'],['reviewRating','Nota de avaliação'],['reviewCount','Quantidade de avaliações']];
+    const mapping = `<div class="form-grid"><label>ID externo do anúncio<select id="im-map-external"><option value="">— selecione a coluna —</option>${columns.map((column) => `<option value="${esc(column)}">${esc(column)}</option>`).join('')}</select></label><label>Data do registro (opcional)<select id="im-map-date">${options}</select></label>${metricFields.map(([key,label]) => `<label>${esc(label)}<select class="im-map-metric" data-metric="${key}">${options}</select></label>`).join('')}</div><div class="actions"><button class="btn primary" data-act="import-commit" ${state.accountId ? '' : 'disabled'}>Validar mapeamento e importar para KPIs</button></div><p class="muted small">Os anúncios precisam já existir na conta. O sistema rejeita IDs desconhecidos, datas duplicadas e valores inválidos. A origem será registrada como F_USER_INPUT.</p>`;
+    $('#import-out').innerHTML = `<p>${num(r?.rowCount || 0)} linha(s) em staging · status ${esc(r?.status || '—')} · job ${esc(r?.jobId || '—')}</p><p class="muted small">${esc(r?.note || 'Os dados aguardam mapeamento e validação; ainda não alteram KPIs.')}</p>${preview}${mapping}`;
+    initializeTables($('#import-out'));
+  },
+  'import-commit': async () => {
+    if (!activeImportJobId) throw new Error('Não há importação pendente para mapear.');
+    if (!state.accountId) throw new Error('Selecione a mesma conta usada para preparar o arquivo.');
+    const externalId = $('#im-map-external').value;
+    if (!externalId) throw new Error('Selecione a coluna que contém o ID externo do anúncio.');
+    const metrics = {};
+    $$('.im-map-metric').forEach((control) => { if (control.value) metrics[control.dataset.metric] = control.value; });
+    if (!Object.keys(metrics).length) throw new Error('Mapeie pelo menos um indicador.');
+    const capturedAt = $('#im-map-date').value || undefined;
+    const result = await run(() => api('connector.import.commit', { jobId: activeImportJobId, accountId: state.accountId, mapping: { externalId, capturedAt, metrics } }), 'Dados validados e adicionados ao histórico de KPIs.');
+    $('#import-out').innerHTML = `<p>${num(result?.snapshotsCreated || 0)} snapshots importados · origem ${esc(result?.sourceClass || 'F_USER_INPUT')} · status ${esc(result?.status || '—')}</p><p class="muted small">${esc(result?.note || 'Proveniência registrada.')}</p>`;
+    activeImportJobId = '';
   },
 
   'gemini-key': async () => {
     const key = $('#gk').value.trim();
     if (!key) { toast('Informe a chave.', 'bad'); return; }
-    await run(() => api('gemini.setKey', { key }), 'Chave salva cifrada.');
+    await run(() => api('gemini.setKey', { apiKey: key }), 'Chave salva cifrada.');
     $('#gk').value = '';
   },
   'gemini-test': async () => {
@@ -1108,6 +1864,11 @@ const ACTIONS = {
     toast(r && r.ok ? 'Chave válida.' : `Falha: ${JSON.stringify(r)}`, r && r.ok ? 'ok' : 'bad');
   },
   'backup-create': async () => { await run(() => api('backup.create', {}), 'Backup criado.'); renderView(); },
+  'backup-restore': async (d) => {
+    if (!d.id || !confirm('Restaurar este backup? O banco atual será salvo em um arquivo .pre-restore.bak antes da troca. Operações recentes posteriores à data do backup serão substituídas.')) return;
+    await run(() => api('backup.restore', { backupId: d.id, confirmed: true }), 'Backup restaurado e integridade verificada.');
+    renderView();
+  },
   'au-propose': async () => {
     await run(() => api('autoupgrade.propose', {
       module: $('#au-mod').value.trim() || 'adapters/desconhecido',
@@ -1122,19 +1883,90 @@ const ACTIONS = {
     renderView();
   },
   'au-rollback': async (d) => { await run(() => api('autoupgrade.rollback', { proposalId: d.id, files: [] }), 'Revertido.'); renderView(); },
+  'forecast-run': async () => {
+    if (!state.accountId) throw new Error('selecione uma conta antes de gerar a previsão');
+    const r = await api('forecast.run', { accountId: state.accountId, metric: $('#fcst-metric').value, horizonDays: Number($('#fcst-horizon').value) });
+    if (!r?.ok) {
+      $('#forecast-out').innerHTML = `<p class="muted">${esc(r?.error || 'previsão indisponível')} · Sem preenchimento artificial de dados.</p>`;
+      return;
+    }
+    const pts = (r.points || []).map((p) => `<tr><td>${p.week}</td><td>${num(p.value, 2)}</td><td>${num(p.low, 2)} – ${num(p.high, 2)}</td></tr>`);
+    $('#forecast-out').innerHTML = `<p>Modelo: ${esc(r.method)} · Observações semanais: ${r.observations.length} · Variação estimada por semana: ${num(r.trendPerWeek, 2)} · MAPE retrospectivo: ${r.mape == null ? 'indisponível' : `${num(r.mape, 1)}%`}</p>${table(['Semana futura', 'Estimativa', 'Faixa heurística'], pts)}<p class="muted small">${esc(r.interval)}</p>`;
+    initializeTables($('#forecast-out'));
+  },
+  'schedule-create': async () => {
+    const kind = $('#sc-kind').value;
+    const cadence = $('#sc-cadence').value;
+    const payload = { accountId: state.accountId || null, cadence, ...(cadence === 'custom' ? { intervalMinutes: Number($('#sc-interval').value) } : {}) };
+    if (cadence === 'custom' && (!Number.isInteger(payload.intervalMinutes) || payload.intervalMinutes < 15 || payload.intervalMinutes > 43200)) {
+      throw new Error('Intervalo personalizado deve ser um número inteiro entre 15 e 43200 minutos.');
+    }
+    if (kind === 'analysis') {
+      await run(() => api('analysis.schedule.create', { ...payload, mode: $('#sc-mode').value, days: Number($('#sc-days').value) || 30 }), 'Análise agendada.');
+    } else {
+      await run(() => api('report.schedule.create', { ...payload, reportType: $('#sc-report-type').value, format: 'json' }), 'Relatório agendado.');
+    }
+    renderView();
+  },
+  'schedule-toggle': async (d) => {
+    const method = d.kind === 'analysis' ? 'analysis.schedule.setEnabled' : 'report.schedule.setEnabled';
+    await run(() => api(method, { id: d.id, enabled: d.enabled !== '1' }), d.enabled === '1' ? 'Agendamento pausado.' : 'Agendamento ativado.');
+    renderView();
+  },
+  'schedule-runs': async (d) => {
+    const isAnalysis = d.kind === 'analysis';
+    const runs = await api(isAnalysis ? 'analysis.schedule.runs' : 'report.schedule.runs', { scheduleId: d.id, limit: 50 });
+    const target = $(isAnalysis ? '#analysis-schedule-runs' : '#report-schedule-runs');
+    if (!target) return;
+    if (isAnalysis) {
+      target.innerHTML = card('Histórico de análises', table(['Início','Duração','Estado','Erro/resultado'], (runs || []).map((r) => `<tr><td>${dt(r.started_at)}</td><td>${num(r.duration_ms)} ms</td><td>${badge(r.status,r.status==='COMPLETED'?'ok':r.status==='FAILED'?'bad':'warn')}</td><td>${esc(r.error || (r.result_json ? 'Resultado registrado' : '—'))}</td></tr>`), 'Nenhuma execução registrada.'));
+    } else {
+      target.innerHTML = card('Histórico de relatórios', table(['Gerado em','Linhas','Estado','Erro','Arquivo'], (runs || []).map((r) => `<tr><td>${dt(r.generated_at)}</td><td>${num(r.row_count)}</td><td>${badge(r.status,r.status==='COMPLETED'?'ok':'bad')}</td><td>${esc(r.error || '—')}</td><td>${r.status === 'COMPLETED' ? `<button class="btn tiny" data-act="schedule-run-download" data-id="${esc(r.id)}">Baixar JSON</button>` : '—'}</td></tr>`), 'Nenhum relatório gerado.'));
+    }
+    initializeTables(target);
+  },
+  'schedule-run-download': async (d) => {
+    const result = await api('report.schedule.run.get', { runId: d.id });
+    const blob = new Blob([result.reportJson], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `relatorio-agendado-${d.id}.json`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
   report: async () => {
     const type = $('#rp-type').value;
     const fmt = $('#rp-fmt').value;
-    const r = await run(() => api('report.export', { type, format: fmt }), 'Relatório gerado.');
+    const r = await run(() => api('report.export', { type, format: fmt === 'pdf' ? 'json' : fmt, accountId: state.accountId || undefined }), 'Relatório gerado.');
     if (!r) return;
+    if (fmt === 'pdf') {
+      const rowsHtml = (r.rows || []).map(row => `<tr>${Object.values(row).map(v => `<td>${esc(v ?? '')}</td>`).join('')}</tr>`).join('');
+      const cols = Object.keys((r.rows || [])[0] || {});
+      const w = window.open('', '_blank');
+      if (!w) throw new Error('O navegador bloqueou a janela de impressão. Permita pop-ups para o painel local.');
+      w.document.write(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Relatório ${esc(type)}</title><style>body{font:12px Arial;padding:24px;color:#222}h1{font-size:20px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:5px;text-align:left;word-break:break-word}</style><h1>Marketplace Intelligence — ${esc(type)}</h1><p>Gerado em ${new Date().toLocaleString('pt-BR')} · ${r.rowCount} registros</p><table><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table></html>`);
+      w.document.close(); w.focus(); w.print(); return;
+    }
     const rows = r.rows || [];
     const name = `relatorio-${type.toLowerCase()}-${Date.now()}.${fmt}`;
+    if (fmt === 'xlsx') {
+      const blob = createXlsxReport(r);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = name;
+      link.textContent = `baixar ${name}`;
+      link.className = 'link';
+      $('#report-out').innerHTML = '';
+      $('#report-out').appendChild(link);
+      $('#report-out').insertAdjacentHTML('beforeend', `<p class="muted small">${rows.length} linha(s) exportadas em uma planilha XLSX local.</p>`);
+      return;
+    }
     let content = '';
     let mime = 'application/json';
     if (fmt === 'csv') {
       const cols = Array.from(rows.reduce((set, row) => { Object.keys(row).forEach((k) => set.add(k)); return set; }, new Set()));
       const escCsv = (v) => {
-        const t = v === null || v === undefined ? '' : String(v);
+        let t = v === null || v === undefined ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+        // Evita CSV/Formula Injection ao abrir exportações em Excel/LibreOffice.
+        if (/^[\s]*[=+\-@\t\r]/.test(t)) t = `'${t}`;
         return /[",\n;]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
       };
       content = [cols.join(';'), ...rows.map((row) => cols.map((c) => escCsv(row[c])).join(';'))].join('\n');
@@ -1163,6 +1995,54 @@ const ACTIONS = {
   },
 };
 
+document.addEventListener('input', (e) => {
+  const search = e.target.closest('[data-table-search]');
+  if (!search) return;
+  const wrapper = search.closest('[data-table-id]');
+  if (wrapper) { wrapper.dataset.page = '0'; updateTableView(wrapper); }
+});
+
+document.addEventListener('click', (e) => {
+  const action = e.target.closest('[data-table-action], [data-table-sort]');
+  if (!action) return;
+  const wrapper = action.closest('[data-table-id]');
+  if (!wrapper) return;
+  if (action.dataset.tableAction) {
+    const page = Number(wrapper.dataset.page || 0);
+    wrapper.dataset.page = String(action.dataset.tableAction === 'next' ? page + 1 : Math.max(0, page - 1));
+  } else {
+    const column = Number(action.dataset.tableSort);
+    const current = Number(wrapper.dataset.sortColumn || -1);
+    const direction = current === column && wrapper.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
+    wrapper.dataset.sortColumn = String(column);
+    wrapper.dataset.sortDirection = direction;
+    wrapper.dataset.page = '0';
+  }
+  updateTableView(wrapper);
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target?.id === 'history-metric') {
+    const host = $('#history-chart');
+    if (host) host.innerHTML = renderHistoryChart(state.historyPoints, e.target.value);
+  }
+});
+
+document.addEventListener('change', async (e) => {
+  if (e.target?.id === 'browser-sync-cadence') $('#browser-sync-interval-wrap')?.toggleAttribute('hidden', e.target.value !== 'custom');
+  if (e.target?.id === 'sc-kind') {
+    const report = e.target.value === 'report';
+    $('#sc-mode-wrap')?.toggleAttribute('hidden', report);
+    $('#sc-days-wrap')?.toggleAttribute('hidden', report);
+    $('#sc-report-wrap')?.toggleAttribute('hidden', !report);
+  }
+  if (e.target?.id === 'sc-cadence') $('#sc-interval-wrap')?.toggleAttribute('hidden', e.target.value !== 'custom');
+  const el = e.target.closest('[data-act=\"initiative-status\"]');
+  if (!el) return;
+  try { await api('growth.initiative.setStatus', { id: el.dataset.id, status: el.value }); toast('Status da iniciativa atualizado.'); }
+  catch (err) { toast(err.message, 'bad'); }
+});
+
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -1174,6 +2054,14 @@ document.addEventListener('click', async (e) => {
     if (err.message !== 'UNAUTHORIZED') toast(err.message, 'bad');
   }
 });
+
+async function bootAccountSelector() {
+  const accounts = await api('account.list', {}).catch(() => []);
+  const active = (accounts || []).filter(a => a.is_active !== 0);
+  if (!state.accountId || !active.some(a => a.id === state.accountId)) state.accountId = active[0]?.id || '';
+  const sel = $('#account');
+  sel.innerHTML = active.length ? active.map(a => `<option value="${esc(a.id)}" ${a.id === state.accountId ? 'selected' : ''}>${esc(a.display_name || a.id)} · ${esc(a.marketplace)}</option>`).join('') : '<option value="">nenhuma conta ativa</option>';
+}
 
 // ------------------------------------------------------------------ boot
 async function boot() {
@@ -1197,19 +2085,18 @@ async function boot() {
     if (s && s.activeAccountId) state.accountId = s.activeAccountId;
   } catch { /* primeiro uso */ }
 
-  const accounts = await api('account.list').catch(() => []);
-  if (accounts && accounts.length && !state.accountId) state.accountId = accounts[0].id;
-  const sel = $('#account');
-  if (accounts && accounts.length) {
-    sel.innerHTML = accounts
-      .map((a) => `<option value="${a.id}" ${a.id === state.accountId ? 'selected' : ''}>${esc(a.display_name || a.id)} · ${esc(a.marketplace)}</option>`)
-      .join('');
-  } else {
-    sel.innerHTML = '<option value="">nenhuma conta detectada</option>';
-  }
-  sel.addEventListener('change', () => { state.accountId = sel.value; renderView(); });
+  await bootAccountSelector();
+  $('#account').addEventListener('change', () => { state.accountId = $('#account').value; renderView(); });
 
   await renderView();
+  setInterval(async () => {
+    const detail = $('#browser-sync-detail');
+    if (state.view !== 'browserSync' || detail?.dataset.active !== 'true' || loadingSyncProgress) return;
+    loadingSyncProgress = true;
+    try { await showBrowserSyncBatch(); }
+    catch { /* O botão Atualizar permite mostrar a falha ao usuário. */ }
+    finally { loadingSyncProgress = false; }
+  }, 4000);
 }
 
 boot();

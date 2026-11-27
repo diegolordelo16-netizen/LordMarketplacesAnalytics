@@ -119,7 +119,8 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
   const db = new LocalDatabase({
     file: join(dataDir, 'marketplace-intelligence.db'),
     // O bundle fica em dist/local-agent/main.js e as migrações ao lado dele.
-    migrationsDir: options.migrationsDir ?? join(__dirname, 'migrations'),
+    migrationsDir: options.migrationsDir ?? (existsSync(join(__dirname, 'migrations'))
+      ? join(__dirname, 'migrations') : join(__dirname, '..', 'migrations')),
     backupDir: join(dataDir, 'backups'),
   });
   db.migrate();
@@ -139,7 +140,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     knowledge,
     autoUpgrade,
     capture,
-    version: options.version ?? '3.2.1',
+    version: options.version ?? process.env.MI_VERSION ?? '3.10.8',
   });
 
   // Token de sessão do painel: gerado a cada início, nunca persistido em disco.
@@ -149,7 +150,7 @@ export function bootstrap(options: BootstrapOptions = {}): Bootstrap {
     db,
     service,
     gemini,
-    version: options.version ?? '3.2.1',
+    version: options.version ?? process.env.MI_VERSION ?? '3.10.8',
     token,
     dataDir,
     close: async () => {
@@ -169,9 +170,9 @@ export function defaultDataDir(): string {
 }
 
 /** Executa o modo nativo: lê frames de stdin e responde em stdout. */
-export function runNativeHost(app: Bootstrap, logger = createFileLogger(join(app.dataDir, 'logs'))): void {
+export async function runNativeHost(app: Bootstrap, logger = createFileLogger(join(app.dataDir, 'logs'))): Promise<void> {
   logger.info(`serviço local em modo nativo (pid ${process.pid})`);
-  void processNativeStream(
+  await processNativeStream(
     process.stdin,
     { logger, service: (req) => app.service.handle(req) },
     (response) => process.stdout.write(encodeFrame(response)),
@@ -247,7 +248,7 @@ export async function ensurePanelSession(app: Bootstrap, dataDir = app.dataDir):
   if (boot.ok) {
     writeFileSync(passwordFile, `${email}\n${password}\n`, { encoding: 'utf8', mode: 0o600 });
     // eslint-disable-next-line no-console
-    console.log(`super_admin criado — e-mail: ${email} — senha: ${password}`);
+    console.log(`super_admin criado — e-mail: ${email}`);
     // eslint-disable-next-line no-console
     console.log(`credenciais salvas em ${passwordFile} (arquivo local, acesso restrito)`);
     return tryLogin(password);
@@ -427,7 +428,23 @@ export async function start(options: BootstrapOptions = {}): Promise<StartedApp>
     ],
   });
   const port = panel.port;
-  return { ...app, panel, url: `http://127.0.0.1:${port}/` };
+  const scheduledWorkTimer = setInterval(() => {
+    void app.service.processScheduledWork().catch((error: unknown) => {
+      createFileLogger(join(app.dataDir, 'logs'), 'service.log').error('falha no ciclo de agendamentos', error);
+    });
+  }, 60_000);
+  scheduledWorkTimer.unref();
+  const originalClose = app.close;
+  return {
+    ...app,
+    panel,
+    url: `http://127.0.0.1:${port}/`,
+    close: async () => {
+      clearInterval(scheduledWorkTimer);
+      await panel.close();
+      await originalClose();
+    },
+  };
 }
 
 /** CLI mínima: sem dependências externas, apenas process.argv. */
@@ -440,6 +457,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     port: portArg ? Number(portArg.split('=')[1]) : 0,
     dataDir: dataArg ? dataArg.split('=')[1] : undefined,
   };
+  if (mode === 'host') {
+    const app = bootstrap(options);
+    try { await runNativeHost(app); }
+    finally { app.db.close(); }
+    return;
+  }
 
   const app = await start(options);
   const logger = createFileLogger(join(app.dataDir, 'logs'), 'service.log');
@@ -464,7 +487,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  runNativeHost(app, logger);
+  void runNativeHost(app, logger);
 
   const shutdown = async () => {
     logger.info('encerrando serviço local');
@@ -474,12 +497,4 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
-}
-
-if (require.main === module) {
-  void main().catch((err) => {
-    // stdout é o canal do protocolo: erro vai para stderr
-    process.stderr.write(`falha ao iniciar: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
-    process.exit(1);
-  });
 }

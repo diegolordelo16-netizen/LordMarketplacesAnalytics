@@ -47,6 +47,7 @@ const PRESTART_PING_PATH = '/api/prestart/ping';
 const SUPPORTED_HOSTS = [
   { pattern: /(^|\.)mercadolivre\.com\.br$/, id: 'mercado_livre' },
   { pattern: /(^|\.)shopee\.com\.br$/, id: 'shopee' },
+  { pattern: /^sellercentral\.amazon\.com\.br$/, id: 'amazon' },
 ];
 
 function marketplaceOf(url) {
@@ -86,9 +87,9 @@ async function healthAt(port) {
  * Descobre a porta do serviço: a conhecida primeiro, depois a faixa local.
  * O serviço só escuta em 127.0.0.1, então a busca não sai da máquina.
  */
-async function discoverPort(force) {
+async function discoverPort() {
   const known = await resolvePort();
-  if (!force && (await healthAt(known))) return known;
+  if (await healthAt(known)) return known;
   for (let port = PORT_RANGE.start; port <= PORT_RANGE.end; port += 1) {
     if (port === known) continue;
     if (await healthAt(port)) {
@@ -120,7 +121,7 @@ async function sessionToken() {
  */
 async function syncSession(port) {
   if (await sessionToken()) return;
-  const target = port || (await discoverPort(false));
+  const target = port || (await discoverPort());
   if (!target) return;
   try {
     const res = await fetchWithTimeout(`http://127.0.0.1:${target}/api/token`, { method: 'GET' }, 2000);
@@ -135,7 +136,7 @@ async function syncSession(port) {
 
 async function pingPrestart(extra = {}) {
   try {
-    const port = await discoverPort(false);
+    const port = await discoverPort();
     if (!port) return;
     await syncSession(port);
     // O diagnóstico vai junto: é o que a tela de Pré-Start mostra quando a
@@ -160,7 +161,11 @@ async function pingPrestart(extra = {}) {
   }
 }
 
-chrome.runtime.onStartup.addListener(() => void pingPrestart());
+chrome.runtime.onStartup.addListener(() => {
+  chrome.alarms.create('mi.sync', { periodInMinutes: 1 });
+  void pingPrestart();
+  void processScheduledSyncs();
+});
 
 /**
  * O navegador desliga o service worker ocioso (MV3). Sem um alarme curto a
@@ -169,22 +174,44 @@ chrome.runtime.onStartup.addListener(() => void pingPrestart());
  */
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create('mi.heartbeat', { periodInMinutes: 1 });
+  chrome.alarms.create('mi.tasks', { periodInMinutes: 1 });
+  chrome.alarms.create('mi.sync', { periodInMinutes: 1 });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'mi.heartbeat') void pingPrestart();
+  if (alarm.name === 'mi.tasks') { void processDraftTasks(); void processPublishTasks(); }
+  if (alarm.name === 'mi.sync') void processScheduledSyncs();
 });
 
 // Rede de segurança: mesmo sem onInstalled (extensão já instalada), garante o alarme.
 void chrome.alarms.get('mi.heartbeat').then((alarm) => {
   if (!alarm) chrome.alarms.create('mi.heartbeat', { periodInMinutes: 1 });
+  chrome.alarms.get('mi.tasks').then((taskAlarm) => {
+    if (!taskAlarm) chrome.alarms.create('mi.tasks', { periodInMinutes: 1 });
+  });
+  chrome.alarms.get('mi.sync').then((syncAlarm) => {
+    if (!syncAlarm) chrome.alarms.create('mi.sync', { periodInMinutes: 1 });
+  });
+  chrome.alarms.get('mi.flush').then((alarm) => {
+    if (!alarm) chrome.alarms.create('mi.flush', { periodInMinutes: 5 });
+  });
 });
 void pingPrestart();
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status !== 'complete' || !tab?.url) return;
   const marketplace = marketplaceOf(tab.url);
-  if (marketplace) void pingPrestart({ marketplace, tabTitle: tab.title ?? '' });
+  if (marketplace) {
+    void pingPrestart({ marketplace, tabTitle: tab.title ?? '' });
+    void processDraftTasks();
+    void processPublishTasks();
+    void processScheduledSyncs();
+  }
+});
+
+chrome.tabs.onActivated.addListener(() => {
+  void processPublishTasks();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -265,7 +292,7 @@ async function callHttp(method, payload) {
   const stored = await chrome.storage.local.get(SESSION_KEY);
   const token = stored[SESSION_KEY]?.token;
   // Porta real descoberta, não a constante: o serviço pode ter subido em outra.
-  const port = await discoverPort(false);
+  const port = await discoverPort();
   if (!port) throw new Error('serviço local não encontrado nas portas locais');
   const send = (bearer) =>
     fetchWithTimeout(
@@ -303,44 +330,69 @@ async function callService(method, payload) {
   }
 }
 
-async function enqueue(item) {
-  const { [QUEUE_KEY]: queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
-  queue.push(item);
-  while (queue.length > MAX_QUEUE) queue.shift();
-  await chrome.storage.local.set({ [QUEUE_KEY]: queue });
+let queueWork = Promise.resolve();
+function withQueue(operation) {
+  const result = queueWork.then(operation);
+  queueWork = result.catch(() => undefined);
+  return result;
 }
 
-async function flushQueue() {
-  const { [QUEUE_KEY]: queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
-  if (queue.length === 0) return { sent: 0, left: 0 };
-  const left = [];
-  let sent = 0;
-  for (const item of queue) {
-    try {
-      const res = await callService(item.method, item.payload);
-      if (res && res.ok) sent += 1;
-      else left.push(item);
-    } catch {
-      left.push(item);
-      break;
+function enqueue(items) {
+  return withQueue(async () => {
+    const { [QUEUE_KEY]: queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
+    if (queue.length + items.length > MAX_QUEUE) throw new Error('fila local cheia; envie as capturas pendentes');
+    await chrome.storage.local.set({ [QUEUE_KEY]: [...queue, ...items] });
+  });
+}
+
+function captureAccepted(response) {
+  return response?.ok === true && response.result?.ok !== false;
+}
+
+function flushQueue() {
+  return withQueue(async () => {
+    const { [QUEUE_KEY]: queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
+    let sent = 0;
+    for (let index = 0; index < queue.length;) {
+      const item = queue[index];
+      try {
+        if (item.method === 'account.upsert') {
+          await ensureAccount(item.payload.marketplace, item.payload.accountId, { accountHandle: item.payload.handle });
+        } else {
+          if (item.account) await ensureAccount(item.account.marketplace, item.payload.accountId, item.account);
+          if (!captureAccepted(await callService(item.method, item.payload))) {
+            index += 1;
+            continue;
+          }
+        }
+      } catch {
+        break;
+      }
+      queue.splice(index, 1);
+      await chrome.storage.local.set({ [QUEUE_KEY]: queue });
+      sent += 1;
     }
-  }
-  await chrome.storage.local.set({ [QUEUE_KEY]: left });
-  return { sent, left: left.length };
+    return { sent, left: queue.length };
+  });
 }
 
 /**
  * Garante que a conta da página exista no serviço antes de ingerir dados.
- * O identificador é o que o adaptador leu da página; quando ele não veio, usa a
- * conta local do marketplace (uma por marketplace), nunca uma conta inventada.
+ * O identificador é derivado de um nome de conta visível no painel autenticado.
+ * Sem identidade estável, a captura é interrompida: nunca agrupa vendedores diferentes.
  */
 async function ensureAccount(marketplace, accountId, snapshot) {
+  if (!accountId || accountId === 'local:default') throw new Error('identidade da conta do vendedor não foi encontrada na interface; capture foi interrompida para não misturar contas');
   try {
     const known = await callService('account.list', {});
-    const list = Array.isArray(known?.result) ? known.result : [];
-    if (list.some((a) => a.id === accountId)) return;
+    if (!known?.ok || !Array.isArray(known.result)) throw new Error('consulta de contas indisponível');
+    const account = known.result.find((item) => item.id === accountId);
+    if (account) {
+      if (account.marketplace !== marketplace || account.is_active !== 1) throw new Error('conta inativa ou de outro marketplace');
+      return;
+    }
     const handle = typeof snapshot?.accountHandle === 'string' && snapshot.accountHandle ? snapshot.accountHandle : undefined;
-    await callService('account.upsert', {
+    const created = await callService('account.upsert', {
       marketplace,
       accountId,
       displayName: handle ?? `${marketplace} (conta local)`,
@@ -350,22 +402,27 @@ async function ensureAccount(marketplace, accountId, snapshot) {
       confidence: handle ? 0.6 : 0.3,
       verifiedByUser: false,
     });
+    if (!captureAccepted(created)) throw new Error(created?.error?.message ?? 'cadastro da conta recusado');
   } catch {
-    /* o serviço recusa a captura e a mensagem dele explica o motivo */
+    throw new Error('não foi possível registrar a identidade da conta; confirme a conta no painel antes de capturar');
   }
 }
 
 /** Pede o snapshot ao content script da aba e envia ao serviço. */
-async function captureTab(tabId) {
+async function captureTab(tabId, expected = {}) {
   const response = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_REQUEST' }).catch(() => null);
   if (!response || !response.ok) {
     return { ok: false, error: response?.error ?? 'página sem captura disponível' };
   }
   const snapshot = response.snapshot;
+  if ((expected.accountId && snapshot.accountId !== expected.accountId) ||
+      (expected.url && snapshot.url !== expected.url)) {
+    return { ok: false, error: 'a conta ou a página mudou antes da captura' };
+  }
   const now = new Date().toISOString();
   const payload = {
     marketplace: snapshot.marketplace,
-    accountId: snapshot.accountId ?? 'local:default',
+    accountId: snapshot.accountId ?? null,
     pageKind: snapshot.pageKind,
     url: snapshot.url,
     sourceClass: 'A_PRIMARY_UI',
@@ -373,33 +430,452 @@ async function captureTab(tabId) {
     collectedAt: now,
     method: 'content_script_dom',
     listings: snapshot.listings ?? [],
+    ...(snapshot.accountMetrics ? { accountMetrics: snapshot.accountMetrics } : {}),
     evidence: { ...(snapshot.evidence ?? {}), missing: (snapshot.missing ?? []).join(',') },
   };
 
-  if (payload.listings.length === 0) {
+  const customerVoice = Array.isArray(snapshot.customerVoice) ? snapshot.customerVoice.slice(0, 200) : [];
+  if (payload.listings.length === 0 && !payload.accountMetrics && customerVoice.length === 0) {
     return { ok: false, error: 'nenhum dado visível para capturar nesta página', snapshot };
   }
+  if (!payload.accountId) return { ok: false, error: 'identidade da conta não identificada; abra uma área do vendedor que mostre o nome da conta', snapshot };
 
   // A captura é recusada pelo serviço se a conta ainda não existir. A conta vem
   // da própria página (o vendedor logado), por isso é registrada aqui, uma vez,
   // antes do envio — sem inventar nome nem identificador.
-  await ensureAccount(payload.marketplace, payload.accountId, snapshot);
-
+  const account = { marketplace: payload.marketplace, accountHandle: snapshot.accountHandle };
+  const pending = [];
+  if (payload.listings.length || payload.accountMetrics) pending.push({ method: 'capture.ingest', payload, account, queuedAt: now });
+  if (customerVoice.length) pending.push({
+    method: 'voc.ingestBatch',
+    payload: { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice },
+    account, queuedAt: now,
+  });
   try {
-    const res = await callService('capture.ingest', payload);
-    if (!res.ok) return { ok: false, error: res.error?.message ?? 'falha no serviço', res };
-    return { ok: true, res, snapshot };
+    await ensureAccount(payload.marketplace, payload.accountId, snapshot);
+    let captureResult = null;
+    if (payload.listings.length || payload.accountMetrics) {
+      captureResult = await callService('capture.ingest', payload);
+      if (!captureAccepted(captureResult)) return { ok: false, error: captureResult.error?.message ?? captureResult.result?.errors?.[0] ?? 'falha no serviço', res: captureResult };
+      pending.shift();
+    }
+    let voiceResult = null;
+    if (customerVoice.length) {
+      voiceResult = await callService('voc.ingestBatch', { accountId: payload.accountId, sourceClass: 'A_PRIMARY_UI', items: customerVoice });
+      if (!captureAccepted(voiceResult)) return { ok: false, error: voiceResult.error?.message ?? 'falha ao registrar avaliações/reclamações', res: voiceResult };
+      pending.shift();
+    }
+    return { ok: true, res: captureResult, voice: voiceResult, snapshot };
   } catch (err) {
-    await enqueue({ method: 'capture.ingest', payload, queuedAt: now });
+    try { await enqueue(pending); }
+    catch (error) { return { ok: false, error: error.message, snapshot }; }
     return { ok: false, queued: true, error: err.message, snapshot };
   }
 }
 
-/** Diagnóstico barato (sem tentar o host nativo), anexado ao ping. */
+/** Espera uma navegação completa sem depender de endpoints privados. */
+function waitForTabComplete(tabId, expectedUrl, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error, tab) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (error) reject(error); else resolve(tab);
+    };
+    const onUpdated = (updatedId, changeInfo, tab) => {
+      if (updatedId !== tabId || changeInfo.status !== 'complete') return;
+      if (tab?.url && tab.url === expectedUrl) finish(null, tab);
+    };
+    const timer = setTimeout(() => finish(new Error('tempo esgotado aguardando a próxima página')), timeoutMs);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    void chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === 'complete' && tab.url === expectedUrl) finish(null, tab);
+    }).catch((err) => finish(err));
+  });
+}
+
+async function readCapturePageInfo(tabId) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const info = await chrome.tabs.sendMessage(tabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
+    if (info?.ok) return info;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return null;
+}
+
+/**
+ * Coleta paginada, iniciada pelo usuário, em uma aba temporária inativa.
+ * Só segue links next visíveis, no mesmo origin e na rota atual de anúncios.
+ * Limite rígido de cinco páginas; CAPTCHA/login interrompem a operação.
+ */
+async function captureListingPages(sourceTabId, requestedMaxPages = 5) {
+  const source = await chrome.tabs.get(sourceTabId);
+  const marketplace = marketplaceOf(source.url || '');
+  if (!marketplace) return { ok: false, error: 'aba não pertence a um marketplace suportado' };
+  const initialInfo = await chrome.tabs.sendMessage(sourceTabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
+  if (!initialInfo?.ok) return { ok: false, error: 'content script indisponível nesta página' };
+  if (initialInfo.pageKind !== 'seller_listings') return { ok: false, error: 'a coleta paginada só é habilitada na lista de anúncios do vendedor' };
+  if (initialInfo.loginRequired || initialInfo.challenge) return { ok: false, error: 'login ou verificação de segurança detectado; faça a verificação manual antes de continuar' };
+
+  const maxPages = Math.max(1, Math.min(5, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 5));
+  const temporary = await chrome.tabs.create({ url: source.url, active: false, windowId: source.windowId });
+  const seen = new Set();
+  const pageResults = [];
+  let currentUrl = source.url;
+  let stoppedReason = 'limite de páginas atingido';
+  try {
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+      const tab = await chrome.tabs.get(temporary.id);
+      currentUrl = tab.url || currentUrl;
+      if (marketplaceOf(currentUrl) !== marketplace || new URL(currentUrl).origin !== new URL(source.url).origin) {
+        stoppedReason = 'a navegação saiu do domínio/origem inicial';
+        break;
+      }
+      if (seen.has(currentUrl)) {
+        stoppedReason = 'ciclo de paginação detectado';
+        break;
+      }
+      seen.add(currentUrl);
+
+      const info = await readCapturePageInfo(temporary.id);
+      if (!info || info.marketplace !== marketplace || info.pageKind !== 'seller_listings') {
+        stoppedReason = 'a próxima página não é uma lista de anúncios reconhecida';
+        break;
+      }
+      if (info.loginRequired || info.challenge) {
+        stoppedReason = 'login/CAPTCHA ou verificação de segurança detectado; coleta interrompida para ação manual';
+        break;
+      }
+
+      const captured = await captureTab(temporary.id);
+      pageResults.push({ page: pageIndex + 1, url: currentUrl, ok: Boolean(captured.ok), listings: captured.snapshot?.listings?.length ?? 0, error: captured.ok ? undefined : captured.error });
+
+      const nextUrl = typeof info.nextPageUrl === 'string' ? info.nextPageUrl : '';
+      if (!nextUrl) {
+        stoppedReason = 'não há link de próxima página visível';
+        break;
+      }
+      let next;
+      try { next = new URL(nextUrl); } catch { stoppedReason = 'link de próxima página inválido'; break; }
+      const initial = new URL(source.url);
+      if (next.protocol !== 'https:' || next.origin !== initial.origin || marketplaceOf(next.href) !== marketplace || next.pathname !== new URL(currentUrl).pathname) {
+        stoppedReason = 'link de próxima página recusado por segurança';
+        break;
+      }
+      if (seen.has(next.href)) {
+        stoppedReason = 'ciclo de paginação detectado';
+        break;
+      }
+      if (pageIndex + 1 >= maxPages) break;
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      const loaded = waitForTabComplete(temporary.id, next.href);
+      await chrome.tabs.update(temporary.id, { url: next.href });
+      await loaded;
+    }
+  } finally {
+    await chrome.tabs.remove(temporary.id).catch(() => undefined);
+  }
+
+  const totalListings = pageResults.reduce((sum, page) => sum + page.listings, 0);
+  const pagesSucceeded = pageResults.filter((page) => page.ok).length;
+  return {
+    ok: pagesSucceeded > 0,
+    marketplace,
+    pagesScanned: pageResults.length,
+    pagesSucceeded,
+    totalListings,
+    stoppedReason,
+    pages: pageResults,
+  };
+}
+
+/**
+ * Navegação de leitura iniciada pelo vendedor, seguindo apenas links visíveis
+ * de áreas reconhecidas no mesmo origin. Nunca abre outro domínio, formulário
+ * de edição, anúncio público ou página que não pertença à allowlist.
+ */
+const AUTHORIZED_AREA_KINDS = new Set([
+  'seller_dashboard', 'seller_orders', 'seller_listings', 'seller_ads',
+  'seller_questions', 'seller_reputation', 'seller_returns', 'seller_complaints', 'seller_inventory',
+]);
+
+function normalizeAuthorizedAreaUrl(raw, expectedOrigin, marketplace) {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.origin !== expectedOrigin || marketplaceOf(url.href) !== marketplace) return null;
+    url.hash = '';
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+async function captureAuthorizedAreas(sourceTabId, requestedMaxPages = 8, options = {}) {
+  const source = await chrome.tabs.get(sourceTabId);
+  const marketplace = marketplaceOf(source.url || '');
+  if (!marketplace) return { ok: false, error: 'aba não pertence a um marketplace suportado' };
+  const origin = new URL(source.url).origin;
+  const initialInfo = await chrome.tabs.sendMessage(sourceTabId, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
+  if (!initialInfo?.ok || !AUTHORIZED_AREA_KINDS.has(initialInfo.pageKind)) {
+    return { ok: false, error: 'abra uma área reconhecida do painel do vendedor antes de iniciar a varredura' };
+  }
+  if (initialInfo.loginRequired || initialInfo.challenge) {
+    return { ok: false, error: 'login, CAPTCHA ou verificação de segurança detectado; faça a verificação manual antes de continuar' };
+  }
+
+  const expectedAccountId = options.expectedAccountId ?? initialInfo.accountId;
+  if (!expectedAccountId || initialInfo.accountId !== expectedAccountId) {
+    return { ok: false, error: 'a identificação da loja não corresponde à coleta' };
+  }
+  const saved = options.resumeState && typeof options.resumeState === 'object' ? options.resumeState : {};
+  const requested = Math.max(1, Math.min(12, Number.isInteger(requestedMaxPages) ? requestedMaxPages : 8));
+  const savedMax = Number.isInteger(saved.maxPages) ? Math.max(1, Math.min(12, saved.maxPages)) : requested;
+  const maxPages = Math.max(requested, savedMax);
+  const keyOf = (url) => {
+    const params = [...url.searchParams.entries()].filter(([key]) => /^(page|page_number|p|offset|limit|sort|order)$/i.test(key)).sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv));
+    const query = new URLSearchParams(params).toString();
+    return `${url.origin}${url.pathname}${query ? `?${query}` : ''}`;
+  };
+  const seen = new Set();
+  for (const raw of Array.isArray(saved.seenUrls) ? saved.seenUrls.slice(0, 12) : []) {
+    const safe = normalizeAuthorizedAreaUrl(raw, origin, marketplace);
+    if (safe) seen.add(keyOf(safe));
+  }
+  const pages = (Array.isArray(saved.pages) ? saved.pages : []).slice(0, 12).map((page, index) => ({
+    page: index + 1,
+    url: String(page.url || '').slice(0, 2048),
+    pageKind: AUTHORIZED_AREA_KINDS.has(page.pageKind) ? page.pageKind : 'seller_dashboard',
+    ok: Boolean(page.ok),
+    ...(page.error ? { error: String(page.error).slice(0, 500) } : {}),
+    queued: Boolean(page.queued),
+  }));
+  const queue = [];
+  const enqueueLinks = (links) => {
+    for (const link of Array.isArray(links) ? links : []) {
+      const target = normalizeAuthorizedAreaUrl(link?.url, origin, marketplace);
+      if (!target || !AUTHORIZED_AREA_KINDS.has(link?.pageKind)) continue;
+      const key = keyOf(target);
+      if (!seen.has(key) && !queue.some((item) => item.key === key) && queue.length < 100) {
+        queue.push({ key, url: target.href, label: String(link.label || link.pageKind).slice(0, 80) });
+      }
+    }
+  };
+  for (const item of Array.isArray(saved.pendingLinks) ? saved.pendingLinks.slice(0, 100) : []) {
+    const target = normalizeAuthorizedAreaUrl(item?.url, origin, marketplace);
+    if (!target || seen.has(keyOf(target))) continue;
+    if (!queue.some((queued) => queued.key === keyOf(target))) {
+      queue.push({ key: keyOf(target), url: target.href, label: String(item.label || 'área autorizada').slice(0, 80) });
+    }
+  }
+  const currentUrl = normalizeAuthorizedAreaUrl(source.url, origin, marketplace);
+  if (currentUrl && !seen.has(keyOf(currentUrl))) enqueueLinks(initialInfo.authorizedAreaLinks);
+
+  let stoppedReason = 'não foram encontrados outros links autorizados visíveis';
+  let progressError = null;
+  const persistProgress = async () => {
+    if (typeof options.onProgress !== 'function') return true;
+    const state = {
+      pagesScanned: pages.length,
+      pagesSucceeded: pages.filter((page) => page.ok).length,
+      pages: pages.map((page, index) => ({ ...page, page: index + 1 })),
+      seenUrls: [...seen].slice(0, 12),
+      pendingLinks: queue.slice(0, 100).map(({ url, label }) => ({ url, label })),
+      maxPages,
+      stoppedReason,
+    };
+    try {
+      await options.onProgress(state);
+      return true;
+    } catch (error) {
+      progressError = error instanceof Error ? error.message : 'falha ao persistir progresso da navegação';
+      stoppedReason = 'coleta pausada porque não foi possível persistir o progresso; retome após reconectar o serviço local';
+      return false;
+    }
+  };
+
+  // Na retomada, a página raiz e as áreas concluídas não são capturadas de novo.
+  if (currentUrl && !seen.has(keyOf(currentUrl)) && pages.length < maxPages) {
+    const firstCapture = await captureTab(sourceTabId, { accountId: expectedAccountId, url: initialInfo.url });
+    pages.push({ page: pages.length + 1, url: source.url, pageKind: initialInfo.pageKind, ok: Boolean(firstCapture.ok), error: firstCapture.ok ? undefined : firstCapture.error, queued: Boolean(firstCapture.queued) });
+    if (firstCapture.ok || firstCapture.queued) seen.add(keyOf(currentUrl));
+    enqueueLinks(initialInfo.authorizedAreaLinks);
+    if (!(await persistProgress())) {
+      return { ok: pages.some((page) => page.ok), marketplace, pagesScanned: pages.length, pagesSucceeded: pages.filter((page) => page.ok).length, pagesQueued: pages.filter((page) => page.queued).length, pendingPages: queue.length, areas: [...new Set(pages.map((page) => page.pageKind))], stoppedReason, progressError, pages };
+    }
+  } else {
+    enqueueLinks(initialInfo.authorizedAreaLinks);
+  }
+
+  let temporary = null;
+  try {
+    if (queue.length && pages.length < maxPages) {
+      temporary = await chrome.tabs.create({ url: source.url, active: false, windowId: source.windowId });
+      await readCapturePageInfo(temporary.id);
+    }
+    while (queue.length && pages.length < maxPages && temporary?.id) {
+      const item = queue[0];
+      const target = normalizeAuthorizedAreaUrl(item.url, origin, marketplace);
+      if (!target) { queue.shift(); continue; }
+      try {
+        const loaded = waitForTabComplete(temporary.id, target.href);
+        await Promise.all([loaded, chrome.tabs.update(temporary.id, { url: target.href })]);
+      } catch (error) {
+        stoppedReason = error instanceof Error ? error.message : 'falha ao abrir uma área autorizada';
+        break; // o link fica persistido na fila para a próxima retomada
+      }
+      const info = await readCapturePageInfo(temporary.id);
+      const current = await chrome.tabs.get(temporary.id);
+      const currentTarget = normalizeAuthorizedAreaUrl(current.url || '', origin, marketplace);
+      if (!currentTarget || !info?.ok) {
+        stoppedReason = 'a página não permaneceu no mesmo origin ou não respondeu ao content script';
+        break;
+      }
+      if (info.loginRequired || info.challenge || info.pageKind === 'login') {
+        stoppedReason = 'login/CAPTCHA ou verificação de segurança detectado; varredura pausada para ação manual';
+        break;
+      }
+      if (info.accountId !== expectedAccountId || keyOf(currentTarget) !== item.key || !AUTHORIZED_AREA_KINDS.has(info.pageKind)) {
+        stoppedReason = 'a área ou a conta da loja mudou durante a navegação';
+        break;
+      }
+      const captured = await captureTab(temporary.id, { accountId: expectedAccountId, url: info.url });
+      pages.push({ page: pages.length + 1, url: current.url, label: item.label, pageKind: info.pageKind, ok: Boolean(captured.ok), error: captured.ok ? undefined : captured.error, queued: Boolean(captured.queued) });
+      if (captured.ok || captured.queued) {
+        seen.add(item.key);
+        queue.shift();
+        enqueueLinks(info.authorizedAreaLinks);
+        stoppedReason = queue.length ? 'há mais áreas autorizadas visíveis ou o limite de páginas foi atingido' : 'todas as áreas autorizadas visíveis foram percorridas';
+      } else {
+        stoppedReason = 'captura da página falhou; a URL permaneceu na fila para nova tentativa';
+      }
+      if (!(await persistProgress())) break;
+      if (!captured.ok && !captured.queued) break;
+      if (queue.length && pages.length < maxPages) await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+    if (pages.length >= maxPages && queue.length) stoppedReason = `limite de segurança de ${maxPages} páginas atingido`;
+  } finally {
+    if (temporary?.id) await chrome.tabs.remove(temporary.id).catch(() => undefined);
+  }
+  // Persiste a fila remanescente e o motivo mesmo quando a navegação foi pausada.
+  if (!progressError) await persistProgress();
+  return {
+    ok: pages.some((page) => page.ok),
+    marketplace,
+    pagesScanned: pages.length,
+    pagesSucceeded: pages.filter((page) => page.ok).length,
+    pagesQueued: pages.filter((page) => page.queued).length,
+    pendingPages: queue.length,
+    areas: [...new Set(pages.map((page) => page.pageKind))],
+    stoppedReason,
+    ...(progressError ? { progressError } : {}),
+    pages,
+  };
+}
+
+/**
+ * Executor DRAFT apenas preenche campos; PUBLISH é separado e exige aprovação
+ * de super_admin, aba ativa, ID/conta exatos e confirmação nativa por anúncio.
+ */
+let processingDraftTasks = false;
+async function processDraftTasks() {
+  if (processingDraftTasks) return;
+  processingDraftTasks = true;
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (!tab.id || !tab.url) continue;
+      const marketplace = marketplaceOf(tab.url);
+      if (!marketplace) continue;
+      const context = await chrome.tabs.sendMessage(tab.id, { type: 'MI_TASK_CONTEXT' }).catch(() => null);
+      if (!context?.ok || context.sessionAuthenticated !== true || context.pageKind !== 'seller_listing_edit' || !context.externalListingId || !context.accountId) continue;
+      const claim = await callService('task.claimNext', { marketplace, accountId: context.accountId, externalListingId: context.externalListingId }).catch(() => null);
+      if (!claim?.ok || !claim.result || claim.result.ambiguous) continue;
+      const claimed = claim.result;
+      const applied = await chrome.tabs.sendMessage(tab.id, {
+        type: 'MI_TASK_APPLY_DRAFT', task: claimed.task, item: claimed.item,
+        externalListingId: claimed.externalListingId,
+      }).catch((err) => ({ ok: false, error: err?.message ?? 'aba indisponível' }));
+      await callService('task.itemResult', {
+        itemId: claimed.item.id, ok: Boolean(applied?.ok), accountId: context.accountId,
+        externalListingId: applied?.externalListingId ?? claimed.externalListingId,
+        message: applied?.ok ? `rascunho preenchido: ${(applied.fields ?? []).join(', ')}` : (applied?.error ?? 'não foi possível aplicar rascunho'),
+        ...(applied?.baseline ? { baseline: applied.baseline } : {}),
+        ...(applied?.sourceUrl ? { sourceUrl: applied.sourceUrl } : {}),
+      }).catch(() => undefined);
+    }
+  } finally {
+    processingDraftTasks = false;
+  }
+}
+
+
+/** Publicação autorizada: exclusivamente na aba ativa, com aprovação vigente e confirmação por anúncio. */
+let processingPublishTasks = false;
+async function processPublishTasks() {
+  if (processingPublishTasks) return;
+  processingPublishTasks = true;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    for (const tab of tabs) {
+      if (!tab.id || !tab.url || tab.active !== true) continue;
+      const marketplace = marketplaceOf(tab.url);
+      if (!['mercado_livre', 'shopee'].includes(marketplace)) continue;
+      const context = await chrome.tabs.sendMessage(tab.id, { type: 'MI_TASK_CONTEXT' }).catch(() => null);
+      if (!context?.ok || context.sessionAuthenticated !== true || context.pageKind !== 'seller_listing_edit' || !context.externalListingId || !context.accountId) continue;
+      const claim = await callService('task.claimNextPublish', {
+        marketplace, accountId: context.accountId, externalListingId: context.externalListingId,
+      }).catch(() => null);
+      if (!claim?.ok || !claim.result || claim.result.ambiguous) continue;
+      const claimed = claim.result;
+      let applied;
+      try {
+        applied = await chrome.tabs.sendMessage(tab.id, {
+          type: 'MI_TASK_PUBLISH_APPROVED', task: claimed.task, item: claimed.item,
+          externalListingId: claimed.externalListingId,
+        });
+      } catch (error) {
+        // A navegação pode ter ocorrido depois do clique. Estado incerto e sem retentativa automática.
+        applied = { ok: false, uncertain: true, clicked: true, message: error?.message ?? 'aba navegou ou deixou de responder durante o envio' };
+      }
+      const outcome = applied?.cancelled ? 'CANCELLED'
+        : applied?.ok && applied?.published === true && applied?.verified === true ? 'PUBLISHED'
+          : applied?.uncertain || applied?.clicked ? 'UNCERTAIN' : 'FAILED';
+      await callService('task.publishResult', {
+        approvalId: claimed.approvalId, externalListingId: applied?.externalListingId ?? claimed.externalListingId, outcome, message: applied?.message ?? applied?.error ?? outcome,
+        ...(applied?.after ? { after: applied.after } : {}),
+        ...(applied?.sourceUrl ? { sourceUrl: applied.sourceUrl } : {}),
+        ...(applied?.successText ? { successText: applied.successText } : {}),
+        ...(applied?.saveButtonLabel ? { saveButtonLabel: applied.saveButtonLabel } : {}),
+      }).catch(() => undefined);
+    }
+  } finally {
+    processingPublishTasks = false;
+  }
+}
+
+let lastNativeProbe = null;
+let nativeProbeWork = null;
+function probeNativeHost() {
+  if (nativeProbeWork) return nativeProbeWork;
+  nativeProbeWork = callNative('ping', {})
+    .then((response) => ({ ok: response?.ok === true, error: response?.error?.message ?? '' }))
+    .catch((error) => ({ ok: false, error: error.message }))
+    .then((result) => {
+      lastNativeProbe = { result, at: Date.now() };
+      return result;
+    }).finally(() => { nativeProbeWork = null; });
+  return nativeProbeWork;
+}
+
 async function diagnoseLight(port) {
+  const nativeHost = lastNativeProbe && Date.now() - lastNativeProbe.at < 5 * 60_000
+    ? lastNativeProbe.result : await probeNativeHost();
   return {
     version: chrome.runtime.getManifest().version,
     http: { ok: Boolean(port), port: port || 0 },
+    nativeHost: { ok: nativeHost.ok },
     token: Boolean(await sessionToken()),
     mode: 'light',
   };
@@ -409,6 +885,90 @@ async function diagnoseLight(port) {
  * Diagnóstico do que a extensão alcança (host nativo, HTTP, porta, token).
  * É o que a tela de Pré-Start mostra em vez de um «indisponível» sem causa.
  */
+
+/** Sincroniza apenas abas de vendedor já abertas e conta cuja identidade visível coincide com o lote. */
+async function syncAllOpenSellerTabs(batchId, requestedMaxPages = 6) {
+  if (typeof batchId !== 'string' || !batchId) throw new Error('batchId obrigatório');
+  const batch = await callService('sync.list', { batchId });
+  const accounts = batch?.result?.accounts;
+  if (!Array.isArray(accounts) || !accounts.length) throw new Error('lote sem contas pendentes');
+  const tabs = await chrome.tabs.query({});
+  const outcomes = [];
+  const notifyProgress = (detail) => {
+    try { chrome.runtime.sendMessage({ type: 'MI_SYNC_PROGRESS', batchId, ...detail }, () => void chrome.runtime.lastError); } catch { /* painel pode estar fechado */ }
+  };
+  notifyProgress({ current: 0, total: accounts.length, phase: 'STARTED', message: 'Lote de coleta iniciado; conferindo abas e identidades.' });
+  for (const account of accounts) {
+    if (['COMPLETED','PARTIAL','FAILED','SKIPPED'].includes(account.status)) continue;
+    let resumeState = {};
+    let resumeOrigin = null;
+    try {
+      resumeState = account.progress_json ? JSON.parse(account.progress_json) : {};
+      const savedUrl = resumeState.pendingLinks?.[0]?.url ?? resumeState.pages?.[0]?.url;
+      if (savedUrl) resumeOrigin = new URL(savedUrl).origin;
+    } catch { resumeState = {}; }
+    const candidates = tabs.filter((tab) => tab.id && marketplaceOf(tab.url || '') === account.marketplace &&
+      (!resumeOrigin || new URL(tab.url).origin === resumeOrigin));
+    let matched = null;
+    for (const tab of candidates) {
+      const info = await chrome.tabs.sendMessage(tab.id, { type: 'MI_CAPTURE_PAGE_INFO' }).catch(() => null);
+      if (info?.ok && info.accountId === account.account_id && !info.loginRequired && !info.challenge && AUTHORIZED_AREA_KINDS.has(info.pageKind)) {
+        matched = { tab, info }; break;
+      }
+    }
+    if (!matched) {
+      const pagesScanned = Number(account.pages_scanned ?? 0);
+      const pagesSucceeded = Number(account.pages_succeeded ?? 0);
+      const status = pagesSucceeded > 0 ? 'PARTIAL' : 'SKIPPED';
+      const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status, pagesScanned, pagesSucceeded, error: 'nenhuma aba autenticada aberta com a identidade desta conta; abra o painel do vendedor e refaça a sincronização' });
+      if (!captureAccepted(result)) throw new Error(result?.error?.message ?? 'resultado da conta não confirmado');
+      outcomes.push({ accountId: account.account_id, marketplace: account.marketplace, status, result });
+      notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, status, message: 'Não há aba autenticada correspondente.' });
+      continue;
+    }
+    const started = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status: 'RUNNING', pagesScanned: Number(account.pages_scanned ?? 0), pagesSucceeded: Number(account.pages_succeeded ?? 0) });
+    if (!captureAccepted(started)) throw new Error(started?.error?.message ?? 'início da coleta não confirmado');
+    const scan = await captureAuthorizedAreas(matched.tab.id, requestedMaxPages, {
+      resumeState,
+      expectedAccountId: account.account_id,
+      onProgress: async (progress) => {
+        const saved = await callService('sync.accountProgress', { batchId, accountId: account.account_id, ...progress });
+        if (!saved?.ok) throw new Error(saved?.error?.message ?? 'serviço não confirmou a gravação do progresso');
+        const latest = progress.pages?.at(-1);
+        notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, phase: 'PAGE', pagesScanned: progress.pagesScanned, pagesSucceeded: progress.pagesSucceeded, currentPage: latest?.page ?? 0, pendingPages: progress.pendingLinks.length, message: `Coletando página ${latest?.page ?? 0}; ${progress.pendingLinks.length} área(s) restantes.` });
+      },
+    });
+    if (scan.progressError) throw new Error(scan.stoppedReason);
+    const pages = Number(scan.pagesScanned ?? scan.pages?.length ?? 0);
+    const succeeded = Number(scan.pagesSucceeded ?? scan.pages?.filter((page) => page.ok).length ?? 0);
+    const status = !scan.ok ? 'FAILED' : succeeded === pages && Number(scan.pendingPages ?? 0) === 0 ? 'COMPLETED' : succeeded > 0 ? 'PARTIAL' : 'FAILED';
+    const result = await callService('sync.completeAccount', { batchId, accountId: account.account_id, status, pagesScanned: pages, pagesSucceeded: succeeded, ...(status === 'COMPLETED' ? {} : { error: scan.error ?? scan.stoppedReason }) });
+    if (!captureAccepted(result)) throw new Error(result?.error?.message ?? 'resultado da coleta não confirmado');
+    outcomes.push({ accountId: account.account_id, marketplace: account.marketplace, status, scan, result });
+    notifyProgress({ current: outcomes.length, total: accounts.length, accountId: account.account_id, marketplace: account.marketplace, status, pagesScanned: pages, pagesSucceeded: succeeded, message: `Conta processada: ${status}.` });
+  }
+  const result = { ok: outcomes.some((outcome) => outcome.status === 'COMPLETED' || outcome.status === 'PARTIAL'), batchId, outcomes, accountSwitching: false, note: 'nenhuma sessão foi trocada; contas sem aba correspondente foram puladas' };
+  notifyProgress({ current: outcomes.length, total: accounts.length, phase: 'FINISHED', message: `Lote finalizado: ${outcomes.length}/${accounts.length} conta(s) processada(s).` });
+  return result;
+}
+
+let processingScheduledSyncs = false;
+async function processScheduledSyncs() {
+  if (processingScheduledSyncs) return;
+  processingScheduledSyncs = true;
+  try {
+    const manual = await callService('sync.claimBrowserRequest', {});
+    const claimed = manual?.result?.claimed ? manual : await callService('sync.claimScheduled', {});
+    if (!claimed?.ok || !claimed.result?.claimed || !claimed.result?.batchId) return;
+    const batchId = claimed.result.batchId;
+    await syncAllOpenSellerTabs(batchId, 8);
+  } catch {
+    // A coleta pode ser retomada após expiração da reserva.
+  } finally {
+    processingScheduledSyncs = false;
+  }
+}
+
 async function diagnose() {
   const report = {
     version: chrome.runtime.getManifest().version,
@@ -416,13 +976,8 @@ async function diagnose() {
     http: { ok: false, port: 0, error: '' },
     token: false,
   };
-  try {
-    const res = await callNative('ping', {});
-    report.nativeHost.ok = Boolean(res?.ok);
-  } catch (err) {
-    report.nativeHost.error = err.message;
-  }
-  const port = await discoverPort(true);
+  report.nativeHost = await probeNativeHost();
+  const port = await discoverPort();
   report.http.port = port;
   if (port) {
     report.http.ok = await healthAt(port);
@@ -456,6 +1011,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (!tab?.id) throw new Error('nenhuma aba ativa');
         sendResponse(await captureTab(tab.id));
+        return;
+      }
+      if (message.method === 'capture.scanAuthorizedAreas') {
+        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!tab?.id) throw new Error('nenhuma aba ativa');
+        sendResponse({ ok: true, result: await captureAuthorizedAreas(tab.id, message.payload?.maxPages ?? 8) });
+        return;
+      }
+      if (message.method === 'capture.syncAllOpenTabs') {
+        sendResponse({ ok: true, result: await syncAllOpenSellerTabs(message.payload?.batchId, message.payload?.maxPages ?? 6) });
+        return;
+      }
+      if (message.method === 'capture.scanListingPages') {
+        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!tab?.id) throw new Error('nenhuma aba ativa');
+        sendResponse({ ok: true, result: await captureListingPages(tab.id, message.payload?.maxPages ?? 5) });
         return;
       }
       if (message.method === 'mi.diagnose') {

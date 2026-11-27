@@ -18,7 +18,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { IpcResponse } from '@mi/shared';
+import { MAX_MESSAGE_BYTES, type IpcResponse } from '@mi/shared';
 
 export interface PanelServerOptions {
   port: number;
@@ -302,7 +302,7 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
           return;
         }
         try {
-          const body = await readJson(req);
+          const body = await readJson(req, MAX_MESSAGE_BYTES);
           const response = await options.service(body);
           send(res, response.ok ? 200 : 400, response);
         } catch (err) {
@@ -351,6 +351,7 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
     })();
   });
 
+  let closing: Promise<void> | undefined;
   return {
     server,
     get port() {
@@ -359,7 +360,7 @@ export function createPanelServer(options: PanelServerOptions): PanelServer {
       return actualPort;
     },
     close: () =>
-      new Promise<void>((resolve, reject) => {
+      closing ??= new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       }),
   } as PanelServer;

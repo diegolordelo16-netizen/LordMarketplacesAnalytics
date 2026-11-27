@@ -11,6 +11,7 @@ import { evaluateQualityGate, effectiveConfidence, SOURCE_CLASS_TRUST } from '..
 import { sampleSizePerArm, compareProportions, detectSrm, normalCdf, betaCredibleInterval } from '../src/math/stats';
 import { decideVerdict, validateExperimentPlan } from '../src/experiments/design';
 import { findDuplicates, findOutliers, findCrossSourceDivergence, buildQualityReport } from '../src/data-intelligence/quality';
+import { IPC_METHODS } from '../src/types/contracts';
 
 const prov = {
   sourceClass: 'A_PRIMARY_UI' as const,
@@ -154,6 +155,8 @@ describe('motor financeiro (§10)', () => {
 
   it('decompõe receita até contribuição', () => {
     const r = simulateScenario({ priceCents: 10000, quantity: 1, fee, costs });
+    expect(r.realizedResultCents).toBeNull();
+    expect(r.formulaNotes.some((note) => note.includes('Resultado realizado'))).toBe(true);
     expect(r.grossRevenueCents).toBe(10000);
     expect(r.commissionCents).toBe(1400);
     expect(r.fixedFeeCents).toBe(600);
@@ -554,5 +557,17 @@ describe('estatística de experimentação (§15)', () => {
     });
     expect(v.ok).toBe(false);
     expect(v.errors.join(' ')).toMatch(/proteção/);
+  });
+});
+
+
+describe('contratos IPC', () => {
+  it('declara métodos de detalhe KPI e ciclo completo de importação de conectores', () => {
+    expect(IPC_METHODS).toContain('kpi.compare.detail');
+    expect(IPC_METHODS).toContain('connector.import.list');
+    expect(IPC_METHODS).toContain('connector.import.get');
+    expect(IPC_METHODS).toContain('connector.import.commit');
+    expect(IPC_METHODS).toContain('backup.restore');
+    expect(new Set(IPC_METHODS).size).toBe(IPC_METHODS.length);
   });
 });

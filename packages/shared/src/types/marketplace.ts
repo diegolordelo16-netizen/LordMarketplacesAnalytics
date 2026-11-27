@@ -141,6 +141,7 @@ export const PAGE_KINDS = [
   'seller_questions',
   'seller_reputation',
   'seller_returns',
+  'seller_complaints',
   'seller_inventory',
   'login',
   'challenge',

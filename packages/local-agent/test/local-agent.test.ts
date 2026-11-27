@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalDatabase } from '../src/db/database';
 import { TaskScheduler } from '../src/scheduler/task-scheduler';
 import { SecretStore, hashPassword } from '../src/security/secrets';
@@ -11,7 +11,7 @@ import { AutoUpgradeEngine, applyUnifiedDiff, extractTargetPaths } from '../src/
 import { CaptureService } from '../src/capture/capture-service';
 import { LocalService, redactPII } from '../src/service';
 import { evaluateGuard, GUARD_CHECKS } from '../src/guard/automation-guard';
-import { mercadoLivreAdapter, shopeeAdapter, adapterForUrl, unsupportedCapabilities } from '../src/adapters';
+import { mercadoLivreAdapter, shopeeAdapter, amazonAdapter, adapterForUrl, unsupportedCapabilities } from '../src/adapters';
 
 let dir: string;
 let db: LocalDatabase;
@@ -60,6 +60,365 @@ afterEach(() => {
 
 const call = (method: string, payload?: unknown, useToken = true) =>
   service.handle({ id: 'r', protocolVersion: 1, method, payload, token: useToken ? token : undefined });
+
+function seedImportAccount(id: string): void {
+  const at = '2026-11-25T12:00:00.000Z';
+  db.db.prepare('INSERT INTO accounts (id,marketplace,external_ref,display_name,handle,detection_confidence,verified_by_user,is_active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run(id,'mercado_livre',`seller-${id}`,`Loja ${id}`,id,1,1,1,at,at);
+}
+
+
+describe('capacidades adicionais 3.10.3', () => {
+  it('entrega à extensão apenas lotes solicitados pelo dashboard e protege a retomada', async () => {
+    seedImportAccount('acct-browser-request');
+    const payload = { scope: 'ACCOUNT', accountId: 'acct-browser-request' };
+    const direct = await call('sync.createAll', payload);
+    expect(direct.ok).toBe(true);
+    expect((await call('sync.claimBrowserRequest', {})).result).toEqual({ claimed: false });
+
+    const queued = await call('sync.createAll', { ...payload, browserRequest: true });
+    const { batchId } = queued.result as { batchId: string };
+    expect(queued.ok).toBe(true);
+    const attempts = await Promise.all([call('sync.claimBrowserRequest', {}), call('sync.claimBrowserRequest', {})]);
+    expect(attempts.map((result) => result.result)).toEqual([
+      { claimed: true, batchId, recoveredStaleLease: false }, { claimed: false },
+    ]);
+    const firstPage = 'https://vendedores.mercadolivre.com.br/resumo';
+    const pending = 'https://vendedores.mercadolivre.com.br/vendas';
+    expect((await call('sync.accountProgress', {
+      batchId, accountId: payload.accountId, pagesScanned: 1, pagesSucceeded: 1,
+      pages: [{ page: 1, pageKind: 'seller_dashboard', url: firstPage, ok: true }],
+      pendingLinks: [{ url: pending, label: 'Vendas' }], seenUrls: [firstPage], maxPages: 8,
+    })).ok).toBe(true);
+    const premature = await call('sync.completeAccount', { batchId, accountId: payload.accountId, status: 'COMPLETED', pagesScanned: 1, pagesSucceeded: 1 });
+    expect(premature.error?.message).toContain('páginas pendentes');
+    db.db.prepare("UPDATE sync_batches SET browser_claimed_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(batchId);
+    expect((await call('sync.claimBrowserRequest', {})).result).toEqual({ claimed: false });
+    db.db.prepare("UPDATE sync_batch_accounts SET progress_updated_at='2000-01-01T00:00:00.000Z' WHERE batch_id=?").run(batchId);
+    expect((await call('sync.claimBrowserRequest', {})).result).toEqual({ claimed: true, batchId, recoveredStaleLease: true });
+    expect((await call('sync.list', { batchId })).result).toMatchObject({
+      accounts: [{ status: 'RUNNING', pages_scanned: 1 }],
+      pageRuns: [{ page_no: 1, page_url: firstPage }],
+    });
+  });
+
+  it('semeia marketplaces e permite lote em todas as contas de marketplaces habilitados', async () => {
+    seedImportAccount('acct-sync-ml');
+    const at = '2026-11-25T12:00:00.000Z';
+    db.db.prepare('INSERT INTO accounts (id,marketplace,external_ref,display_name,handle,detection_confidence,verified_by_user,is_active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run('acct-sync-shopee','shopee','seller-shopee','Loja Shopee','seller-shopee',1,1,1,at,at);
+    const created = await call('sync.createAll', { scope: 'ALL_ENABLED_MARKETPLACES' });
+    expect(created.ok).toBe(true);
+    const result = created.result as { batchId: string; accounts: Array<{ account_id: string; marketplace: string }> };
+    expect(result.accounts.map((a) => a.marketplace)).toEqual(['mercado_livre','shopee']);
+    const first = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-ml', status: 'COMPLETED', pagesScanned: 2, pagesSucceeded: 2 });
+    expect(first.ok).toBe(true);
+    const second = await call('sync.completeAccount', { batchId: result.batchId, accountId: 'acct-sync-shopee', status: 'SKIPPED', pagesScanned: 0, pagesSucceeded: 0, error: 'aba não aberta' });
+    expect((second.result as { batchStatus: string }).batchStatus).toBe('PARTIAL');
+  });
+
+  it('persiste modos operacionais sem liberar publicações nem escritas remotas', async () => {
+    const changed = await call('operation.mode.set', { mode: 'AUTO_PILOT' });
+    expect(changed.ok).toBe(true);
+    expect((changed.result as any).remoteWritesEnabled).toBe(false);
+    expect((changed.result as any).policy.publish).toBe(false);
+    expect((changed.result as any).policy.requireHumanApproval).toBe(true);
+    const loaded = await call('operation.mode.get', {});
+    expect((loaded.result as any).mode).toBe('AUTO_PILOT');
+    expect((loaded.result as any).hardLimits.campaignExecution).toBe(false);
+  });
+
+  it('calcula lucro realizado somente de valores e evidência informados', async () => {
+    seedImportAccount('acct-realized');
+    const payload = {
+      accountId: 'acct-realized', periodStart: '2026-11-01T00:00:00.000Z', periodEnd: '2026-11-30T23:59:59.000Z',
+      netRevenueCents: 100000, productCostCents: 30000, packagingCents: 2000, shippingCents: 5000,
+      marketplaceFeesCents: 8000, taxesCents: 3000, adSpendCents: 4000, refundsCents: 1000,
+      returnLogisticsCents: 500, cancellationLossCents: 500, otherCostsCents: 1000,
+      sourceClass: 'F_USER_INPUT', evidence: { source: 'relatório de conciliação', file: 'conciliação-novembro.csv' },
+    };
+    const upsert = await call('finance.realized.upsert', payload);
+    expect(upsert.ok).toBe(true);
+    expect((upsert.result as any).realizedProfitCents).toBe(45000);
+    expect((upsert.result as any).classification).toBe('REALIZED_FROM_REPORTED_INPUT');
+    const summary = await call('finance.realized.summary', { accountId: 'acct-realized' });
+    expect((summary.result as any).realizedProfitCents).toBe(45000);
+  });
+
+  it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
+    seedImportAccount('acct-voc');
+    const inserted = await call('voc.ingestBatch', { accountId: 'acct-voc', items: [
+      { kind: 'COMPLAINT', text: 'Meu pedido atrasou, contato teste@example.com', externalRef: 'complaint-1' },
+      { kind: 'RETURN_REASON', text: 'Produto chegou quebrado', externalRef: 'return-1' },
+      { kind: 'COMPLAINT', text: 'Meu pedido atrasou, contato teste@example.com', externalRef: 'complaint-1' },
+    ] });
+    expect(inserted.ok).toBe(true);
+    expect((inserted.result as any).inserted).toBe(2);
+    expect((inserted.result as any).duplicates).toBe(1);
+    const rows = db.rows<{ kind: string; text_redacted: string }>('SELECT kind,text_redacted FROM customer_voice_items WHERE account_id=? ORDER BY kind', 'acct-voc');
+    expect(rows.some((row) => row.kind === 'COMPLAINT' && row.text_redacted.includes('[email]'))).toBe(true);
+    expect(rows.some((row) => row.kind === 'RETURN_REASON')).toBe(true);
+  });
+
+  it('executa schedules vencidos em ciclos controlados e registra execuções', async () => {
+    seedImportAccount('acct-schedule');
+    const analysis = await call('analysis.schedule.create', { accountId: 'acct-schedule', mode: 'RAPIDA', days: 7, cadence: 'daily' });
+    const report = await call('report.schedule.create', { accountId: 'acct-schedule', reportType: 'EXECUTIVO', format: 'json', cadence: 'daily' });
+    expect(analysis.ok && report.ok).toBe(true);
+    db.db.prepare("UPDATE analysis_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run((analysis.result as any).id);
+    db.db.prepare("UPDATE report_schedules SET next_run_at='2000-01-01T00:00:00.000Z' WHERE id=?").run((report.result as any).id);
+    const processed = await service.processScheduledWork();
+    expect(processed.analyses).toBe(1);
+    expect(processed.reports).toBe(1);
+    const runs = await call('report.schedule.runs', { scheduleId: (report.result as any).id });
+    expect((runs.result as any[])).toHaveLength(1);
+    expect((runs.result as any[])[0].status).toBe('COMPLETED');
+  });
+
+  it('importa texto de PDF digital apenas para staging e preserva revisão manual', async () => {
+    seedImportAccount('acct-pdf');
+    const pdf = '%PDF-1.4\n1 0 obj << >> stream\nBT /F1 12 Tf (Relatorio mensal) Tj ET\nendstream\nendobj\n%%EOF';
+    const imported = await call('connector.import', { accountId: 'acct-pdf', fileName: 'relatorio.pdf', fileType: 'pdf', base64: Buffer.from(pdf, 'latin1').toString('base64') });
+    expect(imported.ok).toBe(true);
+    expect((imported.result as any).staged).toBe(true);
+    expect((imported.result as any).status).toBe('PENDENTE_VALIDACAO');
+    expect((imported.result as any).extractedTextChars).toBeGreaterThan(0);
+    const job = db.row<{ status: string }>('SELECT status FROM import_jobs WHERE id=?', (imported.result as any).jobId);
+    expect(job?.status).toBe('PENDENTE_VALIDACAO');
+  });
+
+  it('registra conectores externos como não conectados enquanto faltarem adapters OAuth/API', async () => {
+    const registry = db.rows<{ id: string; status: string }>('SELECT id,status FROM connector_registry WHERE id IN (\'google_analytics4\',\'google_search_console\',\'google_trends_public\') ORDER BY id');
+    expect(registry).toHaveLength(3);
+    expect(registry.every((row) => row.status === 'NAO_CONECTADO')).toBe(true);
+  });
+});
+
+describe('restauração segura de backup', () => {
+  it('restaura somente backup registrado e validado, preservando o estado anterior', () => {
+    db.db.exec('CREATE TABLE restore_probe (value TEXT NOT NULL)');
+    db.db.prepare('INSERT INTO restore_probe(value) VALUES (?)').run('estado-original');
+    const backup = db.backup('teste de restauração');
+    db.db.prepare('UPDATE restore_probe SET value=?').run('estado-posterior');
+    const restored = db.restoreBackup(backup.id);
+    expect(db.row<{value:string}>('SELECT value FROM restore_probe')?.value).toBe('estado-original');
+    expect(restored.integrity.ok).toBe(true);
+    expect(restored.previousFile.endsWith('.bak')).toBe(true);
+  });
+
+  it('recusa backup adulterado pelo checksum registrado', () => {
+    const backup = db.backup('teste checksum');
+    writeFileSync(backup.path, 'arquivo alterado');
+    expect(() => db.restoreBackup(backup.id)).toThrow(/checksum/);
+  });
+
+  it('expõe restauração por IPC apenas com confirmação explícita', async () => {
+    db.db.exec('CREATE TABLE restore_ipc_probe (value TEXT NOT NULL)');
+    db.db.prepare('INSERT INTO restore_ipc_probe(value) VALUES (?)').run('valor salvo');
+    const backup = db.backup('teste IPC restore');
+    db.db.prepare('UPDATE restore_ipc_probe SET value=?').run('valor novo');
+    const rejected = await call('backup.restore', { backupId: backup.id, confirmed: false });
+    expect(rejected.ok).toBe(false);
+    const result = await call('backup.restore', { backupId: backup.id, confirmed: true });
+    expect(result.ok).toBe(true);
+    expect(db.row<{value:string}>('SELECT value FROM restore_ipc_probe')?.value).toBe('valor salvo');
+  });
+});
+
+describe('evidência em snapshots individuais', () => {
+  it('preserva rótulos financeiros e filtros/período em snapshots de anúncio', async () => {
+    seedImportAccount('acct-listing-evidence');
+    const at = '2026-11-26T15:00:00.000Z';
+    const captured = await call('capture.ingest', {
+      marketplace: 'mercado_livre', accountId: 'acct-listing-evidence', pageKind: 'product_detail',
+      url: 'https://www.mercadolivre.com.br/anuncio/ML-TESTE-001', sourceClass: 'A_PRIMARY_UI',
+      referenceAt: at, collectedAt: at, method: 'content_script_dom',
+      listings: [{ listingId: 'ML-TESTE-001', title: 'Produto teste', gmv: 1200, netRevenue: 1080, commission: 72 }],
+      evidence: { gmv: 'Faturamento bruto', netRevenue: 'Receita líquida', commission: 'Comissão', filtersAndPeriod: '["Período=Últimos 7 dias"]' },
+    });
+    expect(captured.ok).toBe(true);
+    const row = db.row<{ evidence_json: string; metrics_json: string }>(
+      'SELECT evidence_json,metrics_json FROM listing_snapshots WHERE account_id=?', 'acct-listing-evidence',
+    );
+    expect(JSON.parse(row!.evidence_json)).toMatchObject({
+      gmv: 'Faturamento bruto', netRevenue: 'Receita líquida', commission: 'Comissão',
+      filtersAndPeriod: '["Período=Últimos 7 dias"]',
+    });
+    expect(JSON.parse(row!.metrics_json)).toMatchObject({ gmv: 1200, netRevenue: 1080, commission: 72 });
+  });
+});
+
+describe('captura de métricas agregadas da conta', () => {
+  it('aceita página de Ads sem listingId e alimenta histórico com proveniência', async () => {
+    seedImportAccount('acct-account-snapshot');
+    const at = new Date().toISOString();
+    const captured = await call('capture.ingest', {
+      marketplace: 'mercado_livre', accountId: 'acct-account-snapshot', pageKind: 'seller_ads',
+      url: 'https://www.mercadolivre.com.br/anuncios/publicidade', sourceClass: 'A_PRIMARY_UI',
+      referenceAt: at, collectedAt: at, method: 'content_script_dom', listings: [],
+      accountMetrics: { adSpend: 85.5, adClicks: 120, adAttributedRevenue: 410.25, adAttributedOrders: 7 },
+      evidence: { adSpend: 'Investimento em publicidade', adClicks: 'Cliques em anúncios' },
+    });
+    expect(captured.ok).toBe(true);
+    const result = captured.result as { accountSnapshotsIngested: number; listingsIngested: number };
+    expect(result.accountSnapshotsIngested).toBe(1);
+    expect(result.listingsIngested).toBe(0);
+    expect(db.row<{ count:number }>('SELECT COUNT(*) AS count FROM account_snapshots WHERE account_id=?','acct-account-snapshot')?.count).toBe(1);
+    expect(db.row<{ count:number }>("SELECT COUNT(*) AS count FROM data_provenance WHERE entity='account_snapshot' AND account_id=?",'acct-account-snapshot')?.count).toBe(4);
+    const history = await call('kpi.history', { accountId: 'acct-account-snapshot', days: 30 });
+    expect(history.ok).toBe(true);
+    const points = (history.result as { points:Array<Record<string,unknown>> }).points;
+    expect(points).toHaveLength(1);
+    expect(points[0]!.adSpendCents).toBe(8550);
+    expect(points[0]!.adAttributedRevenueCents).toBe(41025);
+    expect(points[0]!.gmv).toBeNull();
+  });
+
+  it('armazena receita líquida e taxas observadas em métricas agregadas com evidência', async () => {
+    seedImportAccount('acct-fees');
+    const at = new Date().toISOString();
+    const captured = await call('capture.ingest', {
+      marketplace: 'mercado_livre', accountId: 'acct-fees', pageKind: 'seller_orders',
+      url: 'https://www.mercadolivre.com.br/vendas/pedidos', sourceClass: 'A_PRIMARY_UI',
+      referenceAt: at, collectedAt: at, method: 'content_script_dom', listings: [],
+      accountMetrics: { gmv: 1000, netRevenue: 910, commission: 65, fixedFee: 5, shippingFee: 12, tax: 8, marketplaceFee: 3 },
+      evidence: { netRevenue: 'Receita líquida', commission: 'Comissão', fixedFee: 'Tarifa fixa' },
+    });
+    expect(captured.ok).toBe(true);
+    const row = db.row<{ metrics_json:string; evidence_json:string }>('SELECT metrics_json,evidence_json FROM account_snapshots WHERE account_id=?','acct-fees');
+    expect(JSON.parse(row!.metrics_json)).toMatchObject({ netRevenue:910,commission:65,fixedFee:5,shippingFee:12,tax:8,marketplaceFee:3 });
+    expect(JSON.parse(row!.evidence_json)).toMatchObject({ netRevenue:'Receita líquida',commission:'Comissão' });
+    const history = await call('kpi.history', { accountId:'acct-fees',days:30 });
+    const point = (history.result as {points:Array<Record<string,unknown>>}).points[0]!;
+    expect(point.netRevenueCents).toBe(91000);
+    expect(point.commission).toBe(65);
+    expect(point.fixedFee).toBe(5);
+  });
+
+  it('recusa payload sem anúncios e sem métricas agregadas', async () => {
+    seedImportAccount('acct-account-empty');
+    const result = await call('capture.ingest', {
+      marketplace: 'mercado_livre', accountId: 'acct-account-empty', pageKind: 'seller_ads',
+      url: 'https://www.mercadolivre.com.br/anuncios/publicidade', sourceClass: 'A_PRIMARY_UI',
+      referenceAt: '2026-11-26T13:00:00.000Z', collectedAt: '2026-11-26T13:00:00.000Z', method: 'content_script_dom', listings: [],
+    });
+    expect(result.result).toMatchObject({ ok: false, errors: [expect.stringContaining('captura sem anúncios nem métricas de conta')] });
+  });
+});
+
+describe('SKU e captura isolados por conta', () => {
+  it('permite o mesmo código SKU em duas lojas e associa cada anúncio ao SKU correto', async () => {
+    seedImportAccount('acct-sku-a');
+    seedImportAccount('acct-sku-b');
+    const capture = (accountId: string, listingId: string, at: string) => service.handle({
+      id: `capture-${listingId}`, protocolVersion: 1, method: 'capture.ingest', token,
+      payload: {
+        marketplace: 'mercado_livre', accountId, pageKind: 'seller_listings',
+        url: 'https://www.mercadolivre.com.br/anuncios', sourceClass: 'A_PRIMARY_UI',
+        referenceAt: at, collectedAt: at, method: 'content_script_dom',
+        listings: [{ listingId, sku: 'SKU-REPETIDO', title: `Produto ${listingId}`, stockAvailable: 4 }],
+        evidence: { source: 'regression-test' },
+      },
+    });
+    const atA = '2026-11-26T12:00:00.000Z';
+    const atB = '2026-11-26T12:01:00.000Z';
+    const resultA = await capture('acct-sku-a', 'ML-SKU-A', atA);
+    const resultB = await capture('acct-sku-b', 'ML-SKU-B', atB);
+    expect(resultA.ok).toBe(true);
+    expect(resultB.ok).toBe(true);
+    const rows = db.rows<{account_id:string;sku_id:string}>('SELECT account_id,sku_id FROM listings WHERE external_id IN (?,?) ORDER BY account_id','ML-SKU-A','ML-SKU-B');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.account_id).not.toBe(rows[1]!.account_id);
+    expect(rows[0]!.sku_id).not.toBe(rows[1]!.sku_id);
+    expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM skus WHERE sku_code=?','SKU-REPETIDO')?.count).toBe(2);
+    expect(db.db.prepare('PRAGMA foreign_key_check').all()).toHaveLength(0);
+  });
+});
+
+describe('adapter Amazon Seller Central', () => {
+  it('reconhece somente o domínio Seller Central e declara captura parcial', () => {
+    expect(adapterForUrl('https://sellercentral.amazon.com.br/myinventory/inventory')).toBe(amazonAdapter);
+    expect(adapterForUrl('https://sellercentral.amazon.com/')).toBeNull();
+    expect(amazonAdapter.capabilities.listing_capture).toBe('PARCIALMENTE_SUPORTADO');
+    expect(amazonAdapter.capabilities.ads_capture).toBe('NAO_DISPONIVEL');
+    expect(amazonAdapter.detectPage('https://sellercentral.amazon.com.br/myinventory/inventory', [])?.kind).toBe('seller_listings');
+  });
+});
+
+describe('importação de arquivos em staging', () => {
+  it('interpreta CSV e mantém as linhas pendentes de mapeamento, sem promover KPIs', async () => {
+    seedImportAccount('acct-stage-csv');
+    const response = await call('connector.import', {
+      fileName: 'vendas.csv', fileType: 'csv', accountId: 'acct-stage-csv', csvText: 'pedido;valor\nP-1;19.90\nP-2;25.00',
+    });
+    expect(response.ok).toBe(true);
+    const result = response.result as { jobId: string; rowCount: number; status: string; staged: boolean };
+    expect(result.rowCount).toBe(2);
+    expect(result.status).toBe('PENDENTE_VALIDACAO');
+    expect(result.staged).toBe(true);
+    expect(db.row<{ count: number }>('SELECT COUNT(*) AS count FROM import_job_rows WHERE job_id=?', result.jobId)?.count).toBe(2);
+    expect(db.row<{ status: string }>('SELECT status FROM import_jobs WHERE id=?', result.jobId)?.status).toBe('PENDENTE_VALIDACAO');
+  });
+
+  it('interpreta XLSX real e cria staging sem aplicar linhas ao catálogo', async () => {
+    seedImportAccount('acct-stage-xlsx');
+    const xlsx = readFileSync(new URL('./fixtures/tabular-mini.xlsx', import.meta.url)).toString('base64');
+    const response = await call('connector.import', {
+      fileName: 'relatorio.xlsx', fileType: 'xlsx', accountId: 'acct-stage-xlsx', base64: xlsx,
+    });
+    expect(response.ok).toBe(true);
+    const result = response.result as { jobId: string; rowCount: number; previewRows: Array<Record<string, unknown>> };
+    expect(result.rowCount).toBe(2);
+    expect(result.previewRows[0]).toEqual({ Indicador: 'revenue', Valor: 1234.5 });
+    expect(db.row<{ count: number }>('SELECT COUNT(*) AS count FROM import_job_rows WHERE job_id=?', result.jobId)?.count).toBe(2);
+    expect(db.row<{ count: number }>('SELECT COUNT(*) AS count FROM catalog_products')?.count).toBe(0);
+  });
+
+  it('promove CSV mapeado para snapshots por conta e registra proveniência', async () => {
+    const at = '2026-11-25T14:00:00.000Z';
+    db.db.prepare('INSERT INTO accounts (id,marketplace,external_ref,display_name,handle,detection_confidence,verified_by_user,is_active,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run('acct-import','mercado_livre','seller-import','Loja Importação','loja-import',1,1,1,at,at);
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run('listing-import','acct-import','mercado_livre','ML-123','Produto teste','ACTIVE',at,at);
+    const staged = await call('connector.import', {
+      fileName: 'indicadores.csv', fileType: 'csv', accountId: 'acct-import',
+      csvText: 'anuncio;faturamento;pedidos;data\nML-123;1.234,50;4;2026-11-25T14:00:00.000Z',
+    });
+    expect(staged.ok).toBe(true);
+    const jobId = (staged.result as { jobId: string }).jobId;
+    const committed = await call('connector.import.commit', {
+      jobId, accountId: 'acct-import',
+      mapping: { externalId: 'anuncio', capturedAt: 'data', metrics: { gmv: 'faturamento', orders: 'pedidos' } },
+    });
+    expect(committed.ok).toBe(true);
+    const snapshot = db.row<{ metrics_json: string; source_class: string }>('SELECT metrics_json,source_class FROM listing_snapshots WHERE listing_id=?', 'listing-import');
+    expect(snapshot?.source_class).toBe('F_USER_INPUT');
+    expect(JSON.parse(snapshot!.metrics_json)).toEqual({ gmv: 1234.5, orders: 4 });
+    expect(db.row<{ count: number }>("SELECT COUNT(*) AS count FROM data_provenance WHERE entity='listing_snapshot' AND entity_id=(SELECT id FROM listing_snapshots WHERE listing_id='listing-import')")?.count).toBe(2);
+    expect(db.row<{ status: string }>('SELECT status FROM import_jobs WHERE id=?', jobId)?.status).toBe('IMPORTADO_VALIDADO');
+  });
+});
+
+describe('comparação de períodos e entidades', () => {
+  it('compara snapshots de dois períodos por anúncio sem somar capturas repetidas', async () => {
+    const at='2026-11-01T00:00:00.000Z';
+    seedImportAccount('acct-compare');
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run('listing-compare','acct-compare','mercado_livre','ML-COMPARE','Anúncio comparável','ACTIVE',at,at);
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,quality_score) VALUES (?,?,?,?,?,?,?,?)')
+      .run('snap-current','listing-compare','acct-compare','2026-11-20T12:00:00.000Z','2026-11-20T12:00:00.000Z',JSON.stringify({gmv:100,orders:2,visits:50,adSpend:10,adAttributedRevenue:30}),'F_USER_INPUT',0.8);
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class,quality_score) VALUES (?,?,?,?,?,?,?,?)')
+      .run('snap-previous','listing-compare','acct-compare','2026-10-20T12:00:00.000Z','2026-10-20T12:00:00.000Z',JSON.stringify({gmv:80,orders:1,visits:40,adSpend:10,adAttributedRevenue:20}),'F_USER_INPUT',0.8);
+    const response=await call('kpi.compare.detail',{accountId:'acct-compare',groupBy:'listing',primaryFrom:'2026-11-01',primaryTo:'2026-11-30',comparisonFrom:'2026-10-01',comparisonTo:'2026-10-31'});
+    expect(response.ok).toBe(true);
+    const result=response.result as {rows:Array<{current:{metrics:Record<string,number|null>};previous:{metrics:Record<string,number|null>};deltaPct:Record<string,number|null>}>};
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.current.metrics.gmv).toBe(100);
+    expect(result.rows[0]!.previous.metrics.gmv).toBe(80);
+    expect(result.rows[0]!.deltaPct.gmv).toBe(25);
+    expect(result.rows[0]!.current.metrics.roas).toBe(3);
+  });
+});
 
 describe('banco local', () => {
   it('aplica migrações e registra versão', () => {
@@ -207,6 +566,102 @@ describe('autenticação e perfis', () => {
   });
 });
 
+describe('workspace 3.3.0', () => {
+  it('ativa e desativa contas sem apagá-las', async () => {
+    const created = await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:workspace', displayName: 'Workspace', confidence: 1, verifiedByUser: true });
+    expect(created.ok).toBe(true);
+    const disabled = await call('account.setActive', { accountId: 'ml:workspace', isActive: false });
+    expect(disabled.ok).toBe(true);
+    const rows = (await call('account.list')).result as Array<{ id: string; is_active: number }>;
+    expect(rows.find((x) => x.id === 'ml:workspace')?.is_active).toBe(0);
+    const enabled = await call('account.setActive', { accountId: 'ml:workspace', isActive: true });
+    expect(enabled.ok).toBe(true);
+  });
+
+  it('administra usuários sem expor hashes e protege o último super_admin', async () => {
+    const created = await call('user.upsert', { email: 'operator@local.test', displayName: 'Operador', role: 'operador', password: 'senha-operador-123' });
+    expect(created.ok).toBe(true);
+    const users = (await call('user.list')).result as Array<Record<string, unknown>>;
+    expect(users.some((u) => u.email === 'operator@local.test')).toBe(true);
+    expect(users.every((u) => !('password_hash' in u) && !('password_salt' in u))).toBe(true);
+    const id = String((created.result as { id: string }).id);
+    expect((await call('user.setActive', { userId: id, isActive: false })).ok).toBe(true);
+    const lastAdmin = await call('user.setActive', { userId: String(db.rows<{ id: string }>("SELECT id FROM users WHERE role='super_admin'")[0]!.id), isActive: false });
+    expect(lastAdmin.ok).toBe(false);
+  });
+
+  it('cadastra catálogo, SKU e custos vinculados', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:catalog', displayName: 'Catálogo', confidence: 1, verifiedByUser: true });
+    const product = await call('catalog.product.upsert', { accountId: 'ml:catalog', name: 'Produto teste', brand: 'Marca', model: 'M1', category: 'Acessórios' });
+    expect(product.ok).toBe(true);
+    const productId = String((product.result as { id: string }).id);
+    const sku = await call('catalog.sku.upsert', { accountId: 'ml:catalog', productId, sku: 'SKU-TEST-33', ean: '7890000000000', attributes: { color: 'preto' } });
+    expect(sku.ok).toBe(true);
+    expect((await call('catalog.sku.list', { accountId: 'ml:catalog' })).result).toHaveLength(1);
+    await call('account.upsert', { marketplace: 'shopee', accountId: 'sh:other', displayName: 'Outra', confidence: 1, verifiedByUser: true });
+    const crossAccount = await call('catalog.sku.upsert', { accountId: 'sh:other', productId, sku: 'SKU-CROSS-33' });
+    expect(crossAccount.ok).toBe(false);
+    const cost = await call('finance.costs.upsert', { accountId: 'ml:catalog', sku: 'SKU-TEST-33', costCents: 1250 });
+    expect(cost.ok).toBe(true);
+    expect(db.row<{ unit_cost_cents: number }>('SELECT unit_cost_cents FROM sku_costs WHERE sku_id = ?', String((sku.result as { id: string }).id))?.unit_cost_cents).toBe(1250);
+  });
+
+  it('armazena mídia local com assinatura e checksum', async () => {
+    seedImportAccount('ml:catalog');
+    const result = await call('media.add', { accountId: 'ml:catalog', filename: 'pixel.png', mimeType: 'image/png', base64: 'iVBORw0KGgo=', altText: 'Teste' });
+    expect(result.ok).toBe(true);
+    const id = String((result.result as { id: string }).id);
+    const item = await call('media.get', { id, accountId: 'ml:catalog' });
+    expect(item.ok).toBe(true);
+    expect((item.result as { sha256: string }).sha256).toHaveLength(64);
+    expect((await call('media.get', { id, accountId: 'other-account' })).ok).toBe(false);
+    expect((await call('media.delete', { id, accountId: 'other-account' })).ok).toBe(false);
+    expect((await call('media.delete', { id, accountId: 'ml:catalog' })).ok).toBe(true);
+  });
+
+  it('cria iniciativas Growth, calcula prioridade e altera status', async () => {
+    const result = await call('growth.initiative.upsert', { title: 'Aumentar conversão', hypothesis: 'Fotos novas aumentam confiança', pillar: 'conversion_cro', reach: 100, impact: 4, confidence: 0.8, effort: 2, urgency: 1 });
+    expect(result.ok).toBe(true);
+    const id = String((result.result as { id: string }).id);
+    const listed = await call('growth.initiatives');
+    const row = (listed.result as Array<Record<string, unknown>>).find((x) => x.id === id);
+    expect(Number(row?.priority_score)).toBeGreaterThan(0);
+    expect((await call('growth.initiative.setStatus', { id, status: 'IN_PROGRESS' })).ok).toBe(true);
+  });
+
+  it('retorna comparação e modo de análise mesmo sem anúncios capturados', async () => {
+    const compare = await call('kpi.compare', {});
+    expect(compare.ok).toBe(true);
+    const analysis = await call('analysis.run', { mode: 'RAPIDA', days: 30 });
+    expect(analysis.ok).toBe(true);
+    expect((analysis.result as { listingCount: number }).listingCount).toBe(0);
+  });
+});
+
+describe('análise por produto de catálogo', () => {
+  it('inclui apenas anúncios vinculados ao produto canônico dentro da conta', async () => {
+    seedImportAccount('acct-product-analysis');
+    seedImportAccount('acct-product-other');
+    const product = await call('catalog.product.upsert', { accountId:'acct-product-analysis',name:'Capacete Modelo X' });
+    const productId = (product.result as {id:string}).id;
+    await call('catalog.sku.upsert', { accountId:'acct-product-analysis',productId,sku:'CAP-X-01' });
+    const at = '2026-11-26T14:30:00.000Z';
+    const captureListing = (accountId:string, externalId:string, sku:string) => call('capture.ingest', {
+      marketplace:'mercado_livre',accountId,pageKind:'seller_listings',url:'https://www.mercadolivre.com.br/anuncios',
+      sourceClass:'A_PRIMARY_UI',referenceAt:at,collectedAt:at,method:'content_script_dom',
+      listings:[{listingId:externalId,sku,title:externalId,gmv:500,orders:5,visits:100}],
+    });
+    expect((await captureListing('acct-product-analysis','ML-PROD-1','CAP-X-01')).ok).toBe(true);
+    expect((await captureListing('acct-product-other','ML-PROD-2','CAP-X-01')).ok).toBe(true);
+    const result = await call('analysis.run', { mode:'RAPIDA',accountId:'acct-product-analysis',catalogProductId:productId,days:30 });
+    expect(result.ok).toBe(true);
+    expect((result.result as {scope:string;listingCount:number}).scope).toBe('catalog_product');
+    expect((result.result as {listingCount:number;totalMatched:number;truncated:boolean}).listingCount).toBe(1);
+    expect((result.result as {totalMatched:number}).totalMatched).toBe(1);
+    expect((result.result as {truncated:boolean}).truncated).toBe(false);
+  });
+});
+
 describe('captura e KPIs', () => {
   const payload = {
     marketplace: 'mercado_livre',
@@ -313,7 +768,7 @@ describe('captura e KPIs', () => {
       coverage: { totalListings: number; capturedListings: number; uncapturedListings: number };
       totals: { gmvCents: number | null; orders: number | null };
     };
-    expect(dashboard.coverage).toEqual({ totalListings: 2, capturedListings: 1, uncapturedListings: 1 });
+    expect(dashboard.coverage).toEqual({ totalListings: 2, capturedListings: 1, uncapturedListings: 1, accountsWithSnapshots: 0 });
     expect(dashboard.totals.gmvCents).toBeNull();
     expect(dashboard.totals.orders).toBeNull();
   });
@@ -332,27 +787,225 @@ describe('captura e KPIs', () => {
     expect(res.ok).toBe(false);
     expect(res.errors.length).toBeGreaterThan(0);
   });
+
+  it('gera previsão linear somente com oito semanas distintas de histórico', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:forecast', displayName: 'Forecast', confidence: 1, verifiedByUser: true });
+    const now = Date.now();
+    const listingId = 'forecast-listing';
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run(listingId, 'ml:forecast', 'mercado_livre', 'MLBFORECAST', 'Produto', new Date(now).toISOString(), new Date(now).toISOString());
+    const stmt = db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class) VALUES (?,?,?,?,?,?,?)');
+    for (let week = 0; week < 8; week += 1) {
+      const at = new Date(now - (7 - week) * 7 * 86400000).toISOString();
+      stmt.run(`forecast-${week}`, listingId, 'ml:forecast', at, at, JSON.stringify({ gmv: 100 + week * 10 }), 'A_PRIMARY_UI');
+    }
+    const forecast = await call('forecast.run', { accountId: 'ml:forecast', metric: 'gmv', horizonDays: 28 });
+    const result = forecast.result as { ok: boolean; points: Array<{ value: number }>; observations: unknown[] };
+    expect(result.ok).toBe(true);
+    expect(result.observations).toHaveLength(8);
+    expect(result.points).toHaveLength(4);
+    expect(result.points[3]!.value).toBeGreaterThan(result.points[0]!.value);
+  });
 });
 
 describe('tarefas e guard', () => {
-  it('cria tarefa com itens e transita estados', async () => {
+  it('preenche rascunho somente no anúncio exato e registra conclusão', async () => {
     await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:c', displayName: 'Loja', confidence: 1, verifiedByUser: true });
-    const created = (
-      await call('task.create', {
-        name: 'Duplicar anúncios',
-        kind: 'duplicate',
-        mode: 'DRAFT',
-        typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true },
-        items: [{ listingId: 'MLB1', marketplace: 'mercado_livre', accountId: 'ml:c', copies: 2 }],
-      })
-    ).result as { taskId: string };
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-c', 'ml:c', 'mercado_livre', 'MLB1', 'Título anterior', now, now);
+    const created = (await call('task.create', {
+      name: 'Atualizar título', kind: 'edit_title', mode: 'DRAFT',
+      typing: { mode: 'set_value', charDelayMs: 45, settleDelayMs: 0, verifyAfterTyping: true },
+      items: [{ listingId: 'MLB1', marketplace: 'mercado_livre', accountId: 'ml:c', copies: 1, title: 'Título novo' }],
+    })).result as { taskId: string };
     expect(created.taskId).toBeTruthy();
+    const typingSaved = db.row<{ typing_json: string }>('SELECT typing_json FROM tasks WHERE id=?', created.taskId);
+    expect(JSON.parse(typingSaved!.typing_json).charDelayMs).toBe(45);
 
-    const list = (await call('task.list')).result as { counts: Record<string, number> };
-    expect(list.counts.PENDING).toBe(1);
+    const queued = await call('task.runNow', { taskId: created.taskId });
+    expect((queued.result as { status: string }).status).toBe('WAITING_BROWSER');
+    const claimed = await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:c', externalListingId: 'MLB1' });
+    const claim = claimed.result as { item: { id: string; title: string }; externalListingId: string };
+    expect(claim.item.title).toBe('Título novo');
+    expect(claim.externalListingId).toBe('MLB1');
+    const completed = await call('task.itemResult', { itemId: claim.item.id, ok: true, accountId: 'ml:c', externalListingId: 'MLB1', message: 'rascunho preenchido e verificado', baseline: { title: 'Título anterior', description: 'Descrição anterior' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLB1' });
+    expect((completed.result as { taskStatus: string }).taskStatus).toBe('COMPLETED');
+    const list = (await call('task.list')).result as Array<{ status: string; listing_id: string }>;
+    expect(list[0]?.status).toBe('COMPLETED');
+    expect(list[0]?.listing_id).toBe('MLB1');
+  });
 
-    await call('task.pause', { taskId: created.taskId });
-    expect(((await call('task.list')).result as { counts: Record<string, number> }).counts.PAUSED).toBe(1);
+  it('não conclui rascunho sem snapshot original vinculado à conta e ao anúncio', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:no-baseline', displayName: 'Loja', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-no-baseline', 'ml:no-baseline', 'mercado_livre', 'MLBNOSNAPSHOT', 'Título atual', now, now);
+    const created = (await call('task.create', { name: 'Sem snapshot', kind: 'edit_title', mode: 'DRAFT', typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true }, items: [{ listingId: 'MLBNOSNAPSHOT', marketplace: 'mercado_livre', accountId: 'ml:no-baseline', title: 'Título proposto' }] })).result as { taskId: string };
+    await call('task.runNow', { taskId: created.taskId });
+    const claimed = (await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:no-baseline', externalListingId: 'MLBNOSNAPSHOT' })).result as { item: { id: string } };
+    const result = await call('task.itemResult', { itemId: claimed.item.id, ok: true, accountId: 'ml:no-baseline', externalListingId: 'MLBNOSNAPSHOT', message: 'sem evidência' });
+    expect(result.ok).toBe(false);
+  });
+
+  it('publica somente após aprovação de super_admin, confirmação por anúncio e prova de sucesso; prepara rollback como rascunho', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:publish', displayName: 'Loja autorizada', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-publish', 'ml:publish', 'mercado_livre', 'MLBPUBLISH1', 'Título original', now, now);
+    const created = (await call('task.create', {
+      name: 'Publicar título aprovado', kind: 'edit_title', mode: 'DRAFT',
+      typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true },
+      items: [{ listingId: 'MLBPUBLISH1', marketplace: 'mercado_livre', accountId: 'ml:publish', copies: 1, title: 'Título revisado' }],
+    })).result as { taskId: string };
+    await call('task.runNow', { taskId: created.taskId });
+    const draft = await call('task.claimNext', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
+    const draftClaim = draft.result as { item: { id: string } };
+    await call('task.itemResult', { itemId: draftClaim.item.id, ok: true, accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1', message: 'rascunho preenchido', baseline: { title: 'Título original', description: 'Descrição original' }, sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLBPUBLISH1' });
+
+    const refused = await call('task.approvePublish', { taskId: created.taskId, confirmation: 'SIM', reason: 'revisão concluída' });
+    expect(refused.ok).toBe(false);
+    const approved = await call('task.approvePublish', { taskId: created.taskId, confirmation: 'PUBLICAR 1', reason: 'título revisado e aprovado por responsável' });
+    expect(approved.ok).toBe(true);
+    const approval = approved.result as { approvalIds: string[]; requiresPerListingBrowserConfirmation: boolean };
+    expect(approval.requiresPerListingBrowserConfirmation).toBe(true);
+    const claim = await call('task.claimNextPublish', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
+    const publish = claim.result as { approvalId: string; task: { mode: string }; item: { id: string; baselineTitle: string; baselineDescription: string } };
+    expect(publish.task.mode).toBe('PUBLISH');
+    expect(publish.item.baselineTitle).toBe('Título original');
+    expect(publish.item.baselineDescription).toBe('Descrição original');
+    expect(publish.approvalId).toBe(approval.approvalIds[0]);
+    const replay = await call('task.claimNextPublish', { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' });
+    expect(replay.result).toBeNull();
+
+    const result = await call('task.publishResult', {
+      approvalId: publish.approvalId, externalListingId: 'MLBPUBLISH1', outcome: 'PUBLISHED',
+      after: { title: 'Título revisado', description: 'Descrição original' },
+      sourceUrl: 'https://vendedores.mercadolivre.com.br/vendas/anuncios/editar/MLBPUBLISH1',
+      successText: 'Alterações salvas com sucesso', saveButtonLabel: 'Salvar',
+    });
+    expect(result.ok).toBe(true);
+    expect((result.result as any).status).toBe('PUBLISHED');
+    const change = db.row<{ listing_id: string; before_text: string; after_text: string; verified_after_save: number }>(
+      "SELECT listing_id,before_text,after_text,verified_after_save FROM change_sets WHERE task_id=? AND field='title'", created.taskId,
+    );
+    expect(change).toEqual({ listing_id: 'listing-publish', before_text: 'Título original', after_text: 'Título revisado', verified_after_save: 1 });
+    const rollback = await call('task.rollbackPrepare', { approvalId: publish.approvalId });
+    expect(rollback.ok).toBe(true);
+    const rollbackTask = (rollback.result as { taskId: string }).taskId;
+    const rollbackItem = db.row<{ title: string; status: string }>('SELECT title,status FROM task_items WHERE task_id=?', rollbackTask);
+    expect(rollbackItem?.title).toBe('Título original');
+    expect(rollbackItem?.status).toBe('PENDING');
+  });
+
+  it('não permite que operador reivindique publicação nem registre resultado administrativo', async () => {
+    const created = await call('user.upsert', { email: 'operator-publish@local.test', displayName: 'Operador publicação', role: 'operador', password: 'senha-operador-pub-123' });
+    expect(created.ok).toBe(true);
+    const login = await service.handle({ id: 'operator-login-pub', protocolVersion: 1, method: 'auth.login', payload: { email: 'operator-publish@local.test', password: 'senha-operador-pub-123' } });
+    const operatorToken = (login.result as { token: string }).token;
+    const claim = await service.handle({ id: 'operator-publish-claim', protocolVersion: 1, method: 'task.claimNextPublish', payload: { marketplace: 'mercado_livre', accountId: 'ml:publish', externalListingId: 'MLBPUBLISH1' }, token: operatorToken });
+    const result = await service.handle({ id: 'operator-publish-result', protocolVersion: 1, method: 'task.publishResult', payload: { approvalId: 'approval-forgery', externalListingId: 'MLBPUBLISH1', outcome: 'PUBLISHED' }, token: operatorToken });
+    expect(claim.ok).toBe(false);
+    expect(result.ok).toBe(false);
+  });
+
+  it('escopa a reivindicação de rascunho à conta exata, mesmo com IDs externos duplicados em lojas diferentes', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:account-a', displayName: 'A', confidence: 1, verifiedByUser: true });
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:account-b', displayName: 'B', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    for (const [id,account] of [['listing-a','ml:account-a'],['listing-b','ml:account-b']] as const) {
+      db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+        .run(id,account,'mercado_livre','MLBDUPLICATED','Título',now,now);
+    }
+    const created = (await call('task.create', { name:'Conta A',kind:'edit_title',mode:'DRAFT',typing:{mode:'set_value',charDelayMs:0,settleDelayMs:0,verifyAfterTyping:true},items:[{listingId:'MLBDUPLICATED',marketplace:'mercado_livre',accountId:'ml:account-a',title:'A título'}]})).result as {taskId:string};
+    await call('task.runNow',{taskId:created.taskId});
+    const wrong = await call('task.claimNext',{marketplace:'mercado_livre',accountId:'ml:account-b',externalListingId:'MLBDUPLICATED'});
+    expect(wrong.result).toBeNull();
+    const right = await call('task.claimNext',{marketplace:'mercado_livre',accountId:'ml:account-a',externalListingId:'MLBDUPLICATED'});
+    expect((right.result as any).item.title).toBe('A título');
+  });
+
+  it('fecha a tarefa corretamente quando o usuário pula o último item', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:skip', displayName: 'Loja', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-skip', 'ml:skip', 'mercado_livre', 'MLBSKIP1', 'Título', now, now);
+    const created = (await call('task.create', {
+      name: 'Pular tarefa', kind: 'edit_title', mode: 'DRAFT',
+      typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true },
+      items: [{ listingId: 'MLBSKIP1', marketplace: 'mercado_livre', accountId: 'ml:skip', title: 'Novo título' }],
+    })).result as { taskId: string };
+    const skipped = await call('task.skipItem', { taskId: created.taskId });
+    expect(skipped.ok).toBe(true);
+    const listed = (await call('task.list', { accountId: 'ml:skip' })).result as Array<{ status: string }>;
+    expect(listed[0]?.status).toBe('COMPLETED');
+  });
+
+  it('permite retentar manualmente itens esgotados de uma tarefa FAILED', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:retry', displayName: 'Loja', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-retry', 'ml:retry', 'mercado_livre', 'MLBRETRY1', 'Título', now, now);
+    const created = (await call('task.create', {
+      name: 'Retentar tarefa', kind: 'edit_title', mode: 'DRAFT',
+      typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true },
+      items: [{ listingId: 'MLBRETRY1', marketplace: 'mercado_livre', accountId: 'ml:retry', title: 'Novo título' }],
+    })).result as { taskId: string };
+    db.db.prepare("UPDATE tasks SET status='FAILED' WHERE id=?").run(created.taskId);
+    db.db.prepare("UPDATE task_items SET status='FAILED',attempts=3,last_error='falhou' WHERE task_id=?").run(created.taskId);
+    const run = await call('task.runNow', { taskId: created.taskId });
+    expect((run.result as { status: string }).status).toBe('WAITING_BROWSER');
+    const item = db.row<{ status: string; attempts: number }>('SELECT status,attempts FROM task_items WHERE task_id=?', created.taskId);
+    expect(item).toEqual({ status: 'PENDING', attempts: 0 });
+  });
+
+  it('impede que uma tarefa de título altere também a descrição', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:kind', displayName: 'Loja', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-kind', 'ml:kind', 'mercado_livre', 'MLBKIND1', 'Título', now, now);
+    const result = await call('task.create', {
+      name: 'Tarefa isolada', kind: 'edit_title', mode: 'DRAFT',
+      typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true },
+      items: [{ listingId: 'MLBKIND1', marketplace: 'mercado_livre', accountId: 'ml:kind', title: 'Novo', descriptionAdditions: 'Mudança extra' }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('cria rascunhos por filtro apenas para anúncios com métricas completas na conta selecionada', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:filtered', displayName: 'Loja filtrada', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    const listingInsert = db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`);
+    listingInsert.run('filtered-match', 'ml:filtered', 'mercado_livre', 'MLBFILTER1', 'Título A', now, now);
+    listingInsert.run('filtered-missing', 'ml:filtered', 'mercado_livre', 'MLBFILTER2', 'Título B', now, now);
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class) VALUES (?,?,?,?,?,?,?)')
+      .run('filtered-snap-1', 'filtered-match', 'ml:filtered', now, now, JSON.stringify({ gmv: 500, orders: 10, visits: 100, stockAvailable: 2 }), 'A_PRIMARY_UI');
+    db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class) VALUES (?,?,?,?,?,?,?)')
+      .run('filtered-snap-2', 'filtered-missing', 'ml:filtered', now, now, JSON.stringify({ gmv: 900 }), 'A_PRIMARY_UI');
+    const response = await call('task.createByFilter', {
+      name: 'Baixa cobertura de estoque', accountId: 'ml:filtered', kind: 'edit_title', draftTitle: 'Revisado: {title}',
+      filters: { minGmv: 400, minOrders: 5, maxStockAvailable: 3 },
+    });
+    expect(response.ok).toBe(true);
+    const result = response.result as { created: boolean; matched: number; taskId: string };
+    expect(result.created).toBe(true);
+    expect(result.matched).toBe(1);
+    const items = db.rows<{ listing_id: string; title: string }>('SELECT listing_id,title FROM task_items WHERE task_id=?', result.taskId);
+    expect(items).toEqual([{ listing_id: 'filtered-match', title: 'Revisado: Título A' }]);
+  });
+
+  it('bloqueia publicação e tipo de tarefa sem executor', async () => {
+    await call('account.upsert', { marketplace: 'mercado_livre', accountId: 'ml:c', displayName: 'Loja', confidence: 1, verifiedByUser: true });
+    const now = new Date().toISOString();
+    db.db.prepare(`INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,'ACTIVE',?,?)`)
+      .run('listing-c', 'ml:c', 'mercado_livre', 'MLB1', 'Título anterior', now, now);
+    const base = { name: 'Teste', kind: 'edit_title', typing: { mode: 'set_value', charDelayMs: 0, settleDelayMs: 0, verifyAfterTyping: true }, items: [{ listingId: 'MLB1', marketplace: 'mercado_livre', accountId: 'ml:c', title: 'Novo' }] };
+    const publish = await call('task.create', { ...base, mode: 'PUBLISH' });
+    expect(publish.ok).toBe(false);
+    const duplicate = await call('task.create', { ...base, kind: 'duplicate', mode: 'DRAFT' });
+    expect(duplicate.ok).toBe(false);
+    const unsupportedMarketplace = await call('task.create', { ...base, items: [{ ...base.items[0], marketplace: 'amazon' }] });
+    expect(unsupportedMarketplace.ok).toBe(false);
   });
 
   const guardBase = {
@@ -408,7 +1061,13 @@ describe('segredos e Gemini', () => {
   it('cifra e decifra segredo com roundtrip', () => {
     const store = new SecretStore(db, join(dir, 'sec2'));
     store.set('gemini.apiKey', 'chave-secreta-de-teste-123456');
+    store.set('connector:conta-a:access_token', 'token-privado-a');
+    store.set('connector:conta-a:refresh_token', 'refresh-privado-a');
+    store.set('connector:conta-b:access_token', 'token-privado-b');
     expect(store.get('gemini.apiKey')).toBe('chave-secreta-de-teste-123456');
+    expect(store.deletePrefix('connector:conta-a:')).toBe(2);
+    expect(store.get('connector:conta-a:access_token')).toBeNull();
+    expect(store.get('connector:conta-b:access_token')).toBe('token-privado-b');
     expect(store.get('inexistente')).toBeNull();
   });
 
@@ -480,8 +1139,9 @@ describe('adapters', () => {
   });
 
   it('lista capacidades não suportadas honestamente', () => {
-    expect(unsupportedCapabilities(mercadoLivreAdapter).length).toBe(0);
-    expect(unsupportedCapabilities(shopeeAdapter).length).toBe(0);
+    expect(unsupportedCapabilities(mercadoLivreAdapter)).toContain('title_edit');
+    expect(unsupportedCapabilities(mercadoLivreAdapter)).toContain('price_edit');
+    expect(unsupportedCapabilities(shopeeAdapter)).toContain('image_upload');
   });
 });
 
@@ -615,5 +1275,251 @@ describe('segurança de caminhos do auto-upgrade', () => {
     expect(result.errors.join(' ')).toMatch(/contexto do hunk não corresponde/);
     expect(writes).toEqual([]);
     expect(result.appliedFiles).toEqual([]);
+  });
+});
+
+describe('analytics, keyword intelligence and bundle simulation', () => {
+  it('returns daily KPI history using the latest snapshot per listing/day and preserves null coverage', async () => {
+    seedImportAccount('acct-history');
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run('history-listing','acct-history','mercado_livre','ML-HISTORY','Capacete histórico','ACTIVE',now.toISOString(),now.toISOString());
+    const insert = db.db.prepare('INSERT INTO listing_snapshots (id,listing_id,account_id,captured_at,reference_at,metrics_json,source_class) VALUES (?,?,?,?,?,?,?)');
+    insert.run('h1','history-listing','acct-history',`${today}T09:00:00.000Z`,`${today}T09:00:00.000Z`,JSON.stringify({gmv:100,orders:2}),'A_PRIMARY_UI');
+    insert.run('h2','history-listing','acct-history',`${today}T12:00:00.000Z`,`${today}T12:00:00.000Z`,JSON.stringify({gmv:150,orders:3}),'A_PRIMARY_UI');
+    insert.run('h3','history-listing','acct-history',`${yesterday}T12:00:00.000Z`,`${yesterday}T12:00:00.000Z`,JSON.stringify({visits:30}),'A_PRIMARY_UI');
+    const response = await call('kpi.history',{accountId:'acct-history',days:30});
+    expect(response.ok).toBe(true);
+    const result = response.result as {points:Array<Record<string,unknown>>;missingValues:string};
+    expect(result.points).toHaveLength(2);
+    const current = result.points.find((point)=>point.date===today)!;
+    expect(current.gmv).toBe(150);
+    expect(current.orders).toBe(3);
+    expect(current.visits).toBeNull();
+    expect(result.missingValues).toBe('null_not_zero');
+  });
+
+  it('suggests local title phrases without claiming search volume', async () => {
+    const now = new Date().toISOString();
+    seedImportAccount('acct-keywords');
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run('kwl1','acct-keywords','mercado_livre','ML-KW1','Capacete Norisk FF302 Fechado Preto','ACTIVE',now,now);
+    db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run('kwl2','acct-keywords','mercado_livre','ML-KW2','Capacete Norisk FF302 Fosco','ACTIVE',now,now);
+    const response=await call('keyword.suggest',{accountId:'acct-keywords',limit:50});
+    expect(response.ok).toBe(true);
+    const rows=response.result as Array<{term:string;source:string;note:string}>;
+    expect(rows.some((row)=>row.term==='capacete norisk')).toBe(true);
+    expect(rows[0]?.source).toBe('LOCAL_CATALOG_TITLES');
+    expect(rows[0]?.note).toContain('não representa volume de busca');
+  });
+
+  it('clusters similar keyword phrases and detects cannibalized listings', async () => {
+    const now=new Date().toISOString();
+    seedImportAccount('acct-cluster');
+    for (const [id,external,title] of [['cl1','ML-CL1','Capacete Norisk FF302'],['cl2','ML-CL2','Norisk FF302 Fechado']] as const) {
+      db.db.prepare('INSERT INTO listings (id,account_id,marketplace,external_id,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run(id,'acct-cluster','mercado_livre',external,title,'ACTIVE',now,now);
+    }
+    db.db.prepare('INSERT INTO keywords (id,term,normalized,intent,marketplace,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run('kwc1','capacete norisk ff302','capacete norisk ff302','PRODUTO_DIRETO','mercado_livre',now,now);
+    db.db.prepare('INSERT INTO keywords (id,term,normalized,intent,marketplace,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run('kwc2','norisk ff302 fechado','norisk ff302 fechado','PRODUTO_DIRETO','mercado_livre',now,now);
+    const clustered=await call('keyword.cluster',{marketplace:'mercado_livre',threshold:0.25});
+    expect(clustered.ok).toBe(true);
+    expect((clustered.result as {clustersCreated:number}).clustersCreated).toBeGreaterThan(0);
+    db.db.prepare('INSERT INTO rank_observations (listing_id,keyword_id,position,is_sponsored,observed_at,context_json) VALUES (?,?,?,?,?,?)').run('cl1','kwc1',4,0,now,'{}');
+    db.db.prepare('INSERT INTO rank_observations (listing_id,keyword_id,position,is_sponsored,observed_at,context_json) VALUES (?,?,?,?,?,?)').run('cl2','kwc1',9,0,now,'{}');
+    const cannibal=await call('keyword.cannibalization',{accountId:'acct-cluster',days:90});
+    expect(cannibal.ok).toBe(true);
+    expect((cannibal.result as Array<{keywordId:string}>).some((row)=>row.keywordId==='kwc1')).toBe(true);
+  });
+
+  it('calculates observed SERP visibility only from captured results', async () => {
+    const now=new Date().toISOString();
+    seedImportAccount('acct-vis');
+    db.db.prepare('INSERT INTO search_snapshots (id,marketplace,account_id,term,captured_at,results_count) VALUES (?,?,?,?,?,?)').run('serp1','mercado_livre','acct-vis','capacete norisk',now,3);
+    const result=db.db.prepare('INSERT INTO search_results (snapshot_id,position,external_id,title,is_sponsored,is_own) VALUES (?,?,?,?,?,?)');
+    result.run('serp1',1,'ML-OWN','Meu anúncio',0,1);
+    result.run('serp1',2,'ML-C1','Concorrente 1',0,0);
+    result.run('serp1',3,'ML-C2','Concorrente 2',0,0);
+    const response=await call('keyword.visibility',{accountId:'acct-vis',days:30});
+    expect(response.ok).toBe(true);
+    const terms=(response.result as {terms:Array<{term:string;top3PresencePct:number;ownVisibilitySharePct:number}>}).terms;
+    expect(terms[0]?.top3PresencePct).toBe(100);
+    expect(terms[0]?.ownVisibilitySharePct).toBeGreaterThan(0);
+    expect((response.result as {note:string}).note).toContain('não é market share');
+  });
+
+  it('simulates a multi-component bundle with aggregated costs and margin', async () => {
+    const response=await call('finance.bundle.simulate',{
+      bundleDiscountPct:5,adSpendCents:1000,
+      components:[{name:'Produto A',priceCents:10000,quantity:1,unitCostCents:4000,commissionPct:10,fixedFeeCents:100,taxPct:5}],
+    });
+    expect(response.ok).toBe(true);
+    const result=response.result as {total:Record<string,number> & {contributionCents:number};components:Array<Record<string,unknown>>};
+    expect(result.components).toHaveLength(1);
+    expect(result.total.componentCount).toBe(1);
+    expect(result.total.adSpendCents).toBe(1000);
+    expect(result.total.operatingProfitCents).toBe(result.total.contributionCents-1000);
+  });
+});
+
+
+describe('feedback de agentes com evidência de resultado', () => {
+  it('exige métricas observadas ao marcar uma recomendação como implementada', async () => {
+    const now=new Date().toISOString();
+    seedImportAccount('acct-feedback');
+    db.db.prepare('INSERT INTO agent_runs (id,agent_key,account_id,started_at,finished_at,status,trigger) VALUES (?,?,?,?,?,?,?)')
+      .run('run-feedback','seo_demand','acct-feedback',now,now,'OK','TEST');
+    db.db.prepare(`INSERT INTO agent_recommendations (id,agent_run_id,account_id,diagnosis,evidence_json,window,facts_json,hypotheses_json,confidence,missing_data_json,risk,guardrail_metric,action_proposed,alternative,requires_approval,required_permission,verification_criteria,status,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('rec-feedback','run-feedback','acct-feedback','CVR baixa','[]','30d','[]','[]',0.7,'[]','risco','margem','Ajustar título e monitorar','Completar atributos',1,'edit_listing','comparar CVR em 7 dias','PROPOSTA',now);
+    const response=await call('agent.feedback',{recommendationId:'rec-feedback',decision:'IMPLEMENTADO'});
+    expect(response.ok).toBe(false);
+    expect(String(response.error?.message || '')).toContain('métricas de antes/depois');
+  });
+
+  it('cria playbook somente após três resultados positivos medidos', async () => {
+    const now=new Date().toISOString();
+    seedImportAccount('acct-feedback-many');
+    for(let index=1;index<=3;index++){
+      const runId=`run-feedback-${index}`,recId=`rec-feedback-${index}`;
+      db.db.prepare('INSERT INTO agent_runs (id,agent_key,account_id,started_at,finished_at,status,trigger) VALUES (?,?,?,?,?,?,?)')
+        .run(runId,'seo_demand','acct-feedback-many',now,now,'OK','TEST');
+      db.db.prepare(`INSERT INTO agent_recommendations (id,agent_run_id,account_id,diagnosis,evidence_json,window,facts_json,hypotheses_json,confidence,missing_data_json,risk,guardrail_metric,action_proposed,alternative,requires_approval,required_permission,verification_criteria,status,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(recId,runId,'acct-feedback-many','CVR baixa','[]','30d','[]','[]',0.7,'[]','risco','margem','Ajustar título e monitorar','Completar atributos',1,'edit_listing','comparar CVR em 7 dias','PROPOSTA',now);
+      const response=await call('agent.feedback',{recommendationId:recId,decision:'IMPLEMENTADO',outcome:{success:true,measuredAt:now,baseline:{orders:10},after:{orders:12},sampleSize:100,source:'A_PRIMARY_UI'}});
+      expect(response.ok).toBe(true);
+      if(index<3) expect((response.result as {playbook:null}).playbook).toBeNull();
+      else expect((response.result as {playbook:{successes:number}}).playbook.successes).toBe(3);
+    }
+    expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM validated_playbooks')?.count).toBe(1);
+  });
+});
+
+
+describe('dashboard consolida snapshots agregados da conta sem duplicar anúncios', () => {
+  it('usa métricas agregadas de dashboard e Ads no resumo da conta e no consolidado', async () => {
+    seedImportAccount('acct-dashboard-a');
+    seedImportAccount('acct-dashboard-b');
+    const at = new Date().toISOString();
+    const ingest = async (accountId: string, pageKind: 'seller_dashboard'|'seller_ads', urlPath: string, metrics: Record<string,number>) => {
+      const result = await call('capture.ingest', {
+        marketplace: 'mercado_livre', accountId, pageKind,
+        url: `https://www.mercadolivre.com.br/${urlPath}`, sourceClass: 'A_PRIMARY_UI',
+        referenceAt: at, collectedAt: at, method: 'content_script_dom', listings: [], accountMetrics: metrics,
+      });
+      expect(result.ok).toBe(true);
+    };
+    await ingest('acct-dashboard-a','seller_dashboard','vendas/metricas',{gmv:1200,netRevenue:1080,visits:600,orders:30,units:35});
+    await ingest('acct-dashboard-a','seller_ads','anuncios/publicidade',{adSpend:100,adAttributedRevenue:450});
+    await ingest('acct-dashboard-b','seller_dashboard','vendas/metricas',{gmv:800,netRevenue:720,visits:400,orders:20,units:22});
+    await ingest('acct-dashboard-b','seller_ads','anuncios/publicidade',{adSpend:80,adAttributedRevenue:320});
+    const response = await call('kpi.dashboard');
+    expect(response.ok).toBe(true);
+    const result = response.result as { totals:Record<string,unknown>; byAccount:Array<{id:string;totals:Record<string,unknown>;coverage:{accountSnapshotMetricCount:number}}> };
+    expect(result.byAccount).toHaveLength(2);
+    expect(result.byAccount.find((row)=>row.id==='acct-dashboard-a')?.totals.gmvCents).toBe(120000);
+    expect(result.byAccount.find((row)=>row.id==='acct-dashboard-a')?.totals.adSpendCents).toBe(10000);
+    expect(result.totals.gmvCents).toBe(200000);
+    expect(result.totals.adSpendCents).toBe(18000);
+    expect(result.totals.orders).toBe(50);
+  });
+});
+
+
+describe('relatórios e conectores com estado honesto', () => {
+  it.each([
+    ['google_analytics4', 'GOOGLE_ANALYTICS4', { propertyId: '12345' }, 'https://analyticsdata.googleapis.com/v1beta/properties/12345/metadata', { name: 'properties/12345/metadata' }],
+    ['google_search_console', 'GOOGLE_SEARCH_CONSOLE', { siteUrl: 'sc-domain:fixture.test' }, 'https://www.googleapis.com/webmasters/v3/sites/sc-domain%3Afixture.test', { siteUrl: 'sc-domain:fixture.test' }],
+  ] as const)('verifica $0 com leitura oficial e desabilita ao perder acesso', async (connectorId, provider, publicConfig, url, body) => {
+    const accessToken = 'token-fixture-google';
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(body))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      expect((await call('connector.configure', { connectorId, provider, publicConfig, secrets: { accessToken } })).ok).toBe(true);
+      expect((await call('connector.setEnabled', { connectorId, enabled: true })).ok).toBe(false);
+      expect((await call('connector.test', { connectorId })).result).toMatchObject({ ok: true, status: 'CONECTADO' });
+      expect(fetchMock).toHaveBeenCalledWith(url, expect.objectContaining({ headers: expect.objectContaining({ authorization: `Bearer ${accessToken}` }), redirect: 'error' }));
+      expect((await call('connector.setEnabled', { connectorId, enabled: true })).ok).toBe(true);
+      expect((await call('connector.test', { connectorId })).result).toMatchObject({ ok: false, status: 'HTTP_401' });
+      expect(db.row('SELECT enabled FROM connector_states WHERE connector_id=?', connectorId)).toMatchObject({ enabled: 0 });
+      expect(JSON.stringify((await call('connector.registry')).result)).not.toContain(accessToken);
+      expect((await call('connector.disconnect', { connectorId })).ok).toBe(true);
+      expect(db.row('SELECT connector_id FROM connector_runtime_config WHERE connector_id=?', connectorId)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('inclui snapshots agregados e por anúncio no relatório de KPIs sem misturar as entidades', async () => {
+    seedImportAccount('acct-report-kpi');
+    const at = new Date().toISOString();
+    const ingest = await call('capture.ingest', {
+      marketplace:'mercado_livre', accountId:'acct-report-kpi', pageKind:'seller_ads',
+      url:'https://www.mercadolivre.com.br/anuncios/publicidade', sourceClass:'A_PRIMARY_UI',
+      referenceAt:at, collectedAt:at, method:'content_script_dom', listings:[], accountMetrics:{adSpend:12.5},
+      evidence:{adSpend:'Investimento em publicidade',filtersAndPeriod:'["Período=Últimos 7 dias"]'},
+    });
+    expect(ingest.ok).toBe(true);
+    const listingIngest = await call('capture.ingest', {
+      marketplace:'mercado_livre', accountId:'acct-report-kpi', pageKind:'product_detail',
+      url:'https://www.mercadolivre.com.br/anuncio/ML-REPORT-1', sourceClass:'A_PRIMARY_UI',
+      referenceAt:at, collectedAt:new Date(Date.parse(at)+1000).toISOString(), method:'content_script_dom',
+      listings:[{listingId:'ML-REPORT-1',title:'Produto relatório',gmv:100,netRevenue:90}],
+      evidence:{gmv:'Faturamento bruto',netRevenue:'Receita líquida',filtersAndPeriod:'["Período=Últimos 7 dias"]'},
+    });
+    expect(listingIngest.ok).toBe(true);
+    const report = await call('report.export',{type:'KPIS',format:'json',accountId:'acct-report-kpi'});
+    expect(report.ok).toBe(true);
+    const rows = (report.result as {rows:Array<Record<string,unknown>>}).rows;
+    expect(rows).toHaveLength(2);
+    const accountRow = rows.find((row) => row.entityType === 'account')!;
+    const listingRow = rows.find((row) => row.entityType === 'listing')!;
+    expect((accountRow.metrics as Record<string,unknown>).adSpend).toBe(12.5);
+    expect((accountRow.evidence as Record<string,unknown>).adSpend).toBe('Investimento em publicidade');
+    expect((listingRow.metrics as Record<string,unknown>).netRevenue).toBe(90);
+    expect((listingRow.evidence as Record<string,unknown>).netRevenue).toBe('Receita líquida');
+    expect((listingRow.evidence as Record<string,unknown>).filtersAndPeriod).toBe('["Período=Últimos 7 dias"]');
+  });
+
+  it('não deixa ativar conector que exige credenciais sem conexão verificada', async () => {
+    db.db.prepare(`INSERT INTO connector_registry (id,label,category,status,requires_credentials) VALUES (?,?,?,?,?)`)
+      .run('connector-test-oauth','Conector OAuth de teste','analytics','NAO_CONECTADO',1);
+    const result = await call('connector.setEnabled',{connectorId:'connector-test-oauth',enabled:true});
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toContain('credenciais e teste de conexão');
+    const state = db.row<{enabled:number}>('SELECT enabled FROM connector_states WHERE connector_id=?','connector-test-oauth');
+    expect(state).toBeNull();
+  });
+
+  it('desconecta o conector, remove somente seus segredos e registra a operação', async () => {
+    db.db.prepare(`INSERT INTO connector_registry (id,label,category,status,requires_credentials) VALUES (?,?,?,?,?)`)
+      .run('connector-disconnect-test','Conector conectado','analytics','CONECTADO',1);
+    db.db.prepare(`INSERT INTO connector_states (connector_id,enabled,updated_at,updated_by) VALUES (?,?,?,?)`)
+      .run('connector-disconnect-test',1,new Date().toISOString(),'admin');
+    db.db.prepare(`INSERT INTO connector_credentials_metadata (id,connector_id,label,masked_hint,stored_in,created_at) VALUES (?,?,?,?,?,?)`)
+      .run('credential-meta-1','connector-disconnect-test','Token OAuth','abcd…yz','secrets',new Date().toISOString());
+    const store = new SecretStore(db, join(dir, 'secrets'));
+    store.set('connector:connector-disconnect-test:access_token','token-que-nao-pode-vazar');
+    store.set('connector:connector-disconnect-test:refresh_token','refresh-que-nao-pode-vazar');
+    store.set('connector:outro:access_token','token-de-outro-conector');
+
+    const response = await call('connector.disconnect',{connectorId:'connector-disconnect-test'});
+    expect(response.ok).toBe(true);
+    const result = response.result as {status:string;enabled:boolean;secretsRemoved:number;credentialMetadataRemoved:number};
+    expect(result.status).toBe('NAO_CONECTADO');
+    expect(result.enabled).toBe(false);
+    expect(result.secretsRemoved).toBe(2);
+    expect(result.credentialMetadataRemoved).toBe(1);
+    expect(store.get('connector:connector-disconnect-test:access_token')).toBeNull();
+    expect(store.get('connector:connector-disconnect-test:refresh_token')).toBeNull();
+    expect(store.get('connector:outro:access_token')).toBe('token-de-outro-conector');
+    expect(db.row<{status:string}>('SELECT status FROM connector_registry WHERE id=?','connector-disconnect-test')?.status).toBe('NAO_CONECTADO');
+    expect(db.row<{enabled:number}>('SELECT enabled FROM connector_states WHERE connector_id=?','connector-disconnect-test')?.enabled).toBe(0);
+    expect(db.row<{count:number}>('SELECT COUNT(*) AS count FROM connector_credentials_metadata WHERE connector_id=?','connector-disconnect-test')?.count).toBe(0);
+    const audit = db.row<{reason:string}>('SELECT reason FROM audit_log WHERE entity=? AND entity_id=? ORDER BY id DESC LIMIT 1','connector','connector-disconnect-test');
+    expect(audit?.reason).not.toContain('token-que-nao-pode-vazar');
   });
 });

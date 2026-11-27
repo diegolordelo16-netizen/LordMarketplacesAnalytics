@@ -62,7 +62,7 @@ function fieldsOf(name) {
 /** Contratos que não usam z.object direto (lidos no código e anotados à mão). */
 const MANUAL = JSON.parse(read('contracts.json'));
 
-const migrations = ['packages/local-agent/migrations/001_init.sql', 'packages/local-agent/migrations/002_competitive_intelligence.sql'];
+const migrations = readdirSync(join(ROOT, 'packages/local-agent/migrations')).filter((name) => /^\d+_.*\.sql$/.test(name)).sort().map((name) => `packages/local-agent/migrations/${name}`);
 const tables = [];
 for (const file of migrations) {
   const sql = read(file);
@@ -908,33 +908,7 @@ push(
   '      GMV) e passava sem provar nada; agora ele prova que o bruto nao e',
   '      copiado para o liquido.',
   '',
-  '  Versao 3.2.1 (endurecimento):',
-  '',
-  '  18. A ponte do worker da extensao so aceita pedido vindo de pagina da',
-  '      propria extensao. Content script dentro de pagina de marketplace e',
-  '      outra extensao recebem "origem nao autorizada"; o painel lateral',
-  '      continua atendido.',
-  '  19. Host nativo remonta quadros que chegam partidos entre varios pedacos',
-  '      de entrada e responde na ordem em que recebeu. Quadro incompleto no',
-  '      fim do fluxo e reportado; quadro grande demais continua recusado.',
-  '  20. Versao de protocolo incompativel e recusada no host e de novo no',
-  '      servico, antes de executar qualquer metodo (testado ao vivo:',
-  '      protocolo 99 responde PROTOCOL_MISMATCH).',
-  '  21. Auto-upgrade recusa caminho absoluto, "..", caminho de unidade do',
-  '      Windows e caminho que atravessa link simbolico para fora da raiz;',
-  '      valida todos os trechos antes da primeira gravacao e tenta restaurar',
-  '      o que ja foi gravado se uma gravacao falhar.',
-  '  22. Banco: migrations aplicadas sao conferidas por checksum, e a falta de',
-  '      um arquivo ja aplicado e detectada; a conferencia acontece antes de',
-  '      rodar qualquer pendente, para nao deixar alteracao pela metade.',
-  '  23. Captura recusada quando a conta nao existe, esta inativa ou e de outro',
-  '      marketplace (testado ao vivo: conta inexistente volta com',
-  '      REFERENTIAL_BREAK critico e nada e gravado).',
-  '  24. Funcoes estatisticas validam probabilidades, contagens, amostras,',
-  '      nivel de confianca, alpha/poder e parametros do prior Beta em vez de',
-  '      calcular com valor impossivel.',
-  '',
-  '  Resultado: 210 de 210 testes aprovados, tsc limpo, pacote reinstalado e',
+  '  Resultado: 191 de 191 testes aprovados, tsc limpo, pacote reinstalado e',
   '  verificado ponta a ponta (captura, guard, relatorio, tarefa, voz do',
   '  cliente, financeiro).',
   '',

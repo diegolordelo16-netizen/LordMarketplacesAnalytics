@@ -90,3 +90,18 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border: 1px solid var(--line, #1e293b); border-radius: 8px; font-family: inherit;
 }
 #manual-token { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+#sync-scope, #operation-mode, #schedule-cadence {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 8px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: inherit;
+}
+#sync-all, #save-mode { width: 100%; margin-top: 4px; }
+
+#new-user-name, #new-user-email, #new-user-password, #new-user-role, .user-role {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; margin: 4px 0 8px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: inherit;
+}
+.user-row { display: grid; grid-template-columns: 1fr 110px auto auto; gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.user-summary { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+button.tiny { flex: 0 0 auto; padding: 5px 7px; font-size: 11px; }
+@media (max-width: 440px) { .user-row { grid-template-columns: 1fr 1fr; } .user-summary { grid-column: 1 / -1; } }

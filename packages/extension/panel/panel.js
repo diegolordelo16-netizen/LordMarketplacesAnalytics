@@ -5,6 +5,8 @@
 const $ = (id) => document.getElementById(id);
 
 const MP_LABEL = { mercado_livre: 'Mercado Livre', shopee: 'Shopee', amazon: 'Amazon', tiktok_shop: 'TikTok Shop' };
+let currentRole = null;
+
 const KIND_LABEL = {
   listing_public: 'anúncio público',
   listing_list: 'lista de anúncios',
@@ -75,11 +77,19 @@ async function ping() {
 
   const res = await call('auth.session', { token });
   if (res?.ok === true) {
+    currentRole = res.result?.role ?? null;
+    const admin = $('user-admin');
+    if (admin) {
+      admin.hidden = currentRole !== 'super_admin';
+      if (currentRole === 'super_admin') void loadUsers();
+    }
     mark('http', 'ok', 'autenticado');
     mark('native', 'ok', 'respondendo');
     setStatus(true, 'ok', 'conectado ao serviço local');
     return true;
   }
+  currentRole = null;
+  if ($('user-admin')) $('user-admin').hidden = true;
 
   // Diagnóstico: separa «fora do ar» de «respondeu mas recusou».
   const diag = (await call('mi.diagnose'))?.result ?? null;
@@ -128,11 +138,310 @@ async function capture() {
       : `Falha: ${res.error ?? 'desconhecida'}`;
 }
 
+async function capturePages() {
+  const button = $('capture-pages');
+  button.disabled = true;
+  button.textContent = 'Coletando páginas…';
+  const hint = $('hint');
+  hint.textContent = 'A coleta paginada abre uma aba temporária em segundo plano. Ela para em CAPTCHA/login e nunca envia ou publica alterações.';
+  const res = await call('capture.scanListingPages', { maxPages: 5 });
+  button.disabled = false;
+  button.textContent = 'Coletar até 5 páginas de anúncios';
+  if (!res?.ok || !res.result) {
+    hint.textContent = `Falha na coleta paginada: ${res?.error?.message ?? 'resposta inválida'}`;
+    return;
+  }
+  const r = res.result;
+  hint.textContent = `${r.pagesSucceeded}/${r.pagesScanned} páginas capturadas · ${r.totalListings} anúncios encontrados. Parada: ${r.stoppedReason}`;
+}
+
+async function captureAreas() {
+  if (!window.confirm('Iniciar leitura das áreas do vendedor que estiverem ligadas por links visíveis? A varredura permanece no mesmo domínio, limita-se a 8 páginas e para em login/CAPTCHA. Nenhuma alteração será publicada.')) return;
+  const button = $('capture-areas');
+  button.disabled = true;
+  button.textContent = 'Varrendo áreas…';
+  const hint = $('hint');
+  hint.textContent = 'Lendo somente links visíveis e páginas autorizadas do mesmo marketplace. A operação para em qualquer tela de login ou verificação.';
+  try {
+    const res = await call('capture.scanAuthorizedAreas', { maxPages: 8 });
+    if (!res?.ok || !res.result) {
+      hint.textContent = `Falha na varredura: ${res?.error?.message ?? 'resposta inválida'}`;
+      return;
+    }
+    const r = res.result;
+    hint.textContent = `${r.pagesSucceeded}/${r.pagesScanned} páginas lidas · ${r.pagesQueued} em fila · áreas: ${(r.areas ?? []).join(', ') || '—'}. Parada: ${r.stoppedReason}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Varredura de áreas autorizadas';
+  }
+}
+
 async function flush() {
   const res = await call('queue.flush');
   const hint = $('hint');
   if (res?.ok) hint.textContent = `Fila: ${res.result.sent} enviado(s), ${res.result.left} restante(s).`;
   else hint.textContent = `Fila indisponível: ${res?.error?.message ?? 'erro'}`;
+}
+
+
+async function syncAllAccounts() {
+  const button = $('sync-all');
+  const out = $('sync-out');
+  button.disabled = true;
+  button.textContent = 'Preparando sincronização…';
+  try {
+    const scope = $('sync-scope').value;
+    const createPayload = { scope };
+    if (scope === 'ACCOUNT') {
+      createPayload.accountId = $('sync-account').value;
+      if (!createPayload.accountId) { out.textContent = 'Selecione uma conta ativa para sincronizar.'; return; }
+    }
+    const created = await call('sync.createAll', createPayload);
+    if (!created?.ok || !created.result?.batchId) {
+      out.textContent = `Não foi possível criar o lote: ${created?.error?.message ?? 'resposta inválida'}`;
+      return;
+    }
+    const { batchId, accounts } = created.result;
+    button.textContent = 'Lendo abas de vendedor…';
+    const scanned = await call('capture.syncAllOpenTabs', { batchId, maxPages: 8 });
+    if (!scanned?.ok || !scanned.result) {
+      out.textContent = `Lote ${batchId}: criado, mas a extensão não concluiu a varredura: ${scanned?.error?.message ?? 'sem resultado'}`;
+      return;
+    }
+    const outcomes = scanned.result.outcomes ?? [];
+    const completed = outcomes.filter((item) => item.status === 'COMPLETED').length;
+    const partial = outcomes.filter((item) => item.status === 'PARTIAL').length;
+    const skipped = outcomes.filter((item) => item.status === 'SKIPPED').length;
+    const failed = outcomes.filter((item) => item.status === 'FAILED').length;
+    out.textContent = `Lote ${batchId} · ${accounts?.length ?? outcomes.length} conta(s): ${completed} completa(s), ${partial} parcial(is), ${skipped} ignorada(s), ${failed} falha(s). Nenhuma sessão foi alternada.`;
+    await loadRecentSyncBatches();
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Sincronizar contas em abas abertas';
+  }
+}
+
+function syncScheduleLabel(schedule) {
+  const scope = schedule.scope === 'ALL_ENABLED_MARKETPLACES' ? 'Marketplaces habilitados'
+    : schedule.scope === 'ACCOUNT' ? `Conta ${schedule.account_id}` : 'Todas as contas ativas';
+  const cadence = schedule.cadence_label === 'custom' ? `a cada ${schedule.interval_minutes} min`
+    : ({ '1h': 'por hora', '6h': 'a cada 6 horas', daily: 'diariamente', weekly: 'semanalmente' }[schedule.cadence] || schedule.cadence);
+  return `${scope} · ${cadence} · ${schedule.enabled ? 'ativo' : 'pausado'} · próxima: ${schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString('pt-BR') : '—'}${schedule.last_status ? ` · última: ${schedule.last_status}` : ''}`;
+}
+
+async function loadSyncSchedules() {
+  const target = $('sync-schedules');
+  if (!target) return;
+  const response = await call('sync.schedule.list', {});
+  if (!response?.ok) { target.textContent = `Não foi possível carregar agendamentos: ${response?.error?.message ?? 'serviço indisponível'}`; return; }
+  const schedules = response.result ?? [];
+  target.replaceChildren();
+  if (!schedules.length) { target.textContent = 'Nenhuma coleta recorrente configurada.'; return; }
+  for (const schedule of schedules) {
+    const row = document.createElement('div'); row.className = 'sync-schedule-row';
+    const description = document.createElement('span'); description.textContent = syncScheduleLabel(schedule); row.append(description);
+    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'tiny';
+    toggle.textContent = schedule.enabled ? 'Pausar' : 'Ativar'; toggle.dataset.syncAction = 'toggle';
+    toggle.dataset.id = schedule.id; toggle.dataset.enabled = schedule.enabled ? '1' : '0'; row.append(toggle);
+    const history = document.createElement('button'); history.type = 'button'; history.className = 'tiny';
+    history.textContent = 'Histórico'; history.dataset.syncAction = 'history'; history.dataset.id = schedule.id; row.append(history);
+    target.append(row);
+  }
+}
+
+async function showSyncScheduleHistory(scheduleId) {
+  const target = $('sync-schedule-history');
+  if (!target) return;
+  const response = await call('sync.schedule.runs', { scheduleId, limit: 30 });
+  if (!response?.ok) { target.textContent = `Histórico indisponível: ${response?.error?.message ?? 'erro'}`; return; }
+  const runs = response.result ?? [];
+  target.replaceChildren();
+  const heading = document.createElement('strong'); heading.textContent = 'Histórico de coletas'; target.append(heading);
+  if (!runs.length) { const empty = document.createElement('p'); empty.textContent = 'Nenhuma coleta executada.'; target.append(empty); return; }
+  for (const run of runs) {
+    const line = document.createElement('p');
+    let details = '{}'; try { details = JSON.stringify(JSON.parse(run.summary_json || '{}')); } catch { details = 'resumo inválido'; }
+    line.textContent = `${new Date(run.scheduled_at).toLocaleString('pt-BR')} · ${run.status} · ${details}${run.error ? ` · ${run.error}` : ''}`;
+    target.append(line);
+    if (run.batch_id && ['FAILED','PARTIAL'].includes(run.status)) {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'tiny';
+      retry.textContent = 'Repetir contas com falha'; retry.dataset.syncRetryBatch = run.batch_id; retry.dataset.scheduleId = scheduleId;
+      target.append(retry);
+    }
+  }
+}
+
+async function createSyncSchedule() {
+  const cadence = $('sync-cadence').value;
+  const payload = { scope: $('sync-scope').value, cadence };
+  if (payload.scope === 'ACCOUNT') {
+    payload.accountId = $('sync-account').value;
+    if (!payload.accountId) { $('sync-out').textContent = 'Selecione uma conta ativa para agendar.'; return; }
+  }
+  if (cadence === 'custom') {
+    const intervalMinutes = Number($('sync-interval').value);
+    if (!Number.isInteger(intervalMinutes) || intervalMinutes < 15 || intervalMinutes > 43200) {
+      $('sync-out').textContent = 'Intervalo precisa ser um número inteiro entre 15 e 43200 minutos.'; return;
+    }
+    payload.intervalMinutes = intervalMinutes;
+  }
+  const button = $('sync-schedule-add'); button.disabled = true;
+  try {
+    const response = await call('sync.schedule.create', payload);
+    if (!response?.ok) { $('sync-out').textContent = `Falha ao agendar coleta: ${response?.error?.message ?? 'erro'}`; return; }
+    $('sync-out').textContent = `Coleta agendada. Próxima execução: ${new Date(response.result.nextRunAt).toLocaleString('pt-BR')}. Requer navegador aberto e abas de vendedor autenticadas.`;
+    await loadSyncSchedules();
+  } finally { button.disabled = false; }
+}
+
+async function toggleSyncSchedule(button) {
+  const enabled = button.dataset.enabled !== '1';
+  const response = await call('sync.schedule.setEnabled', { id: button.dataset.id, enabled });
+  $('sync-out').textContent = response?.ok ? (enabled ? 'Agendamento ativado.' : 'Agendamento pausado.') : `Falha ao alterar agendamento: ${response?.error?.message ?? 'erro'}`;
+  await loadSyncSchedules();
+}
+
+async function loadRecentSyncBatches() {
+  const target = $('sync-recent-batches'); if (!target) return;
+  const response = await call('sync.list', { limit: 30 });
+  if (!response?.ok) { target.textContent = `Lotes indisponíveis: ${response?.error?.message ?? 'serviço fora do ar'}`; return; }
+  const batches = response.result ?? []; target.replaceChildren();
+  if (!batches.length) { target.textContent = 'Nenhum lote de sincronização registrado.'; return; }
+  for (const batch of batches) {
+    const line = document.createElement('div'); line.className = 'sync-schedule-row';
+    const detail = document.createElement('span');
+    detail.textContent = `${new Date(batch.requested_at).toLocaleString('pt-BR')} · ${batch.scope} · ${batch.status} · ${batch.id.slice(0, 8)}`;
+    line.append(detail);
+    if (['PARTIAL','FAILED'].includes(batch.status)) {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'tiny';
+      retry.textContent = 'Repetir falhas'; retry.dataset.syncRetryBatch = batch.id;
+      line.append(retry);
+    }
+    target.append(line);
+  }
+}
+
+function userAdminMessage(message) {
+  const out = $('user-admin-out'); if (out) out.textContent = message;
+}
+
+async function loadUsers() {
+  if (currentRole !== 'super_admin') return;
+  const target = $('user-list'); if (!target) return;
+  const response = await call('user.list', {});
+  if (!response?.ok) { target.textContent = `Não foi possível listar usuários: ${response?.error?.message ?? 'erro'}`; return; }
+  target.replaceChildren();
+  const users = response.result ?? [];
+  if (!users.length) { target.textContent = 'Nenhum usuário cadastrado.'; return; }
+  for (const user of users) {
+    const row = document.createElement('div'); row.className = 'user-row'; row.dataset.userId = user.id;
+    row.dataset.userEmail = user.email; row.dataset.userDisplayName = user.display_name;
+    const summary = document.createElement('span'); summary.className = 'user-summary';
+    summary.textContent = `${user.display_name} · ${user.email} · ${user.is_active ? 'ativo' : 'inativo'}`;
+    const role = document.createElement('select'); role.className = 'user-role'; role.setAttribute('aria-label', `Papel de ${user.email}`);
+    for (const [value,label] of [['super_admin','Super admin'],['operador','Operador'],['visualizador','Visualizador']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; role.append(option);
+    }
+    role.value = user.role; role.dataset.originalRole = user.role;
+    const save = document.createElement('button'); save.type = 'button'; save.className = 'tiny'; save.dataset.userAction = 'role'; save.textContent = 'Salvar papel';
+    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'tiny'; toggle.dataset.userAction = 'active';
+    toggle.dataset.active = user.is_active ? '1' : '0'; toggle.textContent = user.is_active ? 'Desativar' : 'Ativar';
+    row.append(summary, role, save, toggle); target.append(row);
+  }
+}
+
+async function createUser() {
+  const payload = {
+    displayName: $('new-user-name').value.trim(),
+    email: $('new-user-email').value.trim(),
+    role: $('new-user-role').value,
+    password: $('new-user-password').value,
+  };
+  if (!payload.displayName || !payload.email || payload.password.length < 10) {
+    userAdminMessage('Informe nome, e-mail válido e senha inicial com pelo menos 10 caracteres.'); return;
+  }
+  const button = $('user-create'); button.disabled = true;
+  try {
+    const response = await call('user.upsert', payload);
+    if (!response?.ok) { userAdminMessage(`Falha ao criar usuário: ${response?.error?.message ?? 'erro'}`); return; }
+    $('new-user-name').value = ''; $('new-user-email').value = ''; $('new-user-password').value = '';
+    userAdminMessage('Usuário criado. A nova conta recebe somente o papel selecionado.');
+    await loadUsers();
+  } finally { button.disabled = false; }
+}
+
+async function updateUserRole(row) {
+  const userId = row.dataset.userId; const role = row.querySelector('.user-role');
+  if (!userId || !role) return;
+  const response = await call('user.upsert', { id: userId, email: row.dataset.userEmail, displayName: row.dataset.userDisplayName, role: role.value });
+  userAdminMessage(response?.ok ? `Papel atualizado para ${role.value}.` : `Não foi possível atualizar: ${response?.error?.message ?? 'erro'}`);
+  await ping();
+  if (currentRole === 'super_admin') await loadUsers();
+}
+
+async function toggleUserActive(row, button) {
+  const userId = row.dataset.userId; const enabled = button.dataset.active !== '1';
+  const response = await call('user.setActive', { userId, isActive: enabled });
+  userAdminMessage(response?.ok ? `Usuário ${enabled ? 'ativado' : 'desativado'}. Sessões do usuário desativado são revogadas.` : `Não foi possível alterar usuário: ${response?.error?.message ?? 'erro'}`);
+  await loadUsers();
+}
+
+async function loadSyncAccounts() {
+  const select = $('sync-account'); if (!select) return;
+  const response = await call('account.list', {});
+  select.replaceChildren();
+  if (!response?.ok) { const option = document.createElement('option'); option.value = ''; option.textContent = 'Contas indisponíveis'; select.append(option); return; }
+  const active = (response.result ?? []).filter((account) => account.is_active);
+  if (!active.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'Nenhuma conta ativa cadastrada'; select.append(option); return; }
+  for (const account of active) {
+    const option = document.createElement('option'); option.value = account.id;
+    option.textContent = `${MP_LABEL[account.marketplace] || account.marketplace} · ${account.display_name}`; select.append(option);
+  }
+}
+
+async function retryFailedSync(batchId, scheduleId, button) {
+  button.disabled = true; button.textContent = 'Preparando repetição…';
+  try {
+    const created = await call('sync.retryFailed', { batchId });
+    if (!created?.ok || !created.result?.batchId) { $('sync-out').textContent = `Não foi possível repetir: ${created?.error?.message ?? 'erro'}`; return; }
+    const scanned = await call('capture.syncAllOpenTabs', { batchId: created.result.batchId, maxPages: 8 });
+    if (!scanned?.ok || !scanned.result) { $('sync-out').textContent = `Novo lote ${created.result.batchId} criado; a extensão não concluiu a coleta: ${scanned?.error?.message ?? 'erro'}`; return; }
+    const outcomes = scanned.result.outcomes ?? [];
+    const completed = outcomes.filter((item) => item.status === 'COMPLETED').length;
+    const partial = outcomes.filter((item) => item.status === 'PARTIAL').length;
+    const skipped = outcomes.filter((item) => item.status === 'SKIPPED').length;
+    const failed = outcomes.filter((item) => item.status === 'FAILED').length;
+    $('sync-out').textContent = `Repetição do lote ${batchId} · ${completed} completa(s), ${partial} parcial(is), ${skipped} ignorada(s), ${failed} falha(s). Nenhuma sessão foi alternada.`;
+    await loadRecentSyncBatches();
+    if (scheduleId) await showSyncScheduleHistory(scheduleId);
+  } finally { button.disabled = false; button.textContent = 'Repetir contas com falha'; }
+}
+
+async function loadOperationMode() {
+  const res = await call('operation.mode.get', {});
+  if (res?.ok && res.result?.mode) $('operation-mode').value = res.result.mode;
+}
+
+async function saveOperationMode() {
+  const out = $('operation-out');
+  const res = await call('operation.mode.set', { mode: $('operation-mode').value });
+  if (!res?.ok) {
+    out.textContent = `Falha ao salvar modo: ${res?.error?.message ?? 'sem resposta'}`;
+    return;
+  }
+  out.textContent = `Modo ${res.result.mode} salvo. Publicação: desativada; alterações de campanhas: desativadas; aprovação humana: obrigatória.`;
+}
+
+async function createAnalysisSchedule() {
+  const out = $('operation-out');
+  const res = await call('analysis.schedule.create', { mode: '360', days: 30, cadence: $('schedule-cadence').value });
+  out.textContent = res?.ok ? `Análise 360 agendada (${res.result.nextRunAt}).` : `Falha no agendamento: ${res?.error?.message ?? 'sem resposta'}`;
+}
+
+async function createReportSchedule() {
+  const out = $('operation-out');
+  const res = await call('report.schedule.create', { reportType: 'EXECUTIVO', format: 'json', cadence: $('schedule-cadence').value });
+  out.textContent = res?.ok ? `Relatório executivo agendado (${res.result.nextRunAt}).` : `Falha no agendamento: ${res?.error?.message ?? 'sem resposta'}`;
 }
 
 /**
@@ -167,16 +476,62 @@ async function saveManual() {
     : 'Credenciais guardadas, mas o serviço ainda não autenticou. Confira a porta e o token.';
 }
 
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== 'MI_SYNC_PROGRESS') return;
+  const out = $('sync-out'); if (!out) return;
+  const current = Number(message.current ?? 0); const total = Number(message.total ?? 0);
+  const label = message.marketplace ? `${MP_LABEL[message.marketplace] || message.marketplace} · ` : '';
+  out.textContent = `${message.message || 'Coleta em andamento.'} ${total ? `(${current}/${total})` : ''} ${label}${message.pagesScanned !== undefined ? `· páginas ${message.pagesSucceeded ?? 0}/${message.pagesScanned}` : ''}${message.currentPage ? ` · atual ${message.currentPage}` : ''}${message.pendingPages ? ` · pendentes ${message.pendingPages}` : ''}`.trim();
+});
+
 document.addEventListener('DOMContentLoaded', async () => {
   $('capture').addEventListener('click', () => void capture());
+  $('capture-pages').addEventListener('click', () => void capturePages());
+  $('capture-areas').addEventListener('click', () => void captureAreas());
   $('flush').addEventListener('click', () => void flush());
+  $('sync-all').addEventListener('click', () => void syncAllAccounts());
+  $('sync-schedule-add').addEventListener('click', () => void createSyncSchedule());
+  $('sync-refresh').addEventListener('click', () => void loadSyncSchedules());
+  $('sync-cadence').addEventListener('change', () => $('sync-custom-wrap').toggleAttribute('hidden', $('sync-cadence').value !== 'custom'));
+  $('sync-scope').addEventListener('change', async () => {
+    const scoped = $('sync-scope').value === 'ACCOUNT';
+    $('sync-account-wrap').toggleAttribute('hidden', !scoped);
+    if (scoped) await loadSyncAccounts();
+  });
+  $('sync-schedules').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-sync-action]'); if (!button) return;
+    if (button.dataset.syncAction === 'toggle') void toggleSyncSchedule(button);
+    if (button.dataset.syncAction === 'history') void showSyncScheduleHistory(button.dataset.id);
+  });
+  const retryBatchHandler = (event) => {
+    const button = event.target.closest('button[data-sync-retry-batch]'); if (!button) return;
+    void retryFailedSync(button.dataset.syncRetryBatch, button.dataset.scheduleId, button);
+  };
+  $('sync-schedule-history').addEventListener('click', retryBatchHandler);
+  $('sync-recent-batches').addEventListener('click', retryBatchHandler);
+  $('sync-batches-refresh').addEventListener('click', () => void loadRecentSyncBatches());
+  $('save-mode').addEventListener('click', () => void saveOperationMode());
+  $('schedule-analysis').addEventListener('click', () => void createAnalysisSchedule());
+  $('schedule-report').addEventListener('click', () => void createReportSchedule());
   $('ping').addEventListener('click', () => void ping());
   $('manual-save').addEventListener('click', () => void saveManual());
+  $('user-create').addEventListener('click', () => void createUser());
+  $('user-refresh').addEventListener('click', () => void loadUsers());
+  $('user-list').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-user-action]'); if (!button) return;
+    const row = button.closest('.user-row'); if (!row) return;
+    if (button.dataset.userAction === 'role') void updateUserRole(row);
+    if (button.dataset.userAction === 'active') void toggleUserActive(row, button);
+  });
   // Preenche com o que o worker diz estar valendo de fato (não um palpite).
   const current = await call('manual.get');
   if (current?.result?.port) $('manual-port').value = String(current.result.port);
   if (current?.result?.token) $('manual-token').value = current.result.token;
   const version = chrome.runtime.getManifest().version;
   $('version').textContent = `v${version}`;
+  await loadOperationMode();
   await ping();
+  await loadSyncSchedules();
+  await loadSyncAccounts();
+  await loadRecentSyncBatches();
 });

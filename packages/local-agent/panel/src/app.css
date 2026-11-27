@@ -129,6 +129,9 @@ body {
   padding: 13px 15px; box-shadow: var(--shadow);
 }
 
+.kpi-drill { width: 100%; text-align: left; cursor: pointer; color: inherit; font: inherit; display: flex; flex-direction: column; gap: 2px; transition: border-color .15s, transform .15s; }
+.kpi-drill:hover { border-color: var(--accent); transform: translateY(-1px); }
+.kpi-hint { color: var(--accent); font-size: 10px; margin-top: 6px; opacity: .85; }
 .kpi .l { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
 .kpi .v { font-size: 21px; font-weight: 650; letter-spacing: -.02em; margin-top: 3px; }
 .kpi.pend .v { color: var(--warn); }
@@ -371,3 +374,22 @@ tbody tr:hover { background: var(--surface-2); }
   .ps-dock { flex-wrap: wrap; }
   .ps-dock .btn { width: 100%; }
 }
+
+
+/* Local client-side search, sorting and pagination for every generated table. */
+.table-tools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 12px; border-bottom:1px solid var(--line); }
+.table-tools input[data-table-search] { min-width:180px; max-width:320px; width:100%; }
+.table-page-tools { display:flex; gap:6px; margin-left:auto; }
+.table-sort { background:transparent; border:0; color:inherit; font:inherit; font-weight:650; padding:0; cursor:pointer; text-align:left; }
+.table-sort:hover { text-decoration:underline; }
+
+
+/* Historical KPI chart: responsive vector plot with explicit gaps. */
+.trend-chart-wrap { width:100%; overflow-x:auto; }
+.trend-chart { display:block; width:100%; min-width:540px; height:auto; }
+.trend-grid { stroke:var(--line); stroke-width:1; stroke-dasharray:3 4; }
+.trend-axis { fill:var(--muted); font-size:10px; }
+.trend-path { fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.trend-dot { fill:var(--card); stroke:var(--accent); stroke-width:2; }
+#history-chart { margin-top:10px; }
+#bundle-json { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }

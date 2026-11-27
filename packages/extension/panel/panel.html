@@ -12,7 +12,7 @@
         <span class="dot" id="status-dot" aria-hidden="true"></span>
         <strong>Marketplace Intelligence</strong>
       </div>
-      <span class="version" id="version">v3.2.1</span>
+      <span class="version" id="version">v3.10.8</span>
     </header>
 
     <section class="card">
@@ -25,9 +25,91 @@
       </dl>
       <div class="actions">
         <button id="capture" class="primary">Capturar esta página</button>
+        <button id="capture-pages">Coletar até 5 páginas de anúncios</button>
+        <button id="capture-areas">Varredura de áreas autorizadas</button>
         <button id="flush">Enviar fila</button>
       </div>
       <p class="hint" id="hint">A captura lê apenas o que está visível na sua sessão. Nada de cookies, tokens ou endpoints privados.</p>
+    </section>
+
+    <section class="card">
+      <h2>Central de sincronização</h2>
+      <label class="field-label" for="sync-scope">Escopo</label>
+      <select id="sync-scope">
+        <option value="ALL_ACTIVE_ACCOUNTS">Todas as contas ativas</option>
+        <option value="ALL_ENABLED_MARKETPLACES">Todos os marketplaces habilitados</option>
+        <option value="ACCOUNT">Uma conta específica</option>
+      </select>
+      <div id="sync-account-wrap" hidden>
+        <label class="field-label" for="sync-account">Conta para agendar</label>
+        <select id="sync-account"><option value="">Carregando contas…</option></select>
+      </div>
+      <button id="sync-all" class="primary">Sincronizar contas em abas abertas agora</button>
+      <label class="field-label" for="sync-cadence">Agendar coleta recorrente</label>
+      <select id="sync-cadence">
+        <option value="1h">A cada hora</option>
+        <option value="6h">A cada 6 horas</option>
+        <option value="daily">Diariamente</option>
+        <option value="weekly">Semanalmente</option>
+        <option value="custom">Intervalo personalizado</option>
+      </select>
+      <div id="sync-custom-wrap" hidden>
+        <label class="field-label" for="sync-interval">Intervalo em minutos (15–43200)</label>
+        <input id="sync-interval" type="number" min="15" max="43200" step="1" value="60" />
+      </div>
+      <div class="actions">
+        <button id="sync-schedule-add">Criar agendamento</button>
+        <button id="sync-refresh">Atualizar agendamentos</button>
+      </div>
+      <div id="sync-schedules" class="hint">Carregando agendamentos…</div>
+      <div id="sync-schedule-history" class="hint"></div>
+      <div class="actions"><strong>Lotes recentes</strong><button id="sync-batches-refresh" class="tiny">Atualizar lotes</button></div>
+      <div id="sync-recent-batches" class="hint">Carregando lotes…</div>
+      <p class="hint" id="sync-out">A sincronização usa somente abas de vendedor já abertas e a identidade visível da conta. Agendamentos aguardam o navegador/worker ativo e nunca trocam sessões.</p>
+    </section>
+
+    <section class="card">
+      <h2>Modo de operação e agendamento</h2>
+      <label class="field-label" for="operation-mode">Modo</label>
+      <select id="operation-mode">
+        <option value="MANUAL_GUIDED">MANUAL_GUIDED — manual guiado</option>
+        <option value="AUTO_ASSISTED">AUTO_ASSISTED — análise automática com revisão</option>
+        <option value="AUTO_PILOT">AUTO_PILOT — análise contínua</option>
+      </select>
+      <button id="save-mode">Salvar modo</button>
+      <label class="field-label" for="schedule-cadence">Frequência dos agendamentos</label>
+      <select id="schedule-cadence">
+        <option value="daily">Diariamente</option>
+        <option value="6h">A cada 6 horas</option>
+        <option value="1h">A cada hora</option>
+        <option value="weekly">Semanalmente</option>
+      </select>
+      <div class="actions">
+        <button id="schedule-analysis">Agendar análise</button>
+        <button id="schedule-report">Agendar relatório</button>
+      </div>
+      <p class="hint" id="operation-out">Todos os modos mantêm publicação e alterações remotas desativadas. Ações sensíveis exigem aprovação humana.</p>
+    </section>
+
+    <section class="card" id="user-admin" hidden>
+      <h2>Usuários e permissões</h2>
+      <p class="hint">Gerenciamento restrito a super_admin. O serviço valida cada operação e protege o último administrador ativo.</p>
+      <label class="field-label" for="new-user-name">Nome</label>
+      <input id="new-user-name" type="text" maxlength="120" autocomplete="off" placeholder="Nome do usuário" />
+      <label class="field-label" for="new-user-email">E-mail</label>
+      <input id="new-user-email" type="email" maxlength="254" autocomplete="off" placeholder="usuario@exemplo.com" />
+      <label class="field-label" for="new-user-role">Papel</label>
+      <select id="new-user-role">
+        <option value="operador">Operador</option>
+        <option value="visualizador">Visualizador</option>
+        <option value="super_admin">Super administrador</option>
+      </select>
+      <label class="field-label" for="new-user-password">Senha inicial (mínimo 10 caracteres)</label>
+      <input id="new-user-password" type="password" minlength="10" maxlength="200" autocomplete="new-password" />
+      <button id="user-create" class="primary">Criar usuário</button>
+      <div class="actions"><strong>Usuários cadastrados</strong><button id="user-refresh" class="tiny">Atualizar</button></div>
+      <div id="user-list" class="hint">Carregando usuários…</div>
+      <p class="hint" id="user-admin-out"></p>
     </section>
 
     <section class="card">

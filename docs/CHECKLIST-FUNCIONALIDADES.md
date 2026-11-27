@@ -428,12 +428,48 @@ Contagem feita sobre as linhas de resultado do próprio documento (as linhas de 
 - **Serviço:** cada método com schema foi exercitado; os que não têm schema foram lidos no código e
   testados com dados reais do banco local.
 
-## Próximos passos, em ordem de impacto
+## Próximos passos, em ordem de impacto (revisado em 26/11/2026)
 
-1. Recarregar a extensão em `edge://extensions` e confirmar a captura real na página de Resumo do
-   Mercado Livre (o caminho já está provado no simulador do worker e no serviço instalado).
-2. Ler os valores das áreas do vendedor além dos rótulos do resumo (vendas, ads, devoluções).
-3. Tela de usuários e permissões (hoje só por papel no código).
-4. Filtros globais, busca, ordenação e gráficos históricos no painel.
-5. Exportação XLSX e PDF (com gerador real, não simulado).
-6. Integrações externas opcionais (GA4, Search Console, Trends) — hoje só catálogo.
+1. Validar a extensão no Chrome e Edge com sessões reais autorizadas e confirmar a captura em cada marketplace.
+2. Completar captura de Ads, devoluções, reputação, perguntas, avaliações, paginação e histórico usando páginas visíveis e/ou APIs oficiais autorizadas.
+3. Implementar OAuth e conectores reais para cada provedor (Mercado Livre, Shopee, GA4, Search Console, Trends e demais serviços habilitados).
+4. Completar filtros globais, busca, ordenação, gráficos históricos e detalhamento de KPIs no painel.
+5. Implementar exportação XLSX e PDF nativo, além da visualização imprimível já existente.
+6. Implementar adaptadores de publicação/edição e verificação pós-ação por marketplace, sempre com aprovação e auditoria.
+7. Rodar a suíte Vitest, typecheck, builds do serviço/host e instalador em ambiente com dependências completas; testar instalação e desinstalação em Windows limpo.
+
+
+---
+
+## Atualização de implementação 3.3.0 (26/11/2026)
+
+Esta seção registra o incremento de código feito após a avaliação anterior. Ela **não substitui**
+os estados e evidências históricos acima e não significa que todos os 246 itens do checklist
+estejam concluídos.
+
+| Recurso | Entrega 3.3.0 | Limite / validação pendente |
+|---|---|---|
+| Administração de contas | Ativar/desativar contas e filtrar o seletor para contas ativas | Cadastro automático e teste com contas reais ainda dependem de sessões autenticadas |
+| Usuários | Criar, editar papel/e-mail/senha, ativar/desativar; não expõe hashes; protege o último super_admin | Sem associação granular usuário-conta; falta teste de navegador/instalador |
+| Catálogo | Cadastro/listagem de produtos e SKUs; custo por SKU via código ou ID | Não publica mudanças no marketplace; importação em lote e gestão avançada de variações pendentes |
+| Comparativo | KPIs agregados por loja/marketplace e cobertura; ausente permanece nulo | Depende de snapshots completos; não substitui conciliação financeira |
+| Análise operacional | RAPIDA, PADRAO, FORENSE e 360 com 14 agentes locais e persistência de recomendações | Agentes locais baseados em regras; não alegar treinamento autônomo nem análise de anúncios sem dados |
+| Growth Lab | Criar/editar iniciativas, pontuação RICE/ICE e status | Testes A/B, significância e resultados ainda precisam de dados e fluxo adicional |
+| Biblioteca de mídia | Armazenamento local de JPEG/PNG/WEBP/GIF até 2,5 MB, SHA-256, visualização e exclusão | Não edita imagem nem publica no anúncio |
+| Conectores | Estado de habilitação armazenado e auditado | Habilitar no catálogo não significa API conectada; OAuth/chaves/testes por provedor pendentes |
+| Captura | Ampliação de campos extraídos quando já visíveis no DOM | Não garante leitura de Ads, gráficos canvas, paginação ou histórico que a plataforma não exiba |
+| Exportações | CSV/JSON; PDF por impressão do navegador | XLSX e geração PDF nativa ainda não incluídos |
+| Segurança e qualidade | Correções herdadas do 3.2.1 e novos controles/validações | Suíte completa e builds 3.3.0 não foram executados neste ambiente sem dependências npm |
+
+### Testes adicionados nesta versão
+
+Foram adicionados testes de regressão para ativação de contas, gestão de usuários, catálogo e custos,
+biblioteca de mídia, Growth Lab, comparação e análise sem dados. A execução integral desses testes
+permanece pendente porque `npm ci` não conseguiu completar a instalação de dependências (falha de
+rede/DNS); a ausência do executável `vitest` foi confirmada ao tentar executar `npm test`.
+
+### Critério para marcar um requisito como concluído
+
+Um requisito só poderá receber ✅ quando houver implementação ponta a ponta, teste automatizado ou
+manual reproduzível e, quando aplicável, validação com Chrome/Edge e conta real autorizada. Uma tela,
+um método RPC ou um sinalizador local isolado não comprovam uma integração externa.

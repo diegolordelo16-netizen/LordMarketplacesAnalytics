@@ -4,8 +4,8 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface DbOptions {
@@ -20,7 +20,7 @@ export interface DbOptions {
 }
 
 export class LocalDatabase {
-  readonly db: DatabaseSync;
+  db: DatabaseSync;
   readonly file: string;
   private readonly backupDir: string;
   private readonly migrationsDir: string;
@@ -37,11 +37,16 @@ export class LocalDatabase {
       mkdirSync(this.backupDir, { recursive: true });
     }
 
-    this.db = new DatabaseSync(this.file);
-    this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec('PRAGMA foreign_keys = ON;');
-    this.db.exec('PRAGMA busy_timeout = 5000;');
-    this.db.exec('PRAGMA synchronous = NORMAL;');
+    this.db = this.openDatabase();
+  }
+
+  private openDatabase(): DatabaseSync {
+    const connection = new DatabaseSync(this.file);
+    connection.exec('PRAGMA journal_mode = WAL;');
+    connection.exec('PRAGMA foreign_keys = ON;');
+    connection.exec('PRAGMA busy_timeout = 5000;');
+    connection.exec('PRAGMA synchronous = NORMAL;');
+    return connection;
   }
 
   /** Aplica todas as migrations pendentes. Idempotente e transacional por arquivo. */
@@ -94,12 +99,24 @@ export class LocalDatabase {
         skipped.push(migration.version);
         continue;
       }
-      this.transaction(() => {
-        this.db.exec(migration.sql);
-        this.db
-          .prepare('INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)')
-          .run(migration.version, migration.file, new Date().toISOString(), migration.checksum);
-      });
+      const requiresForeignKeysOff = /^-- @requires_foreign_keys_off\s*$/m.test(migration.sql);
+      if (requiresForeignKeysOff) this.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        this.transaction(() => {
+          this.db.exec(migration.sql);
+          if (requiresForeignKeysOff) {
+            const violations = this.db.prepare('PRAGMA foreign_key_check').all() as unknown[];
+            if (violations.length > 0) {
+              throw new Error(`migration ${migration.version} gerou ${violations.length} violações de chave estrangeira`);
+            }
+          }
+          this.db
+            .prepare('INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)')
+            .run(migration.version, migration.file, new Date().toISOString(), migration.checksum);
+        });
+      } finally {
+        if (requiresForeignKeysOff) this.db.exec('PRAGMA foreign_keys = ON');
+      }
       applied.push(migration.version);
     }
     return { applied, skipped };
@@ -141,20 +158,21 @@ export class LocalDatabase {
   }
 
   /** Backup íntegro antes de qualquer alteração sensível (§18.3, §19). */
-  backup(note: string): { path: string; bytes: number; checksum: string } {
+  backup(note: string): { id: string; path: string; bytes: number; checksum: string } {
     if (this.file === ':memory:') {
-      return { path: ':memory:', bytes: 0, checksum: '' };
+      throw new Error('backup persistente não está disponível para banco em memória');
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const path = join(this.backupDir, `mi-${stamp}.sqlite`);
+    const path = join(this.backupDir, `mi-${stamp}-${randomUUID().slice(0, 8)}.sqlite`);
     // VACUUM INTO gera cópia consistente mesmo com WAL ativo.
     this.db.exec(`VACUUM INTO '${path.replace(/'/g, "''")}'`);
     const buf = readFileSync(path);
     const checksum = createHash('sha256').update(buf).digest('hex');
+    const id = randomUUID();
     this.db
       .prepare('INSERT INTO backups (id, created_at, path, bytes, kind, checksum, note) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(randomUUID(), new Date().toISOString(), path, buf.byteLength, 'AUTO', checksum, note);
-    return { path, bytes: buf.byteLength, checksum };
+      .run(id, new Date().toISOString(), path, buf.byteLength, 'AUTO', checksum, note);
+    return { id, path, bytes: buf.byteLength, checksum };
   }
 
   /** Integridade referencial e de arquivo. */
@@ -196,10 +214,83 @@ export class LocalDatabase {
     this.db.close();
   }
 
-  /** Restaura um backup sobre o arquivo atual (mantendo o anterior como .bak). */
-  static restore(backupPath: string, targetFile: string): void {
-    if (!existsSync(backupPath)) throw new Error(`backup inexistente: ${backupPath}`);
-    if (existsSync(targetFile)) copyFileSync(targetFile, `${targetFile}.pre-restore.bak`);
-    copyFileSync(backupPath, targetFile);
+  /** Restaura somente um backup registrado, checksum-validado e com esquema compatível. */
+  restoreBackup(backupId: string): { backupId: string; restoredAt: string; previousFile: string; migrated: number[]; integrity: { ok: boolean; messages: string[] } } {
+    if (this.file === ':memory:') throw new Error('restauração não está disponível para banco em memória');
+    if (this.txDepth !== 0) throw new Error('não é possível restaurar durante uma transação');
+    const record = this.row<{ path: string; checksum: string }>(
+      'SELECT path,checksum FROM backups WHERE id=?', backupId,
+    );
+    if (!record) throw new Error('backup não encontrado no registro local');
+
+    const backupRoot = realpathSync(this.backupDir);
+    const backupPath = realpathSync(record.path);
+    const rel = relative(backupRoot, backupPath);
+    if (!rel || rel === '.' || rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) {
+      throw new Error('o arquivo de backup está fora do diretório autorizado');
+    }
+    const bytes = readFileSync(backupPath);
+    const checksum = createHash('sha256').update(bytes).digest('hex');
+    if (checksum !== record.checksum) throw new Error('checksum do backup não corresponde ao registro');
+
+    const validationDb = new DatabaseSync(backupPath, { readOnly: true });
+    try {
+      const integrity = validationDb.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check: string }>;
+      if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok') {
+        throw new Error('backup reprovado no integrity_check');
+      }
+      const fkErrors = validationDb.prepare('PRAGMA foreign_key_check').all() as unknown[];
+      if (fkErrors.length) throw new Error(`backup possui ${fkErrors.length} violações de chave estrangeira`);
+      const table = validationDb.prepare("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get() as { found: number } | undefined;
+      if (!table) throw new Error('backup não contém o histórico de migrations');
+      const applied = validationDb.prepare('SELECT version,checksum FROM schema_migrations ORDER BY version').all() as Array<{ version: number; checksum: string }>;
+      const available = readdirSync(this.migrationsDir).filter((f) => /^\d+_.*\.sql$/.test(f));
+      const local = new Map(available.map((file) => {
+        const version = Number.parseInt(file.split('_')[0] as string, 10);
+        return [version, createHash('sha256').update(readFileSync(join(this.migrationsDir, file), 'utf8')).digest('hex')];
+      }));
+      for (const migration of applied) {
+        if (local.get(migration.version) !== migration.checksum) {
+          throw new Error(`backup possui migration ${migration.version} desconhecida ou com checksum divergente`);
+        }
+      }
+    } finally {
+      validationDb.close();
+    }
+
+    this.backup('pre-restore automático');
+    this.close();
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const previousFile = `${this.file}.pre-restore-${stamp}.bak`;
+    const stagedFile = `${this.file}.restore-${randomUUID()}.tmp`;
+    let movedCurrent = false;
+    try {
+      copyFileSync(backupPath, stagedFile);
+      if (existsSync(this.file)) {
+        renameSync(this.file, previousFile);
+        movedCurrent = true;
+      }
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = `${this.file}${suffix}`;
+        if (existsSync(sidecar)) rmSync(sidecar, { force: true });
+      }
+      renameSync(stagedFile, this.file);
+      this.db = this.openDatabase();
+      const migrationResult = this.migrate();
+      const finalIntegrity = this.integrityCheck();
+      if (!finalIntegrity.ok) throw new Error(`banco restaurado falhou na verificação: ${finalIntegrity.messages.join('; ')}`);
+      return { backupId, restoredAt: new Date().toISOString(), previousFile, migrated: migrationResult.applied, integrity: finalIntegrity };
+    } catch (error) {
+      try { this.db.close(); } catch { /* conexão pode não ter reaberto */ }
+      if (existsSync(this.file)) rmSync(this.file, { force: true });
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = `${this.file}${suffix}`;
+        if (existsSync(sidecar)) rmSync(sidecar, { force: true });
+      }
+      if (movedCurrent && existsSync(previousFile)) renameSync(previousFile, this.file);
+      this.db = this.openDatabase();
+      rmSync(stagedFile, { force: true });
+      throw error;
+    }
   }
 }

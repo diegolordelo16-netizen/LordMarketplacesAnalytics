@@ -5,12 +5,12 @@
   "competitor.relations": "ownProductId | accountId | status",
   "voc.ingest": "accountId | listingId | kind | text | rating",
   "experiment.create": "accountId | title | design | variable | primaryMetric | guardrailMetrics | baselineRate | mde | plannedDays",
-  "report.export": "type | format",
+  "report.export": "type | format | accountId?",
   "settings.get": "(sem parâmetros)",
   "gemini.testKey": "(sem parâmetros — usa a chave gravada)",
   "account.list": "(sem parâmetros)",
   "kpi.dashboard": "(sem parâmetros)",
-  "missions.today": "(sem parâmetros)",
+  "missions.today": "accountId? | marketplace?",
   "competitor.ownProduct.upsert": "accountId | marketplace | title | brand | model | category | priceCents",
   "competitor.search": "ownProductId | marketplaces | candidates[] | discoveryMethod | sourceClass",
   "competitor.approve": "relationId | actorRole",
@@ -21,5 +21,241 @@
   "competitor.monitoring.set": "relationId | enabled | intervalHours",
   "competitor.monitoring.record": "relationId | observed",
   "market.opportunities": "accountId?",
-  "growth.initiatives": "accountId?"
+  "growth.initiatives": "accountId?",
+  "task.runNow": "taskId",
+  "task.claimNext": "marketplace | externalListingId (uso exclusivo da extensão)",
+  "task.itemResult": "itemId | ok | message? | accountId | externalListingId | baseline {title, description} | sourceUrl (obrigatórios quando ok=true)",
+  "task.list": {
+    "payload": {
+      "accountId": "string?",
+      "result": "tarefas e itens da conta selecionada"
+    },
+    "progress": {
+      "completed": "count",
+      "failed": "count",
+      "skipped": "count",
+      "processing": "count",
+      "pending": "count",
+      "finished": "completed+failed+skipped",
+      "total": "item count",
+      "percent": "finished/total rounded"
+    },
+    "note": "progresso representa estados dos itens; percentual concluído não é sucesso de publicação"
+  },
+  "task.create": {
+    "name": "string",
+    "kind": "edit_title|edit_description",
+    "accountId": "string?",
+    "mode": "DRAFT",
+    "scheduleAt": "datetime?",
+    "recurrence": "1h|6h|daily|weekly?",
+    "typing": {
+      "mode": "set_value",
+      "charDelayMs": "integer",
+      "settleDelayMs": "integer",
+      "verifyAfterTyping": true
+    },
+    "items": "array of account-scoped listing references"
+  },
+  "task.skipItem": {
+    "itemId": "string?",
+    "taskId": "string?"
+  },
+  "forecast.run": {
+    "accountId": "string",
+    "metric": "gmv|orders|visits|units|adSpend|adAttributedRevenue|stockAvailable",
+    "horizonDays": "7..56"
+  },
+  "connector.import": {
+    "fileName": "string",
+    "fileType": "csv|xlsx",
+    "accountId": "required active account ID",
+    "csvText": "CSV text?",
+    "base64": "XLSX base64?",
+    "maxBytes": "2 MB",
+    "result": "persisted staging; no KPI promotion"
+  },
+  "connector.disconnect": "connectorId (desativa o conector, remove segredos do namespace e metadados de credenciais)",
+  "connector.import.list": {
+    "accountId": "required active account ID",
+    "limit": "1..100"
+  },
+  "connector.import.get": {
+    "jobId": "string",
+    "returns": "import metadata and staged rows",
+    "accountId": "required account ID; job must belong to account"
+  },
+  "connector.import.commit": {
+    "jobId": "string",
+    "accountId": "active account ID matching the staged job",
+    "mapping": {
+      "externalId": "column name",
+      "capturedAt": "column name?",
+      "metrics": "metric field -> source column"
+    },
+    "allowedMetrics": "units,orders,visits,impressions,clicks,gmv,netRevenue,organicImpressions,paidImpressions,adSpend,adClicks,adAttributedRevenue,adAttributedOrders,addToCart,favorites,questionsAnswered,discounts,cancellations,cancellationValue,newCustomers,returningCustomers,returnsCount,returnsValue,stockAvailable,questionsPending,reviewRating,reviewCount",
+    "provenance": "F_USER_INPUT; existing listing required; all rows atomic"
+  },
+  "kpi.compare.detail": {
+    "primaryFrom": "YYYY-MM-DD",
+    "primaryTo": "YYYY-MM-DD",
+    "comparisonFrom": "YYYY-MM-DD",
+    "comparisonTo": "YYYY-MM-DD",
+    "groupBy": "account|product|listing",
+    "accountId": "string?",
+    "marketplace": "mercado_livre|shopee|amazon?",
+    "method": "last snapshot per listing inside each non-overlapping period; null metrics stay unavailable"
+  },
+  "task.approvePublish": "taskId | confirmation=PUBLICAR <item count> | reason",
+  "task.claimNextPublish": "marketplace | accountId | externalListingId (manage_accounts; uso exclusivo da extensão na aba ativa)",
+  "task.publishResult": "approvalId | externalListingId | outcome | after evidence | sourceUrl | successText; exige manage_accounts; estado anterior vem do snapshot persistido pelo serviço",
+  "task.rollbackPrepare": "approvalId (gera rascunho de reversão do título; nunca executa gravação remota)",
+  "analysis.schedule.runs": {
+    "payload": {
+      "scheduleId": "string",
+      "limit": "integer 1..200 default 50"
+    },
+    "result": "histórico de execuções, status, duração, resultado limitado e erro"
+  },
+  "report.schedule.run.get": {
+    "description": "Obter JSON de uma execução de relatório agendado",
+    "payload": {
+      "runId": "string"
+    }
+  },
+  "analysis.schedule.create": {
+    "payload": {
+      "accountId": "string?",
+      "mode": "RAPIDA|PADRAO|FORENSE|360",
+      "days": "integer 1..365 default 30",
+      "cadence": "1h|6h|daily|weekly|custom",
+      "intervalMinutes": "integer 15..43200; obrigatório apenas para custom"
+    },
+    "result": "id | nextRunAt | cadence | intervalMinutes?",
+    "behavior": "agenda análise local recorrente; pula janelas perdidas e nunca publica alterações"
+  },
+  "analysis.schedule.list": {
+    "payload": "accountId?",
+    "result": "agendas com cadence_label, next_run_at, estado e falhas consecutivas"
+  },
+  "analysis.schedule.setEnabled": {
+    "payload": "id | enabled",
+    "behavior": "ativa ou pausa; reativação agenda a partir do momento atual e zera falhas"
+  },
+  "report.schedule.create": {
+    "payload": {
+      "accountId": "string?",
+      "reportType": "EXECUTIVO|KPIS|CONCORRENCIA|FINANCEIRO|EXPERIMENTOS|AUDITORIA",
+      "format": "json",
+      "cadence": "1h|6h|daily|weekly|custom",
+      "intervalMinutes": "integer 15..43200; obrigatório apenas para custom"
+    },
+    "result": "id | nextRunAt | cadence | intervalMinutes?",
+    "behavior": "gera relatório local JSON e mantém histórico; nenhum dado é enviado a terceiros"
+  },
+  "report.schedule.list": {
+    "payload": "accountId?",
+    "result": "agendas com cadence_label, next_run_at, estado e falhas consecutivas"
+  },
+  "report.schedule.setEnabled": {
+    "payload": "id | enabled",
+    "behavior": "ativa ou pausa; reativação agenda a partir do momento atual e zera falhas"
+  },
+  "report.schedule.runs": {
+    "payload": {
+      "scheduleId": "string",
+      "limit": "integer 1..200 default 50"
+    },
+    "result": "metadados de execuções; JSON integral é obtido sob demanda por report.schedule.run.get"
+  },
+  "sync.schedule.create": {
+    "payload": {
+      "scope": "ALL_ACTIVE_ACCOUNTS|ALL_ENABLED_MARKETPLACES|ACCOUNT",
+      "accountId": "required only for ACCOUNT",
+      "cadence": "1h|6h|daily|weekly|custom",
+      "intervalMinutes": "integer 15..43200; required only for custom"
+    },
+    "result": "id | nextRunAt | scope | cadence | requiresBrowserOpen=true",
+    "behavior": "creates a local recurring capture batch; extension worker processes only when browser is running and exact seller-account tabs are authenticated"
+  },
+  "sync.schedule.list": {
+    "payload": "none",
+    "result": "schedules with scope, cadence_label, enabled, next_run_at, last_status and last_error"
+  },
+  "sync.schedule.setEnabled": {
+    "payload": "id | enabled",
+    "behavior": "enables or pauses a schedule; next execution is recalculated from current time when re-enabled"
+  },
+  "sync.schedule.runs": {
+    "payload": {
+      "scheduleId": "string",
+      "limit": "integer 1..200 default 50"
+    },
+    "result": "scheduled capture run history, batch ID, counts, status and error"
+  },
+  "sync.claimScheduled": {
+    "payload": "none",
+    "result": "claims one QUEUED scheduled batch atomically; extension-only execution path"
+  },
+  "scheduled_sync": {
+    "retry_failed": {
+      "method": "sync.retryFailed",
+      "purpose": "Retry failed/partial/skipped accounts from a prior batch into a new audited batch."
+    }
+  },
+  "sync.retryFailed": {
+    "payload": {
+      "batchId": "string"
+    },
+    "result": "new batch ID with only active FAILED/PARTIAL/SKIPPED accounts that are not already in a queued/running batch",
+    "behavior": "creates an auditable retry batch; execution still requires the browser and the exact authenticated seller-account tab; never switches sessions"
+  },
+  "user.list": {
+    "payload": "none",
+    "result": "users with id, email, display_name, role, is_active, created_at and last_login_at",
+    "permission": "manage_users"
+  },
+  "user.upsert": {
+    "payload": {
+      "id": "optional for update",
+      "email": "valid email",
+      "displayName": "1..120 chars",
+      "role": "super_admin|operador|visualizador",
+      "password": "required for create; optional for update; 10..200 chars"
+    },
+    "behavior": "creates or updates user and password hash; last active super_admin cannot be demoted",
+    "permission": "manage_users"
+  },
+  "user.setActive": {
+    "payload": {
+      "userId": "string",
+      "isActive": "boolean"
+    },
+    "behavior": "activates/deactivates user; revokes sessions on deactivation; disallows self-deactivation and deactivation of the last active super_admin",
+    "permission": "manage_users"
+  },
+  "sync.accountProgress": {
+    "payload": {
+      "batchId": "string",
+      "accountId": "string",
+      "pagesScanned": "integer 0..12",
+      "pagesSucceeded": "integer 0..pagesScanned",
+      "pages": "array of per-page URL/kind/result (max 12)",
+      "seenUrls": "same-origin visited URL list",
+      "pendingLinks": "same-origin queued links (max 100)",
+      "maxPages": "integer 1..12",
+      "stoppedReason": "optional string"
+    },
+    "behavior": "Persists per-page capture history and the bounded navigation queue. URLs are restricted to the marketplace host, credentials/hash removed, and only known pagination query parameters retained. Used to resume a stale scheduled batch without revisiting completed pages.",
+    "permission": "execute_task"
+  },
+  "sync.createAll": {
+    "payload": "scope | accountId? | browserRequest?",
+    "permission": "execute_task"
+  },
+  "sync.claimBrowserRequest": {
+    "payload": "sem parâmetros",
+    "permission": "execute_task",
+    "result": "Reserva lote do dashboard, com retomada após expiração sem progresso recente."
+  }
 }

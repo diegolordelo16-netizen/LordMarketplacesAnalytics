@@ -16,6 +16,7 @@ import type { LocalDatabase } from '../db/database';
 export interface IngestResult {
   ok: boolean;
   listingsIngested: number;
+  accountSnapshotsIngested: number;
   quality: ReturnType<typeof buildQualityReport>;
   errors: string[];
 }
@@ -30,6 +31,7 @@ export class CaptureService {
       return {
         ok: false,
         listingsIngested: 0,
+        accountSnapshotsIngested: 0,
         quality: buildQualityReport([], 0),
         errors: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
       };
@@ -37,6 +39,7 @@ export class CaptureService {
     const data = parsed.data;
     const issues: DataQualityIssue[] = [];
     let written = 0;
+    let accountSnapshotsWritten = 0;
 
     this.db.transaction(() => {
       // A conta precisa existir, estar ativa e pertencer ao marketplace declarado.
@@ -86,49 +89,91 @@ export class CaptureService {
           data.collectedAt,
           new Date().toISOString(),
           'OK',
-          data.listings.length,
+          data.listings.length + (data.accountMetrics ? 1 : 0),
           0,
           data.method,
         );
 
       for (const listing of data.listings) {
         const listingRow = this.db.db
-          .prepare('SELECT id FROM listings WHERE account_id = ? AND external_id = ?')
-          .get(data.accountId, listing.listingId) as { id: string } | undefined;
+          .prepare('SELECT id, sku_id FROM listings WHERE account_id = ? AND external_id = ?')
+          .get(data.accountId, listing.listingId) as { id: string; sku_id: string | null } | undefined;
 
-        let listingId = listingRow?.id;
-        if (!listingId) {
-          listingId = randomUUID();
+        let skuId: string | null = null;
+        const skuCode = listing.sku?.trim();
+        if (skuCode) {
+          const existingSku = this.db.db
+            .prepare('SELECT id FROM skus WHERE account_id = ? AND sku_code = ?')
+            .get(data.accountId, skuCode) as { id: string } | undefined;
+          skuId = existingSku?.id ?? randomUUID();
+          if (!existingSku) {
+            this.db.db
+              .prepare('INSERT INTO skus (id, account_id, sku_code, created_at) VALUES (?, ?, ?, ?)')
+              .run(skuId, data.accountId, skuCode, new Date().toISOString());
+          }
+        } else if (listingRow?.sku_id) {
+          const accountSku = this.db.db
+            .prepare('SELECT id FROM skus WHERE id = ? AND account_id = ?')
+            .get(listingRow.sku_id, data.accountId) as { id: string } | undefined;
+          skuId = accountSku?.id ?? null;
+        }
+
+        const listingId = listingRow?.id ?? randomUUID();
+        if (!listingRow) {
           this.db.db
             .prepare(
-              `INSERT INTO listings (id, account_id, marketplace, external_id, title, status, url, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)`,
+              `INSERT INTO listings (id, account_id, marketplace, external_id, sku_id, title, status, url, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)`,
             )
             .run(
               listingId,
               data.accountId,
               data.marketplace,
               listing.listingId,
+              skuId,
               listing.title ?? null,
               data.url,
               new Date().toISOString(),
               new Date().toISOString(),
             );
+        } else if (listing.sku && listingRow.sku_id !== skuId) {
+          this.db.db.prepare('UPDATE listings SET sku_id = ?, updated_at = ? WHERE id = ? AND account_id = ?')
+            .run(skuId, new Date().toISOString(), listingId, data.accountId);
         }
 
         // Snapshot é imutável: histórico nunca é sobrescrito (§8).
         const snapshotId = randomUUID();
         const metrics = {
+          price: listing.price,
           visits: listing.visits,
           orders: listing.orders,
           units: listing.units,
           gmv: listing.gmv,
           netRevenue: listing.netRevenue,
+          commission: listing.commission,
+          fixedFee: listing.fixedFee,
+          shippingFee: listing.shippingFee,
+          shippingCents: listing.shippingCents,
+          deliveryDaysMin: listing.deliveryDaysMin,
+          deliveryDaysMax: listing.deliveryDaysMax,
+          sponsored: listing.sponsored,
+          visibleImageUrls: listing.visibleImageUrls,
+          tax: listing.tax,
+          marketplaceFee: listing.marketplaceFee,
           organicImpressions: listing.organicImpressions,
           paidImpressions: listing.paidImpressions,
           adSpend: listing.adSpend,
           adClicks: listing.adClicks,
           adAttributedRevenue: listing.adAttributedRevenue,
+          adAttributedOrders: listing.adAttributedOrders,
+          addToCart: listing.addToCart,
+          favorites: listing.favorites,
+          questionsAnswered: listing.questionsAnswered,
+          discounts: listing.discounts,
+          cancellations: listing.cancellations,
+          cancellationValue: listing.cancellationValue,
+          newCustomers: listing.newCustomers,
+          returningCustomers: listing.returningCustomers,
           returnsCount: listing.returnsCount,
           returnsValue: listing.returnsValue,
           stockAvailable: listing.stockAvailable,
@@ -136,10 +181,10 @@ export class CaptureService {
           reviewRating: listing.reviewRating,
           reviewCount: listing.reviewCount,
         };
-        this.db.db
+        const inserted = this.db.db
           .prepare(
-            `INSERT OR IGNORE INTO listing_snapshots (id, listing_id, account_id, captured_at, reference_at, metrics_json, source_class, quality_score)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT OR IGNORE INTO listing_snapshots (id, listing_id, account_id, captured_at, reference_at, metrics_json, source_class, quality_score, evidence_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             snapshotId,
@@ -150,7 +195,9 @@ export class CaptureService {
             JSON.stringify(metrics),
             data.sourceClass,
             null,
+            JSON.stringify(data.evidence ?? {}),
           );
+        if (!inserted.changes) continue;
 
         const provenance: Provenance = {
           sourceClass: data.sourceClass,
@@ -188,9 +235,37 @@ export class CaptureService {
         written += 1;
       }
 
+      if (data.accountMetrics) {
+        const metricEntries = Object.entries(data.accountMetrics).filter(([, value]) => value !== undefined);
+        if (metricEntries.length > 0) {
+          const snapshotId = randomUUID();
+          const insert = this.db.db.prepare(
+            `INSERT OR IGNORE INTO account_snapshots (id,account_id,marketplace,page_kind,captured_at,reference_at,metrics_json,source_class,page_url,evidence_json,quality_score)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          );
+          const result = insert.run(
+            snapshotId, data.accountId, data.marketplace, data.pageKind, data.collectedAt, data.referenceAt,
+            JSON.stringify(data.accountMetrics), data.sourceClass, data.url,
+            JSON.stringify(data.evidence ?? {}), data.sourceClass === 'A_PRIMARY_UI' ? 0.95 : 0.9,
+          );
+          if (Number(result.changes) === 1) {
+            accountSnapshotsWritten = 1;
+            for (const [field] of metricEntries) {
+              this.db.db.prepare(
+                `INSERT OR IGNORE INTO data_provenance (entity,entity_id,field,account_id,listing_id,source_class,source_id,page_url,reference_at,collected_at,method,confidence,run_id)
+                 VALUES ('account_snapshot',?,?,?,NULL,?,?,?,?,?,?,?,?)`,
+              ).run(
+                snapshotId, field, data.accountId, data.sourceClass, `ui:${data.marketplace}`, data.url,
+                data.referenceAt, data.collectedAt, data.method, data.sourceClass === 'A_PRIMARY_UI' ? 0.95 : 0.9, runId,
+              );
+            }
+          }
+        }
+      }
+
       this.db.db
         .prepare('UPDATE data_source_runs SET records_written = ? WHERE id = ?')
-        .run(written, runId);
+        .run(written + accountSnapshotsWritten, runId);
     });
 
     for (const issue of issues) {
@@ -201,8 +276,14 @@ export class CaptureService {
         .run(new Date().toISOString(), data.accountId, issue.kind, issue.severity, issue.field, issue.message);
     }
 
-    const quality = buildQualityReport(issues, data.listings.length);
-    return { ok: quality.criticalCount === 0, listingsIngested: written, quality, errors: issues.map((i) => i.message) };
+    const quality = buildQualityReport(issues, data.listings.length + accountSnapshotsWritten);
+    return {
+      ok: quality.criticalCount === 0,
+      listingsIngested: written,
+      accountSnapshotsIngested: accountSnapshotsWritten,
+      quality,
+      errors: issues.map((i) => i.message),
+    };
   }
 
   /** KPIs calculados a partir do snapshot mais recente do anúncio. */

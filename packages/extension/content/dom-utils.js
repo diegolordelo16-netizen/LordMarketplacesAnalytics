@@ -97,5 +97,43 @@
     return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0;
   }
 
-  window.MI_DOM = { parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel };
+  /** Só aceita links seguintes HTTPS, same-origin e dentro dos hosts suportados. */
+  function safeNextPageUrl(rawHref, currentUrl, marketplace) {
+    try {
+      const current = new URL(currentUrl);
+      const next = new URL(rawHref, current);
+      const hostAllowed = marketplace === 'mercado_livre'
+        ? /(^|\.)mercadolivre\.com\.br$|(^|\.)mercadolibre\.com$/i.test(next.hostname)
+        : marketplace === 'shopee'
+          ? /(^|\.)shopee\.com\.br$/i.test(next.hostname)
+          : marketplace === 'amazon' && next.hostname === 'sellercentral.amazon.com.br';
+      if (!hostAllowed || current.protocol !== 'https:' || next.protocol !== 'https:') return null;
+      if (next.origin !== current.origin || next.username || next.password) return null;
+      if (next.pathname !== current.pathname) return null;
+      return next.href;
+    } catch {
+      return null;
+    }
+  }
+
+  function paginationInfo(root, currentUrl, marketplace) {
+    const candidates = Array.from(root.querySelectorAll('a[rel="next"], a[aria-label], a[title], a[data-testid], a.pagination__next, a.next'));
+    const labels = /\b(next|próxima|proxima|seguinte|siguiente|próximo|proximo|next page)\b/i;
+    for (const anchor of candidates) {
+      const label = normalizeLabel([anchor.getAttribute('aria-label'), anchor.getAttribute('title'), anchor.getAttribute('data-testid'), anchor.textContent].filter(Boolean).join(' '));
+      const isNext = anchor.rel === 'next' || labels.test(label) || /pagination[-_ ]?next|next[-_ ]?page/i.test(label);
+      if (!isNext || anchor.getAttribute('aria-disabled') === 'true' || anchor.hasAttribute('disabled')) continue;
+      const href = safeNextPageUrl(anchor.href || anchor.getAttribute('href') || '', currentUrl, marketplace);
+      if (href && isVisible(anchor)) return href;
+    }
+    return null;
+  }
+
+  function hasChallenge(root) {
+    if (root.querySelector('iframe[src*="captcha" i], [id*="captcha" i], [class*="captcha" i], [data-testid*="captcha" i], .g-recaptcha')) return true;
+    const text = normalizeLabel(root.body?.innerText || '').slice(0, 12000);
+    return /verify you are human|verifique que voce e humano|verifique se voce e humano|confirme que voce nao e um robo|complete o captcha|security check|human verification/.test(text);
+  }
+
+  window.MI_DOM = { parseNumberPtBr, findValueByLabel, extractExternalId, isVisible, normalizeLabel, safeNextPageUrl, paginationInfo, hasChallenge };
 })();

@@ -1,7 +1,7 @@
 ================================================================================
  MARKETPLACE INTELLIGENCE & AUTONOMOUS OPERATIONS
  DOCUMENTACAO COMPLETA DO SOFTWARE
- Versao 0.1.0 (painel e servico) / 3.2.1 (extensao)  -  Windows x64  -  Pt-BR
+ Versao 3.3.0 (painel e servico) / 3.3.0 (extensao)  -  Windows x64  -  Pt-BR
 ================================================================================
 
 Documento gerado a partir do codigo-fonte real do projeto por
@@ -16,9 +16,9 @@ INDICE
   PARTE 0  - Visao geral e arquitetura
   PARTE 1  - Como instalar
   PARTE 2  - Primeiro acesso e credenciais
-  PARTE 3  - O painel: as 14 areas, tela por tela
+  PARTE 3  - O painel: as 18 areas, tela por tela
   PARTE 4  - Inteligencia competitiva (fluxo completo)
-  PARTE 5  - Os 77 metodos da API local (referencia)
+  PARTE 5  - Os 95 metodos da API local (referencia)
   PARTE 6  - Motor de similaridade e aprendizado
   PARTE 7  - KPIs, financas, prioridade, experimentos
   PARTE 8  - IA: Gemini, 14 agentes e auto-upgrade
@@ -27,7 +27,7 @@ INDICE
   PARTE 11 - Preservacao de descricao
   PARTE 12 - Qualidade e honestidade de dados
   PARTE 13 - Seguranca: papeis, sessoes, segredos
-  PARTE 14 - Banco de dados (89 tabelas)
+  PARTE 14 - Banco de dados (91 tabelas)
   PARTE 15 - Extensao de navegador
   PARTE 16 - Native Messaging host
   PARTE 17 - Instalador, arquivos e desinstalacao
@@ -51,13 +51,13 @@ computador sem o usuario mandar.
 -------------------
 
   (1) PAINEL LOCAL (interface)
-      Aplicacao web servida pelo servico Node.js em 127.0.0.1. Tem 14 areas,
+      Aplicacao web servida pelo servico Node.js em 127.0.0.1. Tem 18 areas,
       indicadores, revisao de concorrentes, tarefas, IA e administracao.
 
   (2) SERVICO LOCAL (motor)
       Node.js embarcado no instalador. Guarda o banco SQLite, aplica as regras,
       calcula KPIs, fala com o Gemini, executa tarefas e mantem auditoria.
-      Expoe uma API interna com 77 metodos em 127.0.0.1.
+      Expoe uma API interna com 95 metodos em 127.0.0.1.
 
   (3) EXTENSAO DE NAVEGADOR (captura)
       Extensao MV3 para Chrome e Edge. Le a tela do marketplace na sessao ja
@@ -101,7 +101,7 @@ computador sem o usuario mandar.
 
 1.2 Instalacao
 
-  1. Execute MarketplaceIntelligence-Setup.exe (21.8 MB).
+  1. Execute MarketplaceIntelligence-Setup.exe.
   2. Siga o assistente em portugues (proximo, proximo, instalar).
   3. Ao terminar, abra o atalho "Marketplace Intelligence" na area de trabalho.
   4. A tela "Pre-Start & Diagnostico" abre e mostra o estado de cada peca.
@@ -159,7 +159,7 @@ computador sem o usuario mandar.
   visualizador  - somente leitura.
 
 ================================================================================
- PARTE 3 — O PAINEL: AS 14 AREAS, TELA POR TELA
+ PARTE 3 — O PAINEL: AS 18 AREAS, TELA POR TELA
 ================================================================================
 
 3.1 VISÃO EXECUTIVA
@@ -265,7 +265,27 @@ computador sem o usuario mandar.
   - Registro de conectores (o que existe, o que esta conectado, custo).
   - Importacao de CSV como rascunho para validacao.
 
-3.14 ADMINISTRAÇÃO
+3.14 CONTAS & CATÁLOGO
+----------------------
+
+  - (area sem descricao)
+
+3.15 COMPARATIVO
+----------------
+
+  - (area sem descricao)
+
+3.16 BIBLIOTECA DE IMAGENS
+--------------------------
+
+  - (area sem descricao)
+
+3.17 USUÁRIOS
+-------------
+
+  - (area sem descricao)
+
+3.18 ADMINISTRAÇÃO
 ------------------
 
   - Configuracoes, auditoria, backups e auto-upgrade.
@@ -297,7 +317,7 @@ computador sem o usuario mandar.
   nao um modelo treinado. O documento diz isso ao usuario.
 
 ================================================================================
- PARTE 5 — OS 77 METODOS DA API LOCAL
+ PARTE 5 — OS 95 METODOS DA API LOCAL
 ================================================================================
 
   Todos os metodos sao chamados em POST http://127.0.0.1:<porta>/api/ipc com
@@ -374,7 +394,7 @@ Financeiro
     finance.simulate
         priceCents (numero) | quantity (numero) | commissionPct (numero) | fixedFeeCents (numero) | installmentPct (numero) | unitCostCents (numero) | packagingCents (numero) | shippingCents (numero) | taxPct (numero) | otherVariableCents (numero) | minMarginPct (numero) | discountPct (numero) | couponCents (numero) | adSpendCents (numero) | returnRatePct (numero) | cancellationRatePct (numero) | reverseLogisticsCents (numero)
     finance.costs.upsert
-        skuId (texto) | unitCostCents (numero) | packagingCents (numero) | shippingCents (numero) | otherVariableCents (numero) | taxPct (numero) | minMarginPct (numero)
+        skuId (texto) | sku (texto) | unitCostCents (numero) | costCents (numero) | packagingCents (numero) | shippingCents (numero) | otherVariableCents (numero) | taxPct (numero) | minMarginPct (numero)
 
 Tarefas
 -------
@@ -544,6 +564,46 @@ Previsao, alertas, relatorios e backup
     backup.create
         (sem dados)
     backup.list
+        (sem dados)
+
+Outros
+------
+
+    account.setActive
+        (sem dados)
+    user.list
+        (sem dados)
+    user.upsert
+        (sem dados)
+    user.setActive
+        (sem dados)
+    catalog.product.upsert
+        (sem dados)
+    catalog.product.list
+        (sem dados)
+    catalog.sku.upsert
+        (sem dados)
+    catalog.sku.list
+        (sem dados)
+    media.list
+        (sem dados)
+    media.add
+        (sem dados)
+    media.get
+        (sem dados)
+    media.delete
+        (sem dados)
+    kpi.compare
+        (sem dados)
+    growth.initiative.upsert
+        (sem dados)
+    growth.initiative.setStatus
+        (sem dados)
+    analysis.run
+        (sem dados)
+    agent.recommendations
+        (sem dados)
+    connector.setEnabled
         (sem dados)
 
 ================================================================================
@@ -741,42 +801,42 @@ Previsao, alertas, relatorios e backup
   - Backup automatico antes de alteracao critica e verificacao posterior.
 
 ================================================================================
- PARTE 14 — BANCO DE DADOS (89 TABELAS)
+ PARTE 14 — BANCO DE DADOS (91 TABELAS)
 ================================================================================
 
   SQLite embarcado (node:sqlite), arquivo unico em
   %LOCALAPPDATA%\MarketplaceIntelligence\. Migracoes versionadas:
   001_init.sql e 002_competitive_intelligence.sql.
 
-    users                             auth_sessions                     audit_log                         data_sources                      
-    data_source_runs                  data_provenance                   data_quality_issues               import_jobs                       
-    marketplaces                      accounts                          catalog_products                  skus                              
-    listings                          listing_variations                listing_snapshots                 sku_costs                         
-    marketplace_fees                  price_observations                price_scenarios                   price_rules                       
-    price_change_approvals            keywords                          keyword_clusters                  keyword_observations              
-    keyword_competitor_gaps           search_snapshots                  search_results                    rank_observations                 
-    visibility_share_snapshots        competitors                       competitor_listings               competitor_snapshots              
-    competitor_events                 competitor_alerts                 category_snapshots                category_trends                   
-    product_opportunities             opportunity_scores                customer_voice_items              customer_voice_topics             
-    return_reason_observations        review_insights                   metric_definitions                metric_tree_nodes                 
-    growth_initiatives                growth_hypotheses                 experiments                       experiment_variants               
-    experiment_observations           experiment_results                cohorts                           cohort_metrics                    
-    attribution_records               tasks                             task_items                        task_runs                         
-    automation_guard_decisions        change_sets                       image_library                     description_learnings             
-    typing_profiles                   agent_runs                        agent_evidence                    agent_recommendations             
-    human_feedback                    knowledge_items                   validated_playbooks               gemini_usage                      
-    prompt_versions                   debate_sessions                   auto_upgrade_proposals            connector_registry                
-    connector_credentials_metadata    connector_usage_costs             forecast_runs                     forecast_scenarios                
-    anomaly_events                    alerts                            settings                          secrets                           
-    backups                           schema_migrations                 own_products                      competitor_candidates             
-    competitor_relations              competitor_feedback               competitor_learning_rules         competitor_monitoring_points      
-    competitor_search_runs            
+    users                             auth_sessions                     audit_log                         data_sources
+    data_source_runs                  data_provenance                   data_quality_issues               import_jobs
+    marketplaces                      accounts                          catalog_products                  skus
+    listings                          listing_variations                listing_snapshots                 sku_costs
+    marketplace_fees                  price_observations                price_scenarios                   price_rules
+    price_change_approvals            keywords                          keyword_clusters                  keyword_observations
+    keyword_competitor_gaps           search_snapshots                  search_results                    rank_observations
+    visibility_share_snapshots        competitors                       competitor_listings               competitor_snapshots
+    competitor_events                 competitor_alerts                 category_snapshots                category_trends
+    product_opportunities             opportunity_scores                customer_voice_items              customer_voice_topics
+    return_reason_observations        review_insights                   metric_definitions                metric_tree_nodes
+    growth_initiatives                growth_hypotheses                 experiments                       experiment_variants
+    experiment_observations           experiment_results                cohorts                           cohort_metrics
+    attribution_records               tasks                             task_items                        task_runs
+    automation_guard_decisions        change_sets                       image_library                     description_learnings
+    typing_profiles                   agent_runs                        agent_evidence                    agent_recommendations
+    human_feedback                    knowledge_items                   validated_playbooks               gemini_usage
+    prompt_versions                   debate_sessions                   auto_upgrade_proposals            connector_registry
+    connector_credentials_metadata    connector_usage_costs             forecast_runs                     forecast_scenarios
+    anomaly_events                    alerts                            settings                          secrets
+    backups                           schema_migrations                 own_products                      competitor_candidates
+    competitor_relations              competitor_feedback               competitor_learning_rules         competitor_monitoring_points
+    competitor_search_runs            media_library                     connector_states
 
 ================================================================================
  PARTE 15 — EXTENSAO DE NAVEGADOR
 ================================================================================
 
-  Manifest V3, versao 3.2.1, service worker classico, painel lateral.
+  Manifest V3, versao 3.3.0, service worker classico, painel lateral.
 
   15.1 O que ela faz
 
@@ -816,7 +876,7 @@ Previsao, alertas, relatorios e backup
  PARTE 17 — INSTALADOR, ARQUIVOS E DESINSTALACAO
 ================================================================================
 
-  Instalador: MarketplaceIntelligence-Setup.exe (21.8 MB), pt-BR, x64.
+  Instalador: MarketplaceIntelligence-Setup.exe, pt-BR, x64.
 
   Ele faz: copia o programa, cria atalhos (area de trabalho e menu iniciar),
   registra o host nativo para Chrome e Edge, grava o identificador da
@@ -1273,33 +1333,7 @@ Previsao, alertas, relatorios e backup
       GMV) e passava sem provar nada; agora ele prova que o bruto nao e
       copiado para o liquido.
 
-  Versao 3.2.1 (endurecimento):
-
-  18. A ponte do worker da extensao so aceita pedido vindo de pagina da
-      propria extensao. Content script dentro de pagina de marketplace e
-      outra extensao recebem "origem nao autorizada"; o painel lateral
-      continua atendido.
-  19. Host nativo remonta quadros que chegam partidos entre varios pedacos
-      de entrada e responde na ordem em que recebeu. Quadro incompleto no
-      fim do fluxo e reportado; quadro grande demais continua recusado.
-  20. Versao de protocolo incompativel e recusada no host e de novo no
-      servico, antes de executar qualquer metodo (testado ao vivo:
-      protocolo 99 responde PROTOCOL_MISMATCH).
-  21. Auto-upgrade recusa caminho absoluto, "..", caminho de unidade do
-      Windows e caminho que atravessa link simbolico para fora da raiz;
-      valida todos os trechos antes da primeira gravacao e tenta restaurar
-      o que ja foi gravado se uma gravacao falhar.
-  22. Banco: migrations aplicadas sao conferidas por checksum, e a falta de
-      um arquivo ja aplicado e detectada; a conferencia acontece antes de
-      rodar qualquer pendente, para nao deixar alteracao pela metade.
-  23. Captura recusada quando a conta nao existe, esta inativa ou e de outro
-      marketplace (testado ao vivo: conta inexistente volta com
-      REFERENTIAL_BREAK critico e nada e gravado).
-  24. Funcoes estatisticas validam probabilidades, contagens, amostras,
-      nivel de confianca, alpha/poder e parametros do prior Beta em vez de
-      calcular com valor impossivel.
-
-  Resultado: 210 de 210 testes aprovados, tsc limpo, pacote reinstalado e
+  Resultado: 191 de 191 testes aprovados, tsc limpo, pacote reinstalado e
   verificado ponta a ponta (captura, guard, relatorio, tarefa, voz do
   cliente, financeiro).
 

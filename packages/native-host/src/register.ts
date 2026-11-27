@@ -7,7 +7,7 @@
  * Escreve apenas o usuário atual (HKCU): não exige administrador e é o padrão recomendado.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, win32 } from 'node:path';
 import { buildManifest } from './host';
 
 export const HOST_NAME = 'com.marketplaceintelligence.host';
@@ -35,7 +35,8 @@ export function planRegistration(input: {
   hostExePath: string;
   extensionId: string;
 }): RegistrationPlan {
-  const manifestPath = join(input.appDataDir, 'native-host', `${HOST_NAME}.json`);
+  const joinPath = /^[A-Za-z]:[\\/]|^\\\\/.test(input.appDataDir) ? win32.join : join;
+  const manifestPath = joinPath(input.appDataDir, 'native-host', `${HOST_NAME}.json`);
   const manifest = buildManifest(input.hostExePath, input.extensionId);
   const commands = REGISTRY_KEYS.map(
     (key) => `reg add "${key}" /ve /t REG_SZ /d "${manifestPath}" /f`,

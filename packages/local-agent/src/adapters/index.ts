@@ -33,27 +33,29 @@ export interface AdapterDefinition {
   diagnose(observed: Record<string, number>): AdapterDiagnostics;
 }
 
+// Capacidade é conservadora: somente módulos com fluxo real recebem SUPORTADO.
+// Os adapters atuais leem DOM visível e detectam páginas/sessões; não publicam edições.
 const CAP = (overrides: Partial<CapabilityMatrix> = {}): CapabilityMatrix => ({
-  session_detection: 'SUPORTADO',
-  account_detection: 'SUPORTADO',
-  listing_capture: 'SUPORTADO',
-  sales_capture: 'SUPORTADO',
-  visits_capture: 'SUPORTADO',
-  impressions_capture: 'SUPORTADO',
-  ads_capture: 'SUPORTADO',
-  questions_capture: 'SUPORTADO',
-  reputation_capture: 'SUPORTADO',
-  returns_capture: 'PARCIALMENTE_SUPORTADO',
-  inventory_capture: 'SUPORTADO',
-  search_results_capture: 'SUPORTADO',
-  autocomplete_capture: 'PARCIALMENTE_SUPORTADO',
-  competitor_observation: 'SUPORTADO',
-  title_edit: 'SUPORTADO',
-  description_edit: 'SUPORTADO',
-  image_upload: 'SUPORTADO',
-  price_edit: 'SUPORTADO',
-  listing_duplicate: 'SUPORTADO',
-  draft_mode: 'SUPORTADO',
+  session_detection: 'PARCIALMENTE_SUPORTADO',
+  account_detection: 'PARCIALMENTE_SUPORTADO',
+  listing_capture: 'PARCIALMENTE_SUPORTADO',
+  sales_capture: 'NAO_DISPONIVEL',
+  visits_capture: 'NAO_DISPONIVEL',
+  impressions_capture: 'NAO_DISPONIVEL',
+  ads_capture: 'NAO_DISPONIVEL',
+  questions_capture: 'NAO_DISPONIVEL',
+  reputation_capture: 'NAO_DISPONIVEL',
+  returns_capture: 'NAO_DISPONIVEL',
+  inventory_capture: 'NAO_DISPONIVEL',
+  search_results_capture: 'PARCIALMENTE_SUPORTADO',
+  autocomplete_capture: 'NAO_DISPONIVEL',
+  competitor_observation: 'PARCIALMENTE_SUPORTADO',
+  title_edit: 'NAO_DISPONIVEL',
+  description_edit: 'NAO_DISPONIVEL',
+  image_upload: 'NAO_DISPONIVEL',
+  price_edit: 'NAO_DISPONIVEL',
+  listing_duplicate: 'NAO_DISPONIVEL',
+  draft_mode: 'PARCIALMENTE_SUPORTADO',
   ...overrides,
 });
 
@@ -106,9 +108,14 @@ export const mercadoLivreAdapter: AdapterDefinition = {
   version: '1.0.0',
   domains: ['mercadolivre.com.br', 'mercadolivre.com', 'mercadopago.com.br'],
   capabilities: CAP({
+    sales_capture: 'PARCIALMENTE_SUPORTADO',
+    visits_capture: 'PARCIALMENTE_SUPORTADO',
+    impressions_capture: 'PARCIALMENTE_SUPORTADO',
+    ads_capture: 'PARCIALMENTE_SUPORTADO',
+    questions_capture: 'PARCIALMENTE_SUPORTADO',
+    reputation_capture: 'PARCIALMENTE_SUPORTADO',
     returns_capture: 'PARCIALMENTE_SUPORTADO',
-    autocomplete_capture: 'PARCIALMENTE_SUPORTADO',
-    draft_mode: 'SUPORTADO',
+    inventory_capture: 'PARCIALMENTE_SUPORTADO',
   }),
   selectors: [
     { key: 'listing_title_input', selectors: ['input[name="title"]', 'input#title', '[data-testid="title-input"]'], layoutVersion: '2026-11', hitRate: 0.96 },
@@ -175,10 +182,13 @@ export const shopeeAdapter: AdapterDefinition = {
   version: '1.0.0',
   domains: ['shopee.com.br', 'seller.shopee.com.br', 'banhang.shopee.com.br'],
   capabilities: CAP({
+    sales_capture: 'PARCIALMENTE_SUPORTADO',
+    visits_capture: 'PARCIALMENTE_SUPORTADO',
+    impressions_capture: 'PARCIALMENTE_SUPORTADO',
+    ads_capture: 'PARCIALMENTE_SUPORTADO',
+    reputation_capture: 'PARCIALMENTE_SUPORTADO',
     returns_capture: 'PARCIALMENTE_SUPORTADO',
-    autocomplete_capture: 'NAO_TESTADO',
-    draft_mode: 'PARCIALMENTE_SUPORTADO',
-    listing_duplicate: 'PARCIALMENTE_SUPORTADO',
+    inventory_capture: 'PARCIALMENTE_SUPORTADO',
   }),
   selectors: [
     { key: 'listing_title_input', selectors: ['input[name="name"]', 'input.product-name', '.product-name input'], layoutVersion: '2026-11', hitRate: 0.9 },
@@ -233,15 +243,44 @@ export const shopeeAdapter: AdapterDefinition = {
   },
 };
 
-/** Adapters declarados como NÃO IMPLEMENTADOS ainda — o produto os expõe como planejados. */
+// ---------------------------------------------------------------- Amazon Seller Central (captura de inventário visível, somente leitura)
+export const amazonAdapter: AdapterDefinition = {
+  id: 'amazon',
+  label: 'Amazon Seller Central',
+  version: '1.0.0',
+  domains: ['sellercentral.amazon.com.br'],
+  capabilities: CAP({ listing_capture: 'PARCIALMENTE_SUPORTADO', inventory_capture: 'PARCIALMENTE_SUPORTADO' }),
+  selectors: [
+    { key: 'inventory_rows', selectors: ['#myitable tbody tr', 'table tbody tr[data-asin]', 'tr[data-row-key]'], layoutVersion: '2026-11', hitRate: 0.55 },
+    { key: 'inventory_sku', selectors: ['[data-column="sku"]', '[data-testid*="sku"]', '.sku'], layoutVersion: '2026-11', hitRate: 0.55 },
+    { key: 'inventory_title', selectors: ['.product-title', '[data-column="title"]', 'a[href*="/dp/"]'], layoutVersion: '2026-11', hitRate: 0.55 },
+  ],
+  detectPage(url, domSignals) {
+    let kind: PageKind | null = null;
+    if (/signin|login/i.test(url)) kind = 'login';
+    else if (/myinventory|manageinventory|inventory/i.test(url)) kind = 'seller_listings';
+    else if (/orders-v3|\/orders/i.test(url)) kind = 'seller_orders';
+    else if (/advertising|campaignmanager|\/ads/i.test(url)) kind = 'seller_ads';
+    else if (/dashboard|home/i.test(url)) kind = 'seller_dashboard';
+    if (!kind) return null;
+    return { marketplace: 'amazon', kind, url, detectedAt: new Date().toISOString(), signals: [`url:${kind}`, ...domSignals.slice(0, 5)] };
+  },
+  detectSession(url, domSignals) {
+    const has = (signal: string) => domSignals.some((item) => item.toLowerCase().includes(signal));
+    const state = has('captcha') ? 'CHALLENGE_REQUIRED' : has('login-form') || /signin|login/i.test(url) ? 'LOGIN_PAGE' : has('sellercentral-nav') ? 'AUTHENTICATED' : 'UNKNOWN';
+    return { marketplace: 'amazon', state, url, checkedAt: new Date().toISOString(), evidence: domSignals.slice(0, 10) };
+  },
+  diagnose(observed) { return diagnoseFrom(this.selectors, observed, '2026-11'); },
+};
+
+/** Adapters que ainda não possuem content script nem fluxo de captura. */
 export const PLANNED_ADAPTERS: Array<{ id: MarketplaceId; label: string; status: 'PLANEJADO'; domains: string[] }> = [
-  { id: 'amazon', label: 'Amazon', status: 'PLANEJADO', domains: ['amazon.com.br'] },
   { id: 'tiktok_shop', label: 'TikTok Shop', status: 'PLANEJADO', domains: ['seller-br.tiktok.com'] },
   { id: 'shein', label: 'Shein', status: 'PLANEJADO', domains: ['br.shein.com'] },
   { id: 'netshoes', label: 'Netshoes', status: 'PLANEJADO', domains: ['netshoes.com.br'] },
 ];
 
-export const IMPLEMENTED_ADAPTERS: AdapterDefinition[] = [mercadoLivreAdapter, shopeeAdapter];
+export const IMPLEMENTED_ADAPTERS: AdapterDefinition[] = [mercadoLivreAdapter, shopeeAdapter, amazonAdapter];
 
 export function adapterForUrl(url: string): AdapterDefinition | null {
   let host: string;
