@@ -1192,9 +1192,38 @@ export class LocalService {
           deltaPct[key]=sameListings&&typeof a==='number'&&typeof b==='number'&&b!==0?(a-b)/Math.abs(b)*100:null;
           verifiedDeltaPct[key]=comparable?deltaPct[key]??null:null;
         }
-        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable} };
+        const diagnostics:Array<{code:string;metric:string;current:number;previous:number|null;note:string}>=[];
+        const signal=(code:string,metric:string,note:string,condition:(a:number,b:number)=>boolean)=>{
+          const a=current.metrics[metric],b=previous.metrics[metric];
+          if(comparable&&typeof a==='number'&&typeof b==='number'&&condition(a,b))diagnostics.push({code,metric,current:a,previous:b,note});
+        };
+        signal('SALES_DECLINE','gmv','GMV observado caiu pelo menos 10%; investigar demanda, estoque e preço, sem atribuir causa.',(a,b)=>b>0&&a<=b*0.9);
+        signal('ORDERS_DECLINE','orders','Pedidos observados caíram pelo menos 10%.',(a,b)=>b>0&&a<=b*0.9);
+        for(const metric of ['adSpend','commission','fixedFee','shippingFee','tax','marketplaceFee'])signal('COST_INCREASE',metric,'Custo observado aumentou pelo menos 10%; não somar taxas que podem se sobrepor.',(a,b)=>b>0&&a>=b*1.1);
+        signal('CVR_DECLINE','cvr','Conversão caiu pelo menos 1 ponto percentual; volumes de visitas precisam ser suficientes.',(a,b)=>b-a>=1&&(current.metrics.visits??0)>=100&&(previous.metrics.visits??0)>=100);
+        if(i.groupBy==='product'||i.groupBy==='listing')signal('GROWTH_REVIEW','orders','Sinal de crescimento observado: pedidos subiram pelo menos 10%, com conversão não inferior e estoque observado positivo. Avaliar margem e demanda antes de agir.',(a,b)=>b>=10&&a>=b*1.1&&typeof current.metrics.cvr==='number'&&typeof previous.metrics.cvr==='number'&&current.metrics.cvr>=previous.metrics.cvr&&(current.metrics.stockAvailable??0)>0);
+        return { id,label:group.label,accountId:group.accountId,marketplace:group.marketplace,current,previous,deltaPct,verifiedDeltaPct,diagnostics,comparisonQuality:{equalDuration,sameListings,sameFilters,sourceWindowsVerified,comparable} };
       }).sort((a,b)=>(b.current.metrics.gmv??-1)-(a.current.metrics.gmv??-1));
-      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,method:'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
+      const campaignRows=i.listingId||i.skuId?[]:db.rows<{account_id:string;marketplace:string;external_id:string;parent_external_id:string;label:string|null;metrics_json:string;context_json:string;evidence_json:string;captured_at:string;source_class:string}>(`SELECT account_id,marketplace,external_id,parent_external_id,label,metrics_json,context_json,evidence_json,captured_at,source_class FROM capture_detail_snapshots WHERE kind='AD_CAMPAIGN' AND captured_at>=? AND captured_at<=? AND (? IS NULL OR account_id=?) AND (? IS NULL OR marketplace=?) ORDER BY captured_at DESC,id DESC`,primary.start,primary.end,i.accountId??null,i.accountId??null,i.marketplace??null,i.marketplace??null);
+      const campaigns=[] as Array<{accountId:string;marketplace:string;campaignId:string;label:string|null;spend:number;attributedRevenue:number;capturedAt:string;note:string}>;
+      const seenCampaigns=new Set<string>();
+      for(const row of campaignRows){
+        const key=JSON.stringify([row.account_id,row.external_id,row.parent_external_id]);
+        if(seenCampaigns.has(key))continue;
+        seenCampaigns.add(key);
+        const metrics=parseJsonObject(row.metrics_json),context=parseJsonObject(row.context_json),evidence=parseJsonObject(row.evidence_json);
+        const spend=metrics.adSpend,revenue=metrics.adAttributedRevenue;
+        if(row.source_class!=='A_PRIMARY_UI'||typeof spend!=='number'||typeof revenue!=='number'||!Number.isFinite(spend)||!Number.isFinite(revenue)||revenue<0||spend<=revenue||evidence.coverageWarnings||context.coverageWarnings)continue;
+        const filters=context.filtersAndPeriod;
+        if(typeof filters!=='string')continue;
+        const entries=filters.split('|').map(s=>s.split('='));
+        if(entries.some(e=>e.length!==2)||new Set(entries.map(e=>e[0])).size!==entries.length)continue;
+        const starts=entries.filter(([k])=>/^(start_date|date_from|data inicial|start date)$/.test(k??''));
+        const ends=entries.filter(([k])=>/^(end_date|date_to|data final|end date)$/.test(k??''));
+        if(starts.length!==1||ends.length!==1||starts[0]?.[1]!==i.primaryFrom||ends[0]?.[1]!==i.primaryTo||primary.end>=nowIso())continue;
+        campaigns.push({accountId:row.account_id,marketplace:row.marketplace,campaignId:row.external_id,label:row.label,spend,attributedRevenue:revenue,capturedAt:row.captured_at,note:'Investimento maior que receita atribuída observada; não comprova prejuízo contábil nem efeito incremental.'});
+      }
+      return { generatedAt:nowIso(),groupBy:i.groupBy,primary,comparison,rows,campaigns,diagnosticPolicy:'Somente sinais observados com filtros compatíveis; cobertura integral não comprovada; sem inferência causal.',method:'último snapshot por anúncio em cada janela de captura; variação observada não equivale a vendas realizadas no período. Variação verificada exige janelas iguais, anúncios idênticos, períodos encerrados e datas explícitas da origem.' };
     });
 
     this.register('missions.today', (payload) => {
