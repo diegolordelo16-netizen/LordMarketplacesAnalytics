@@ -342,6 +342,9 @@ describe('capacidades adicionais 3.10.3', () => {
     expect((upsert.result as any).classification).toBe('REALIZED_FROM_REPORTED_INPUT');
     const summary = await call('finance.realized.summary', { accountId: 'acct-realized' });
     expect((summary.result as any).realizedProfitCents).toBe(45000);
+    expect((await call('finance.realized.summary',{accountId:'acct-realized',periodStart:'2025-01-01T00:00:00.000Z',periodEnd:'2025-01-02T00:00:00.000Z'})).result).toMatchObject({realizedProfitCents:null,netRevenueCents:null,confidence:'NO_DATA'});
+    expect((await call('finance.realized.upsert',{...payload,periodStart:'2026-11-15T00:00:00.000Z'})).ok).toBe(true);
+    expect((await call('finance.realized.summary',{accountId:'acct-realized'})).result).toMatchObject({realizedProfitCents:null,confidence:'CONFLICTING_RECORDS',overlappingPeriods:true});
   });
 
   it('armazena reclamações e motivos de devolução com deduplicação e redação de PII', async () => {
