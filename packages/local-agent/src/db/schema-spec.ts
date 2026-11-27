@@ -97,6 +97,7 @@ export const TABLE_SPECS: TableSpec[] = [
   { name: 'task_items', purpose: 'itens por anúncio dentro da tarefa', scope: ['task_id', 'listing_id'], retention: 'permanente' },
   { name: 'task_runs', purpose: 'execuções com progresso e resultado verificado', scope: ['task_id'], retention: '365 dias' },
   { name: 'automation_guard_decisions', purpose: '10 verificações pré-execução e resultado', scope: ['account_id', 'listing_id'], retention: 'permanente' },
+  { name: 'report_rollback_links', purpose: 'vínculo entre mudança original e rascunho de reversão com verificação', scope: ['change_set_id','task_id'], retention: 'permanente' },
   { name: 'change_sets', purpose: 'antes/depois de cada alteração com rollback', scope: ['account_id', 'listing_id'], retention: 'permanente' },
   { name: 'image_library', purpose: 'capas validadas por SKU/marketplace', scope: ['account_id', 'sku_id'], retention: 'permanente' },
   { name: 'description_learnings', purpose: 'base anti-devolução aprendida por categoria', scope: ['marketplace'], retention: 'permanente' },
