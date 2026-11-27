@@ -292,3 +292,21 @@ test('gráfico histórico oferece métricas adicionais e mantém zero distinto d
   const html=vm.runInContext("renderHistoryChart([{date:'2026-11-01',units:0},{date:'2026-11-02',units:2}],'units')",ctx);
   assert.ok(html.includes('trend-path'));
 });
+
+test('executivo usa os mesmos filtros em KPIs, histórico e diagnóstico sem misturar lucro da loja',async()=>{
+  const calls=[];
+  const ctx=vm.createContext({
+    state:{accountId:'store-a',execFilters:{marketplace:'shopee',days:7,listingId:'L1',skuId:'S1'},historyPoints:[]},viewRenderSequence:1,
+    api:async(method,payload)=>{calls.push({method,payload});if(method==='kpi.dashboard')return {totals:{gmvCents:100}};if(method==='kpi.history')return {points:[]};if(method==='kpi.compare.detail')return {rows:[],campaigns:[]};return [];},
+    comparisonPreset:()=>['2026-11-01','2026-11-07','2026-10-25','2026-10-31'],
+    esc:String,brl:String,num:String,pct:String,dt:String,badge:String,card:(a,b)=>a+b,table:()=>'',historyMetricConfig:()=>({}),renderHistoryChart:()=>'',Array
+  });
+  vm.runInContext(dashboard.slice(dashboard.indexOf('async function viewExec()'),dashboard.indexOf('// ------------------------------------------------------------------ ANÚNCIOS / CAPTURA')),ctx);
+  const html=await vm.runInContext('viewExec()',ctx);
+  const scope={accountId:'store-a',marketplace:'shopee',days:7,listingId:'L1',skuId:'S1'};
+  for(const method of ['kpi.dashboard','kpi.history'])assert.deepEqual(JSON.parse(JSON.stringify(calls.find(c=>c.method===method).payload)),scope);
+  const diagnostic=calls.find(c=>c.method==='kpi.compare.detail').payload;
+  assert.equal(diagnostic.accountId,'store-a');assert.equal(diagnostic.listingId,'L1');assert.equal(diagnostic.skuId,'S1');
+  assert.equal(calls.some(c=>c.method.startsWith('finance.realized.')),false);
+  assert.ok(html.includes('Diagnósticos automáticos'));assert.ok(html.includes('Aplicar filtros'));
+});
