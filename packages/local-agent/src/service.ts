@@ -96,6 +96,9 @@ const METHOD_PERMISSION: Record<string, Permission> = {
   'capture.accountSnapshots': 'view_reports',
   'capture.details':'view_reports',
   'capture.chartPoints':'view_reports',
+  'navigation.observe': 'execute_task',
+  'navigation.list': 'execute_task',
+  'navigation.clear': 'execute_task',
   'kpi.listing': 'view_reports',
   'kpi.dashboard': 'view_reports',
   'kpi.history': 'view_reports',
@@ -734,6 +737,42 @@ export class LocalService {
       this.audit(auth, 'CAPTURE_INGEST', 'listing_snapshot', null, result.ok ? 'OK' : 'PARTIAL', result.errors.join('; '));
       return result;
       });
+    });
+
+    // Only structural routes; no arbitrary URL, query, fragment, customer text or selectors.
+    const navigationContext=z.object({accountId:z.string().min(1).max(200),origin:z.string().url().max(200)});
+    const navigationAccount=(i:{accountId:string;origin:string})=>{
+      const account=db.row<{marketplace:string;is_active:number;verified_by_user:number}>('SELECT marketplace,is_active,verified_by_user FROM accounts WHERE id=?',i.accountId);
+      const hosts:Record<string,RegExp>={mercado_livre:/(^|\.)mercadolivre\.com\.br$/i,shopee:/(^|\.)shopee\.com\.br$/i,amazon:/^sellercentral\.amazon\.com\.br$/i};
+      const url=new URL(i.origin);
+      if(!account?.is_active||!account.verified_by_user||url.protocol!=='https:'||url.origin!==i.origin||!hosts[account.marketplace]?.test(url.hostname)||url.port)throw new Error('conta ou origem de aprendizado não autorizada');
+      return account;
+    };
+    this.register('navigation.observe',(payload,auth)=>{
+      const i=navigationContext.extend({route:z.string().max(160).regex(/^\/(?:[a-z][a-z_-]{0,39}\/)*[a-z][a-z_-]{0,39}\/?$/i),pageKind:z.enum(['seller_dashboard','seller_orders','seller_listings','seller_ads','seller_questions','seller_reputation','seller_returns','seller_complaints','seller_inventory'])}).strict().parse(payload);
+      navigationAccount(i);
+      const segments=i.route.toLowerCase().split('/').filter(Boolean);
+      const allowed=new Set('portal product list manage datacenter business-insights order orders sales dashboard home resumo summary metricas stats performance vendas anuncios publicaciones moderador mis-publicaciones itens items publicidade product_ads ads promocoes promociones perguntas preguntas questions question reputacao reputation avaliacoes reviews opinions rating ratings reclamacoes reclamaciones claims complaints disputas mediacoes devolucoes devoluciones returns return refund estoque inventario inventory stock produtos productos ventas pedidos marketing advertising campaignmanager myinventory manageinventory feedback complaint dispute'.split(' '));
+      if(segments.some(part=>!allowed.has(part)))throw new Error('rota não estrutural ou não reconhecida');
+      const now=nowIso();
+      db.transaction(()=>{
+        const prior=db.row<{page_kind:string}>('SELECT page_kind FROM navigation_memory WHERE account_id=? AND origin=? AND route=?',i.accountId,i.origin,i.route);
+        if(prior&&prior.page_kind!==i.pageKind)throw new Error('classificação da rota mudou; limpe a memória antes de ensinar novamente');
+        if(!prior&&(db.row<{n:number}>('SELECT COUNT(*) n FROM navigation_memory WHERE account_id=?',i.accountId)?.n??0)>=100)throw new Error('limite de 100 rotas por conta atingido');
+        db.db.prepare('INSERT INTO navigation_memory(account_id,origin,route,page_kind,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?) ON CONFLICT(account_id,origin,route) DO UPDATE SET observations=MIN(observations+1,1000000),last_seen_at=excluded.last_seen_at').run(i.accountId,i.origin,i.route,i.pageKind,now,now);
+      });
+      this.audit(auth,'NAVIGATION_OBSERVE','account',i.accountId,'OK','rota estrutural demonstrada');
+      return {ok:true};
+    });
+    this.register('navigation.list',(payload)=>{
+      const i=navigationContext.strict().parse(payload);navigationAccount(i);
+      return db.rows('SELECT route,page_kind,observations,first_seen_at,last_seen_at FROM navigation_memory WHERE account_id=? AND origin=? ORDER BY last_seen_at DESC,route LIMIT 100',i.accountId,i.origin);
+    });
+    this.register('navigation.clear',(payload,auth)=>{
+      const i=navigationContext.strict().parse(payload);navigationAccount(i);
+      db.db.prepare('DELETE FROM navigation_memory WHERE account_id=? AND origin=?').run(i.accountId,i.origin);
+      this.audit(auth,'NAVIGATION_CLEAR','account',i.accountId,'OK','memória de navegação limpa');
+      return {ok:true};
     });
 
     this.register('capture.chartPoints',(payload)=>{
