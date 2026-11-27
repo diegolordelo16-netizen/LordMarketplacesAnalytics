@@ -1344,9 +1344,16 @@ describe('comparação de períodos e entidades', () => {
     const growth=(await call('kpi.compare.detail',payload)).result as any;
     expect(growth.rows[0].diagnostics.map((d:any)=>d.code)).toContain('GROWTH_REVIEW');
 
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:6000,orders:60,visits:600,units:72,stockAvailable:120}),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:10000,orders:100,visits:1000,units:120,stockAvailable:300}),'verified-b');
+    expect((await call('kpi.compare.detail',payload)).result).toMatchObject({rows:[{revenueDrivers:{deltaCents:-400000,drivers:{trafficCents:-400000,conversionCents:0,ticketCents:0}},growthOpportunity:{underused:true,best:{kind:'TRAFFIC',incrementalGmvCents:100000},funnel:{visits:600,orders:60,conversionPct:10,impressions:null}}}]});
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:120,orders:25,visits:200,stockAvailable:4}),'verified-a');
+    db.db.prepare('UPDATE listing_snapshots SET metrics_json=? WHERE id=?').run(JSON.stringify({gmv:100,orders:20,visits:200,adSpend:100,commission:10,stockAvailable:4}),'verified-b');
+
     db.db.prepare('UPDATE listing_snapshots SET evidence_json=? WHERE id=?').run(evidence('2025-01-01','2025-01-07','active'),'verified-b');
     const incompatible=await call('kpi.compare.detail',payload);
     expect((incompatible.result as any).rows[0].diagnostics).toEqual([]);
+    expect(incompatible.result).toMatchObject({rows:[{revenueDrivers:{status:'INSUFFICIENT_EVIDENCE'},growthOpportunity:{status:'INSUFFICIENT_EVIDENCE',best:null}}]});
     expect(incompatible.result).toMatchObject({rows:[{deltaPct:{gmv:20},verifiedDeltaPct:{gmv:null},comparisonQuality:{sameFilters:false,comparable:false}}]});
     const unequal=await call('kpi.compare.detail',{...payload,primaryFrom:'2025-01-09'});
     expect(unequal.result).toMatchObject({rows:[{verifiedDeltaPct:{gmv:null},comparisonQuality:{equalDuration:false,comparable:false}}]});
