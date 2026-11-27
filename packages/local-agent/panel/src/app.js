@@ -1403,7 +1403,34 @@ async function viewProductOperations(){
       return '<tr><td>'+esc(r.proposal_kind)+'</td><td>'+esc(r.proposal_id)+'</td><td>'+dt(r.performed_at)+'</td><td>'+esc(r.evidence_reference)+'</td><td>'+check+'</td><td><button class="btn tiny" data-act="operation-measure" data-kind="'+esc(r.proposal_kind)+'" data-id="'+esc(r.proposal_id)+'">Medir antes/depois</button></td></tr>';
     }),'Nenhum relato humano.')+'<p class="muted small">A conferência registra o que a loja exibe após a operação. A medição exige janelas compatíveis.</p><div id="operation-measure-out" class="out" aria-live="polite"></div>');
 }
+async function viewRevenueRadar() {
+  const accountId = state.accountId;
+  if (!accountId) return card('Radar de vendas perdidas', '<p>Selecione uma loja para comparar seus anúncios.</p>');
+  const [primaryFrom,primaryTo,comparisonFrom,comparisonTo] = comparisonPreset('7');
+  const result = await api('kpi.compare.detail', { accountId, groupBy:'listing', primaryFrom,primaryTo,comparisonFrom,comparisonTo });
+  const rows = Array.isArray(result?.rows) ? result.rows : [];
+  const comparable = rows.filter(r => r.accountId === accountId && r.comparisonQuality?.comparable === true && Number.isSafeInteger(r.revenueDrivers?.deltaCents));
+  const losses = comparable.filter(r => r.revenueDrivers.observedDeclineCents > 0).sort((a,b) => b.revenueDrivers.observedDeclineCents - a.revenueDrivers.observedDeclineCents);
+  const format = n => Number.isSafeInteger(n) ? brl(n) : '—';
+  const investigations = d => {
+    if (!d) return 'Métricas insuficientes para decomposição';
+    const factors = [[d.trafficCents,'Tráfego: investigar visibilidade, estoque e demanda'],[d.conversionCents,'Conversão: investigar oferta, conteúdo e entrega'],[d.ticketCents,'Ticket: investigar preço e mix']];
+    const largest = factors.filter(f => f[0] < 0).sort((a,b) => a[0]-b[0])[0];
+    return largest ? largest[1] : 'Sem fator negativo isolado';
+  };
+  const summary = '<p>Loja selecionada · '+esc(primaryFrom)+' a '+esc(primaryTo)+' versus '+esc(comparisonFrom)+' a '+esc(comparisonTo)+' (UTC).</p>'
+    + '<p class="muted small">Queda histórica de GMV observado; não é previsão de faturamento recuperável nem perda líquida da loja. Sem soma de perdas de anúncios. Cobertura integral não comprovada. Períodos sem evidência de filtros e datas compatíveis ficam excluídos.</p>'
+    + '<p>Anúncios retornados: '+num(rows.length)+' · Comparáveis com GMV: '+num(comparable.length)+' · Com queda: '+num(losses.length)+' · Com decomposição: '+num(losses.filter(r=>r.revenueDrivers.drivers).length)+'</p>'
+    + '<p class="muted small">Exibindo até 100 anúncios, ordenados por queda observada.</p>';
+  const details = table(['Anúncio','GMV anterior','GMV atual','Queda observada','Tráfego','Conversão','Ticket médio','Investigar primeiro'], losses.slice(0,100).map(r=>{
+    const g=r.revenueDrivers,d=g.drivers;
+    return '<tr><td>'+esc(r.label||r.id)+'</td><td>'+brl(r.previous.metrics.gmv*100)+'</td><td>'+brl(r.current.metrics.gmv*100)+'</td><td>'+format(g.observedDeclineCents)+'</td><td>'+format(d?.trafficCents)+'</td><td>'+format(d?.conversionCents)+'</td><td>'+format(d?.ticketCents)+'</td><td>'+esc(investigations(d))+'</td></tr>';
+  }), comparable.length ? 'Nenhuma queda observada entre os anúncios comparáveis.' : 'Nenhum anúncio com evidência suficiente. Capture períodos comerciais explícitos e equivalentes.');
+  return card('Radar de vendas perdidas — diagnóstico histórico',summary+details+'<p class="muted small">A decomposição usa GMV = visitas × pedidos/visitas × GMV/pedidos e a média das seis ordens de substituição. Contribuições positivas compensam negativas; não há inferência causal. Sem denominadores positivos, somente a queda total é exibida.</p><button class="btn" data-act="nav" data-view="compare">Comparar outros períodos</button>');
+}
+
 const VIEWS = {
+  revenueRadar: { label: 'Radar de vendas perdidas', icon: '◎', render: viewRevenueRadar },
   exec: { label: 'Visão executiva', icon: '◧', render: viewExec },
   prestart: { label: 'Pré-Start & Diagnóstico', icon: '✓', render: viewPrestart },
   browserSync: { label: 'Extensão & Coletas', icon: '⇄', render: viewBrowserSync },
