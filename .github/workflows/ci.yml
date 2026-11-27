@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'validation/**']
   pull_request:
-    branches: [master]
+    branches: [master, 'validation/**']
   workflow_dispatch:
 
 permissions:
@@ -50,3 +50,17 @@ jobs:
         run: npm run audit:publish
       - name: Integridade do schema
         run: npm run db:generate -- --check
+
+      - name: Testes do atualizador de versões
+        run: node --test installer/scripts/update-manager.test.mjs
+      - name: Preparar payload validado para atualização
+        run: |
+          mkdir -p update-payload
+          cp -R dist/local-agent dist/native-host dist/extension update-payload/
+          node installer/scripts/update-manager.mjs manifest update-payload "$(node -p "require('./package.json').version")" "$GITHUB_SHA"
+          sha256sum update-payload/update-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MarketplaceIntelligence-validated-update
+          path: update-payload/
+          if-no-files-found: error
