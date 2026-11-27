@@ -72,6 +72,7 @@ Source: "{#SourceRoot}\dist\extension\*"; DestDir: "{app}\extension"; Flags: ign
 ; Painel local (interface do serviço)
 Source: "{#SourceRoot}\packages\local-agent\panel\src\*"; DestDir: "{app}\local-agent\panel\dist"; Flags: ignoreversion recursesubdirs
 ; Utilitários
+Source: "{#SourceRoot}\installer\scripts\update-manager.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\start-panel.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\install-extension.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\installer\scripts\abrir-extensoes.cmd"; DestDir: "{app}"; Flags: ignoreversion
