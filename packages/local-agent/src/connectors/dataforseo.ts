@@ -58,12 +58,28 @@ export function seoRequest(input:ResearchInput){
     :{target:query,include_subdomains:true,include_indirect_links:true,exclude_internal_backlinks:true,backlinks_status_type:'live',rank_scale:'one_hundred'};
   return {path:pathFor[input.mode],body,query};
 }
+// Compare only consecutive reported months, not missing entries or incomplete history.
+function monthlyTrend(raw:unknown):Row{
+  const periods=new Map<number,number>(),conflicts=new Set<number>();
+  for(const entry of Array.isArray(raw)?raw:[]){
+    const row=object(entry),year=integer(row.year),month=integer(row.month),volume=integer(row.search_volume);
+    if(year===null||year<1900||year>2100||month===null||month<1||month>12||volume===null)continue;
+    const key=year*12+month-1,previous=periods.get(key);
+    if(previous!==undefined&&previous!==volume)conflicts.add(key);
+    periods.set(key,volume);
+  }
+  const last=[...periods.keys()].sort((a,b)=>b-a)[0];
+  if(last===undefined||conflicts.has(last))return {latestMonth:null,latestMonthVolume:null,monthlyChangePct:null};
+  const current=periods.get(last)!,previous=conflicts.has(last-1)?undefined:periods.get(last-1);
+  return {latestMonth:Math.floor(last/12)+'-'+String(last%12+1).padStart(2,'0'),latestMonthVolume:current,
+    monthlyChangePct:previous!==undefined&&previous>0?Math.round((current-previous)/previous*10000)/100:null};
+}
 function keywordRow(raw:unknown):Row|null{
   const r=object(raw),keyword=str(r.keyword)?.toLowerCase();
   if(!keyword)return null;
   const info=object(r.keyword_info),props=object(r.keyword_properties),intent=object(r.search_intent_info);
   return {keyword,searchVolume:integer(info.search_volume),cpc:num(info.cpc),paidCompetition:num(info.competition,1),
-    keywordDifficulty:num(props.keyword_difficulty,100),intent:normalizeIntent(str(intent.main_intent))};
+    keywordDifficulty:num(props.keyword_difficulty,100),intent:normalizeIntent(str(intent.main_intent)),...monthlyTrend(info.monthly_searches)};
 }
 function mapRows(mode:ResearchInput['mode'],result:unknown,limit:number):Row[]{
   const root=object(result),items=Array.isArray(root.items)?root.items:[];
@@ -104,6 +120,7 @@ export function decodeSeoResponse(raw:unknown,input:ResearchInput){
   const root=object(task.result[0]);
   if(!Object.keys(root).length||(input.mode!=='backlinks'&&!Array.isArray(root.items)&&!root.seed_keyword_data))return {...base,status:'INVALID_RESPONSE',providerCode:task.status_code};
   const rows=mapRows(input.mode,root,input.limit);
+  if(input.mode==='backlinks'&&rows.every(row=>Object.entries(row).filter(([key])=>key!=='domain').every(([,value])=>value===null)))return {...base,status:'INVALID_RESPONSE',providerCode:task.status_code};
   return {...base,status:rows.length?'OK':'EMPTY',rows,totalCount:integer(root.total_count),providerCode:task.status_code};
 }
 export async function researchSeo(payload:unknown,env:NodeJS.ProcessEnv=process.env,transport:typeof fetch=fetch){

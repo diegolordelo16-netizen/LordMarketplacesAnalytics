@@ -8,3 +8,5 @@ No ambiente do processo do agente local, configure MI_DATAFORSEO_LOGIN e MI_DATA
 Modos: sugestões, relacionados, ideias, SERP Google (10 posições solicitadas), palavras-chave de domínio concorrente, visibilidade de domínio e resumo de backlinks. Google Brasil/português (2076/pt); backlinks globais. Até 100 linhas, apenas uma chamada por clique, sem clickstream tarifado adicional. Valores ausentes permanecem nulos; não são importados como volume interno do marketplace. Registra auditoria de custo/estado sem credenciais.
 
 Não incluídos: histórico persistente de consultas, agendamento de ranking Google, análise de backlinks individual, auditoria de site, visibilidade em IA, infraestrutura e interface completas do OpenSEO. A autenticação real e o contrato do provedor em produção exigem credenciais/saldo e não foram homologados. Integração isolada na branch de etapa 06, sem alterar master ou PR 5.
+
+Também apresenta volume mensal mais recente e variação percentual quando há dois meses consecutivos válidos, sem preencher lacunas.

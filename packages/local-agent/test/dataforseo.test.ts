@@ -9,6 +9,13 @@ describe('OpenSEO / DataForSEO',()=>{
     const r=decodeSeoResponse(envelope({seed_keyword_data:seed,items:[seed,{keyword:'capacete infantil'}]}),input);
     expect(r).toMatchObject({source:'DATAFORSEO',scope:'GOOGLE_BR_PT',costUsd:0.012,status:'OK',rows:[{keyword:'capacete',searchVolume:0,cpc:null,keywordDifficulty:10,intent:'commercial'},{keyword:'capacete infantil',searchVolume:null,keywordDifficulty:null,intent:'unknown'}]});
   });
+  it('calcula tendência apenas com meses consecutivos observados e não inventa divisão por zero',()=>{
+    const data=(monthly_searches:unknown)=>envelope({items:[{keyword:'capacete',keyword_info:{monthly_searches}}]});
+    const jan={year:2026,month:1,search_volume:100},feb={year:2026,month:2,search_volume:150},apr={year:2026,month:4,search_volume:200};
+    expect(decodeSeoResponse(data([feb,jan]),input).rows[0]).toMatchObject({latestMonth:'2026-02',latestMonthVolume:150,monthlyChangePct:50});
+    expect(decodeSeoResponse(data([jan,apr]),input).rows[0]).toMatchObject({monthlyChangePct:null});
+    expect(decodeSeoResponse(data([{...jan,search_volume:0},feb]),input).rows[0]).toMatchObject({monthlyChangePct:null});
+  });
   it('não confunde erro tarifado com lista vazia',()=>{
     expect(decodeSeoResponse(envelope({},40501,"Invalid Field: 'target'."),input)).toMatchObject({status:'PROVIDER_ERROR',costUsd:0.012,rows:[]});
     expect(decodeSeoResponse(envelope({},40501,'No Search Results.'),input).status).toBe('EMPTY');
